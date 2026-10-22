@@ -1,21 +1,89 @@
 // Loom command-line tool for the Phase 1 spike. Run with: npm run loom -- <command>
-import { desc } from "drizzle-orm";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
+import { desc, eq, max } from "drizzle-orm";
 import { z } from "zod";
 import { costSummary } from "@/core/costs";
 import { db, initDb, schema } from "@/core/db/client";
 import { callLlm } from "@/core/llm";
+import { applyProposal, numberItems, proposeRecapChanges, type ProposalFile } from "@/core/recap";
 import { seedFixture } from "@/core/seed";
 import { listThreads } from "@/core/threads";
 
 const USAGE = `Usage: npm run loom -- <command>
 
-  seed              Load the hand-written potion fixture campaign (replaces it if present)
-  campaigns         List campaigns
-  threads [id]      List threads for a campaign (default: most recent campaign)
-  ping              Make one small LLM call to check the API key and logging
-  costs             Show LLM calls, latency and cost so far`;
+  seed                       Load the hand-written potion fixture campaign (replaces it if present)
+  new-campaign "<name>"      Create an empty campaign
+  campaigns                  List campaigns
+  threads [id]               List threads for a campaign (default: most recent campaign)
+  recap <file> [--session N] [--campaign id]
+                             Read a session recap and propose thread changes for you to approve
+  apply <proposal.json>      Apply a (hand-edited) proposal file saved by "recap"
+  ping                       Make one small LLM call to check the API key and logging
+  costs                      Show LLM calls, latency and cost so far`;
 
 const usd = (n: number | null) => `$${(n ?? 0).toFixed(5)}`;
+
+function flag(args: string[], name: string) {
+  const i = args.indexOf(`--${name}`);
+  return i >= 0 ? args[i + 1] : undefined;
+}
+
+async function printProposal(file: ProposalFile) {
+  // Show titles, not bare "T12" / "N3" references.
+  const existing = await db
+    .select({ id: schema.threads.id, title: schema.threads.title })
+    .from(schema.threads)
+    .where(eq(schema.threads.campaignId, file.campaignId));
+  const refTitles = new Map([
+    ...existing.map((t) => [`T${t.id}`, t.title] as const),
+    ...file.proposal.new_threads.map((t) => [t.ref.toUpperCase(), t.title] as const),
+  ]);
+  const label = (ref: string) => refTitles.get(ref.trim().toUpperCase()) ?? ref;
+  let section = "";
+  const heading = (s: string) => {
+    if (s !== section) console.log(`\n${(section = s)}`);
+  };
+  for (const i of numberItems(file.proposal)) {
+    const n = `[${i.n}]`.padStart(5);
+    if (i.kind === "entity") {
+      heading("NEW ENTITIES");
+      const aka = i.item.aliases.length ? ` aka ${i.item.aliases.join(", ")}` : "";
+      console.log(`${n} ${i.item.name} (${i.item.type})${aka}: ${i.item.description}`);
+    } else if (i.kind === "thread") {
+      heading("NEW THREADS");
+      console.log(`${n} ${i.item.ref} (${i.item.kind}) ${i.item.title}`);
+      console.log(`        ${i.item.summary}`);
+      if (i.item.entities.length) console.log(`        ↳ ${i.item.entities.join(", ")}`);
+    } else if (i.kind === "update") {
+      heading("THREAD UPDATES");
+      console.log(`${n} ${i.item.change.toUpperCase()}: ${label(i.item.thread)}`);
+      console.log(`        ${i.item.note}`);
+    } else {
+      heading("LINKS");
+      console.log(`${n} ${label(i.item.from)} → ${label(i.item.to)} (${i.item.note})`);
+    }
+  }
+}
+
+async function reviewAndApply(file: ProposalFile, path: string) {
+  await printProposal(file);
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = (
+    await rl.question(
+      `\nApply? [a] all · [n] none · or numbers to SKIP, e.g. "3, 7, 12"\n(To edit wording, answer n, edit ${path}, then run: npm run loom -- apply ${path})\n> `,
+    )
+  ).trim();
+  rl.close();
+  if (answer === "" || answer.toLowerCase() === "n") return console.log("Nothing applied.");
+
+  const skip = new Set(answer.toLowerCase() === "a" ? [] : (answer.match(/\d+/g) ?? []).map(Number));
+  const { counts, warnings } = await applyProposal(file, skip);
+  console.log(
+    `\nApplied: ${counts.entities} entities, ${counts.threads} new threads, ${counts.updates} updates, ${counts.links} links.`,
+  );
+  for (const w of warnings) console.log(`  ! ${w}`);
+}
 
 async function latestCampaignId() {
   const [c] = await db.select().from(schema.campaigns).orderBy(desc(schema.campaigns.id)).limit(1);
@@ -30,6 +98,45 @@ async function main() {
     case "seed": {
       const c = await seedFixture();
       console.log(`Seeded campaign ${c.id}: ${c.name}`);
+      break;
+    }
+    case "new-campaign": {
+      if (!args[0]) return console.log('Give it a name, e.g. npm run loom -- new-campaign "Darkness in Duradan"');
+      const [c] = await db.insert(schema.campaigns).values({ name: args[0] }).returning();
+      console.log(`Created campaign ${c.id}: ${c.name}`);
+      break;
+    }
+    case "recap": {
+      const path = args[0];
+      if (!path || path.startsWith("--")) return console.log(USAGE);
+      const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
+      if (!campaignId) return console.log('No campaigns yet. Try: npm run loom -- new-campaign "My campaign"');
+
+      let sessionNumber = Number(flag(args, "session"));
+      if (!sessionNumber) {
+        const [row] = await db
+          .select({ n: max(schema.sessions.number) })
+          .from(schema.sessions)
+          .where(eq(schema.sessions.campaignId, campaignId));
+        sessionNumber = (row?.n ?? 0) + 1;
+      }
+
+      const recap = readFileSync(path, "utf8");
+      console.log(`Reading session ${sessionNumber} recap for campaign ${campaignId}…`);
+      const res = await proposeRecapChanges(campaignId, recap);
+      console.log(`(${res.latencyMs} ms · ${res.inputTokens} in / ${res.outputTokens} out · ${usd(res.costUsd)})`);
+
+      const file: ProposalFile = { campaignId, sessionNumber, recap, proposal: res.data };
+      mkdirSync("data/proposals", { recursive: true });
+      const out = `data/proposals/c${campaignId}-s${sessionNumber}.json`;
+      writeFileSync(out, JSON.stringify(file, null, 2));
+      await reviewAndApply(file, out);
+      break;
+    }
+    case "apply": {
+      if (!args[0]) return console.log(USAGE);
+      const file = JSON.parse(readFileSync(args[0], "utf8")) as ProposalFile;
+      await reviewAndApply(file, args[0]);
       break;
     }
     case "campaigns": {

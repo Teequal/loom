@@ -111,7 +111,8 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
 
 - [x] Step 1: Project setup, schema, potion fixture, `seed` / `campaigns` / `threads` commands
 - [x] Step 2: LLM interface + call logging (`ping`, `costs`). All calls go through `callLlm` in `src/core/llm/`, return Zod-validated JSON and default to effort `low`. Prices live in `PRICES` there.
-- [ ] Step 3: Recap → proposed thread changes → approve
+- [x] Step 3: Recap → proposed thread changes → approve (`recap`, `apply`; logic in `src/core/recap.ts`, effort `medium`, ~18 s and ~$0.002–0.003 per session). Per-session text files are in `Old Campaign Notes/sessions/`. Duradan sessions 1–2 are applied; session 2 includes Jacob's DM-only corrections, added by hand.
+- Learned in step 3: recaps only hold what players saw. DM secrets (e.g. "microfractures in reality cause the madness"; "the mind control causes the leaders' illness") have to be entered separately, and they matter for good suggestions. A DM-notes input is planned; for now, edit the proposal JSON before applying.
 - [ ] Step 4: Improv box (retrieval + 2–3 tied-back options)
 - [ ] Step 5: Scenario runner
 - [ ] Step 6: Between-session suggestions incl. thread "collisions"
