@@ -117,6 +117,33 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   | Opus | 6–7 s | ~$0.018 |
 
   Haiku mentions threads, while Sonnet and Opus pay them off. Jacob judged Opus tangibly better. Its figurine option (Khayiulad's hand won't let go) is exactly how he'd play it: the cost of a power grows with use.
+- **Scenario run 1 (Oct 2026, 10 Duradan moments, Jacob's "would use" ticks):**
+
+  | Model | Options ticked | Moments with at least one usable option |
+  |---|---|---|
+  | Opus | 14/30 | 10/10 |
+  | Haiku | 9/30 | 8/10 |
+  | Sonnet | 6/30 | 6/10 |
+
+  One run each, so results are noisy. Sonnet doing worse than Haiku contradicts the earlier 4-moment impression; rerun before settling the improv default.
+- **Scenario run 2 (blind: options shuffled, models hidden, player-agency rule added):**
+
+  | Model | Options ticked | Moments with at least one usable option |
+  |---|---|---|
+  | Opus | 13/30 | 9/10 |
+  | Haiku | 11/30 | 8/10 |
+  | Sonnet | 7/30 | 6/10 |
+
+  Same ranking as run 1, so Sonnet's last place is real, not position bias. Haiku is about 20× cheaper than Sonnet and faster. The agency rule reduced but didn't eliminate PC-puppeting: Haiku wrote "Salaena lunges for the ledge", and Sonnet wrote "Khayiulad steps between them". (NPCs acting, followed by asking a player to respond, is correct practice.) Blind runs: `scenarios <file> --blind`, then `score <file>-blind.md`.
+- **Player agency (Jacob's feedback):** some options decided what player characters do or say ("Salaena lunges for his collar"). The GM controls the world, NPCs and consequences; players control their characters. A PC acts against their will only through an established condition or a failed roll (e.g. the figurine madness roll).
+- **Player-agency harness (Jacob's design):** improv options come back structured, not as free text.
+  - `setup` beats are typed: `world`, `npc` or `outcome`. `outcome` is the result of what the players already declared.
+  - `hand_off` is a question to a player or a roll.
+  - `on_fail` says what happens after a failed roll.
+  - Code rejects any option where a PC is the subject of a world/npc beat, or of an outcome with a choosing, speaking or perceiving verb (`AGENCY_VERBS` in `src/core/improv.ts`). It retries once if fewer than 2 options survive.
+  - The prompt now labels every name PC/NPC and includes a party roster with each PC's conditions.
+  - Haiku runs improv with thinking off (`fast`). With it on, structured output took 8–13 s; off, it takes 5–7 s.
+  - Known gaps: possessive phrasings ("Khayiulad's fingers tighten…") slip past the check. NPCs sometimes get dropped into scenes they couldn't be in (Zara at the Woods ritual site). Labels can still narrate PC feelings.
 - **Product idea (Phase 2, needs accounts and billing):** improv on Sonnet by default, with Opus as an upgrade tier and a free trial or allowance of Opus calls.
 - **Recap changes are proposed, not applied.** The DM approves each one.
 - **Improv options must cite a real thread id** from the retrieved set; the code rejects any that don't.
@@ -139,7 +166,7 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
 5. **GM mechanics belong in threads.** Jacob runs hidden rolls: a madness roll on every figurine use, and resist-then-effect rolls for microfractures. Suggestions that use these mechanics land best, so capture them (DM notes or clarifying questions).
 6. Weak "everything is legal trouble" links show up (session 1 Gary→Festival, session 3 bounty→Gary). The prompt could demand a concrete connection.
 - [x] Step 4: Improv box (`improv "<moment>"`, `--why`, `--all`). Retrieval in `src/core/retrieval.ts` is in-memory scoring (entity/alias mentions, rare-word overlap, link hops, recency) rather than SQLite FTS. That's simpler at tens of threads; revisit when campaigns grow. Top 8 threads are sent to the model, and options citing threads that weren't sent are dropped. First results on Duradan: 3–6 s, ~$0.0005 per call.
-- [ ] Step 5: Scenario runner
+- [x] Step 5: Scenario runner (`scenarios <file> --models haiku,sonnet,opus`). Scenario files are in `scenarios/`; real-campaign ones go in `scenarios/private/` (gitignored). Each moment lists `expect` pieces of thread titles. The runner checks whether retrieval found them and whether options used them, then writes a side-by-side Markdown report with "would use" checkboxes to `data/runs/`. Results depend on the campaign's current threads, so rerun all models together when comparing.
 - [ ] Step 6: Between-session suggestions incl. thread "collisions"
 - [ ] Step 7: Real-campaign test (Darkness in Duradan, sessions 1–5)
 - [ ] Step 8 (optional): One-box local web page

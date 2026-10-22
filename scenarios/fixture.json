@@ -1,0 +1,17 @@
+{
+  "campaign": "Fixture: The Potion Swap",
+  "scenarios": [
+    {
+      "id": "bram-charges-bridge",
+      "moment": "Bram charges the Red Hand bandits at the bridge alone, and Kira can't shout to stop him",
+      "expect": ["cannot die", "cannot speak", "potions"],
+      "notes": "The canonical example. At the real table the fix was giving each player the other's cure. Does Loom find something like it?"
+    },
+    {
+      "id": "kira-buys-cure",
+      "moment": "Kira storms into Mother Ysolde's shop and slams down a note demanding a cure",
+      "expect": ["potions", "cannot speak"],
+      "notes": "Should use the alchemist and the matched-pairs payoff idea rather than inventing a new cure."
+    }
+  ]
+}

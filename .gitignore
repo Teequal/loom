@@ -51,3 +51,6 @@ next-env.d.ts
 
 # real campaign notes stay private (anonymised test scenarios get committed instead)
 /Old Campaign Notes/
+
+# scenarios built from real campaigns stay private
+/scenarios/private/

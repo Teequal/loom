@@ -8,6 +8,14 @@ import { db, initDb, schema } from "@/core/db/client";
 import { improv } from "@/core/improv";
 import { callLlm } from "@/core/llm";
 import { applyProposal, numberItems, proposeRecapChanges, type ProposalFile } from "@/core/recap";
+import {
+  blindReportMarkdown,
+  reportMarkdown,
+  runScenarios,
+  ScenarioFileSchema,
+  scoreBlindReview,
+  summarise,
+} from "@/core/scenarios";
 import { seedFixture } from "@/core/seed";
 import { listThreads } from "@/core/threads";
 
@@ -23,6 +31,12 @@ const USAGE = `Usage: npm run loom -- <command>
   improv "<what happened>" [--campaign id] [--why] [--all] [--model name]
                              2-3 options tied to existing threads. --why shows which threads were
                              retrieved and why; --all sends every open thread instead (for comparison)
+
+  scenarios <file.json> [--models sonnet,opus] [--only id1,id2] [--blind]
+                             Run saved moments through the improv box on each model and write a
+                             side-by-side report to data/runs/ (default model: sonnet).
+                             --blind shuffles all models' options together with models hidden
+  score <blind-report.md>    Count your ticks in a blind report per model
 
   --model takes haiku, sonnet, opus, fable or a full model id.
   Defaults: recap = opus, improv = sonnet, everything else = haiku.
@@ -157,11 +171,62 @@ async function main() {
         console.log(`   ${o.option}`);
         console.log(`   why: ${o.why}\n`);
       });
-      if (r.dropped) console.log(`(${r.dropped} option(s) dropped: cited a thread that wasn't provided)`);
+      for (const x of r.rejected) console.log(`(rejected "${x.label}": ${x.reason})`);
       const l = r.llm;
       console.log(
-        `${l.model} · ${(l.latencyMs / 1000).toFixed(1)} s · ${l.inputTokens} in / ${l.outputTokens} out · ${usd(l.costUsd)} · ${r.threads.length} threads sent`,
+        `${l.model} · ${(l.latencyMs / 1000).toFixed(1)} s · ${l.inputTokens} in / ${l.outputTokens} out · ${usd(l.costUsd)} · ${r.threads.length} threads sent${l.attempts > 1 ? ` · ${l.attempts} attempts` : ""}`,
       );
+      break;
+    }
+    case "scenarios": {
+      if (!args[0] || args[0].startsWith("--")) return console.log(USAGE);
+      const file = ScenarioFileSchema.parse(JSON.parse(readFileSync(args[0], "utf8")));
+      const only = flag(args, "only")?.split(",");
+      if (only) file.scenarios = file.scenarios.filter((s) => only.includes(s.id));
+      const models = (flag(args, "models") ?? "sonnet").split(",");
+
+      console.log(`Running ${file.scenarios.length} scenario(s) × ${models.length} model(s)…`);
+      const results = await runScenarios(file, models, (msg) => console.log(`  ${msg}`));
+
+      console.log("\nModel                 Expected  Avg / max latency   Cost      Dropped  Errors");
+      for (const s of summarise(results)) {
+        console.log(
+          `${s.model.padEnd(21)} ${s.hits.padEnd(9)} ${`${(s.avgLatencyMs / 1000).toFixed(1)} s / ${(s.maxLatencyMs / 1000).toFixed(1)} s`.padEnd(19)} ${`$${s.costUsd.toFixed(4)}`.padEnd(9)} ${String(s.dropped).padEnd(8)} ${s.errors}`,
+        );
+      }
+      const missedRetrieval = results.filter((r) => r.retrievalFound.length < r.scenario.expect.length);
+      for (const r of missedRetrieval) {
+        const missed = r.scenario.expect.filter((p) => !r.retrievalFound.includes(p));
+        console.log(`  retrieval missed in ${r.scenario.id}: ${missed.join(", ")}`);
+      }
+
+      const when = new Date();
+      mkdirSync("data/runs", { recursive: true });
+      const name = args[0].split("/").pop()!.replace(/\.json$/, "");
+      const stem = `data/runs/${when.toISOString().slice(0, 16).replace(/[:T]/g, "-")}-${name}`;
+      if (args.includes("--blind")) {
+        const { markdown, key } = blindReportMarkdown(file, results);
+        writeFileSync(`${stem}-blind.md`, markdown);
+        writeFileSync(`${stem}-blind.key.json`, JSON.stringify(key, null, 2));
+        // The full report reveals the models, so keep it out of sight until scoring is done.
+        writeFileSync(`${stem}-revealed.md`, reportMarkdown(file, results, when));
+        console.log(`\nBlind review: ${stem}-blind.md`);
+        console.log(`When you've ticked it: npm run loom -- score ${stem}-blind.md`);
+      } else {
+        writeFileSync(`${stem}.md`, reportMarkdown(file, results, when));
+        console.log(`\nFull report: ${stem}.md`);
+      }
+      break;
+    }
+    case "score": {
+      if (!args[0]) return console.log(USAGE);
+      const key = JSON.parse(readFileSync(args[0].replace(/\.md$/, ".key.json"), "utf8"));
+      const rows = scoreBlindReview(readFileSync(args[0], "utf8"), key).sort((a, b) => b.ticked - a.ticked);
+      console.log("Model                 Options you'd use   Moments with at least one");
+      for (const r of rows) {
+        console.log(`${r.model.padEnd(21)} ${`${r.ticked} of ${r.offered}`.padEnd(19)} ${r.moments} of ${r.total}`);
+      }
+      console.log(`\nThe unblinded report is next to it: ${args[0].replace(/-blind\.md$/, "-revealed.md")}`);
       break;
     }
     case "apply": {

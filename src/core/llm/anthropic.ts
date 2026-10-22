@@ -8,6 +8,10 @@ let client: Anthropic | undefined;
 // server-side fallback, a refused request is retried on a suitable model inside the same call.
 const SUPPORTS_FALLBACK = new Set(["claude-opus-5-5", "claude-sonnet-5-5"]);
 
+// Models that accept thinking turned off (at effort high or below). Opus 5.5 always thinks;
+// Sonnet 5.5 has a different off switch, so it's left thinking.
+const CAN_DISABLE_THINKING = new Set(["claude-haiku-5-5"]);
+
 export const anthropicProvider: LlmProvider = {
   name: "anthropic",
   defaultModel: "claude-haiku-5-5",
@@ -24,6 +28,7 @@ export const anthropicProvider: LlmProvider = {
       messages: [{ role: "user", content: req.prompt }],
       // Low effort keeps live calls fast; recap extraction can ask for more.
       output_config: { effort: req.effort ?? "low", format: betaZodOutputFormat(req.schema) },
+      ...(req.fast && CAN_DISABLE_THINKING.has(model) ? { thinking: { type: "disabled" as const } } : {}),
       ...(fallback ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
     });
 

@@ -10,6 +10,7 @@ export interface LlmRequest<T> {
   maxTokens?: number;
   effort?: "low" | "medium" | "high";
   model?: string; // overrides the feature's default model; short names like "opus" work
+  fast?: boolean; // skip the model's hidden reasoning where the model allows it (lower latency)
 }
 
 export interface ProviderResponse<T> {
