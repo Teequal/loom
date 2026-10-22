@@ -9,6 +9,7 @@ export interface LlmRequest<T> {
   schema: z.ZodType<T>;
   maxTokens?: number;
   effort?: "low" | "medium" | "high";
+  model?: string; // overrides the feature's default model; short names like "opus" work
 }
 
 export interface ProviderResponse<T> {

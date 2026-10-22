@@ -82,7 +82,7 @@ async function campaignState(campaignId: number) {
   return { entities, threads };
 }
 
-export async function proposeRecapChanges(campaignId: number, recap: string) {
+export async function proposeRecapChanges(campaignId: number, recap: string, model?: string) {
   const { entities, threads } = await campaignState(campaignId);
 
   const entityLines = entities.map(
@@ -106,6 +106,7 @@ ${recap}`;
     schema: ProposalSchema,
     maxTokens: 16000,
     effort: "medium",
+    model,
   });
 }
 

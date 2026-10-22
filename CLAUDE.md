@@ -101,7 +101,23 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
 - **Database: SQLite via libSQL + Drizzle ORM.** Local file `data/loom.db` (gitignored). libSQL can later point at a hosted database without changing code. Schema in `src/core/db/schema.ts`; after changing it, run `npm run db:generate`. Migrations apply on startup.
 - **Player states are threads** of kind `condition` linked to a PC entity; there is no separate table for them.
 - **Thread history** lives in `thread_events` (new / progressed / resolved / edited, per session).
-- **LLM: Anthropic, Claude Haiku** for all features to start ($5 credit). The provider sits behind a small interface; every call is logged to `llm_calls`.
+- **LLM: Anthropic, with a model per feature** (`FEATURE_MODELS` in `src/core/llm/index.ts`):
+  - **Recaps: Opus 5.5**, chosen because Jacob wants the smartest model for the once-per-session job.
+  - **Improv: Sonnet 5.5**, with Opus 5.5 available per call (`--model opus`).
+  - **Everything else: Haiku 5.5.**
+  - Override with `--model` or `LOOM_MODEL_<FEATURE>`.
+  - Sonnet and Opus calls use server-side refusal fallback.
+  - The provider sits behind a small interface; every call is logged to `llm_calls` with the model that actually answered.
+- **Model comparison (Oct 2026, 4 Duradan moments):**
+
+  | Model | Speed | Cost per moment |
+  |---|---|---|
+  | Haiku | 3–6 s | ~$0.0005 |
+  | Sonnet | 4–5 s | ~$0.009 |
+  | Opus | 6–7 s | ~$0.018 |
+
+  Haiku mentions threads, while Sonnet and Opus pay them off. Jacob judged Opus tangibly better. Its figurine option (Khayiulad's hand won't let go) is exactly how he'd play it: the cost of a power grows with use.
+- **Product idea (Phase 2, needs accounts and billing):** improv on Sonnet by default, with Opus as an upgrade tier and a free trial or allowance of Opus calls.
 - **Recap changes are proposed, not applied.** The DM approves each one.
 - **Improv options must cite a real thread id** from the retrieved set; the code rejects any that don't.
 - **Retrieval starts cheap:** entity/alias mention matching, graph hops and SQLite full-text search. Embeddings only if the test scenarios show they're needed.
@@ -113,7 +129,16 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
 - [x] Step 2: LLM interface + call logging (`ping`, `costs`). All calls go through `callLlm` in `src/core/llm/`, return Zod-validated JSON and default to effort `low`. Prices live in `PRICES` there.
 - [x] Step 3: Recap → proposed thread changes → approve (`recap`, `apply`; logic in `src/core/recap.ts`, effort `medium`, ~18 s and ~$0.002–0.003 per session). Per-session text files are in `Old Campaign Notes/sessions/`. Duradan sessions 1–2 are applied; session 2 includes Jacob's DM-only corrections, added by hand.
 - Learned in step 3: recaps only hold what players saw. DM secrets (e.g. "microfractures in reality cause the madness"; "the mind control causes the leaders' illness") have to be entered separately, and they matter for good suggestions. A DM-notes input is planned; for now, edit the proposal JSON before applying.
-- [ ] Step 4: Improv box (retrieval + 2–3 tied-back options)
+
+### Design feedback from testing (backlog)
+
+1. **Clarifying questions after a recap.** Notes are summaries and miss details. When unsure, the model should ask the DM 2–3 short questions (e.g. "Were the ghostly butterflies a microfracture or a feature of the Woods?") rather than guess. Answers get folded in before applying. This replaces hand-editing JSON and fits the "minimal input" principle.
+2. **Don't assert causes the notes don't state.** It labelled the butterflies a microfracture event, a guess presented as fact (it was actually a location effect). Uncertain links should become a question (see 1), not a claim.
+3. **DM-notes input** for secrets the players haven't seen (see above).
+4. **Missed a set-up consequence in terse notes.** Session 5 says "Darius consumed two unidentified potions… potential consequences set up" in bullet fragments, and extraction skipped it (added by hand). Explicit "setup / consequences" phrasing should always become a thread; a second "anything missed?" pass or a clarifying question could catch these.
+5. **GM mechanics belong in threads.** Jacob runs hidden rolls: a madness roll on every figurine use, and resist-then-effect rolls for microfractures. Suggestions that use these mechanics land best, so capture them (DM notes or clarifying questions).
+6. Weak "everything is legal trouble" links show up (session 1 Gary→Festival, session 3 bounty→Gary). The prompt could demand a concrete connection.
+- [x] Step 4: Improv box (`improv "<moment>"`, `--why`, `--all`). Retrieval in `src/core/retrieval.ts` is in-memory scoring (entity/alias mentions, rare-word overlap, link hops, recency) rather than SQLite FTS. That's simpler at tens of threads; revisit when campaigns grow. Top 8 threads are sent to the model, and options citing threads that weren't sent are dropped. First results on Duradan: 3–6 s, ~$0.0005 per call.
 - [ ] Step 5: Scenario runner
 - [ ] Step 6: Between-session suggestions incl. thread "collisions"
 - [ ] Step 7: Real-campaign test (Darkness in Duradan, sessions 1–5)

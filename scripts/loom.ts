@@ -5,6 +5,7 @@ import { desc, eq, max } from "drizzle-orm";
 import { z } from "zod";
 import { costSummary } from "@/core/costs";
 import { db, initDb, schema } from "@/core/db/client";
+import { improv } from "@/core/improv";
 import { callLlm } from "@/core/llm";
 import { applyProposal, numberItems, proposeRecapChanges, type ProposalFile } from "@/core/recap";
 import { seedFixture } from "@/core/seed";
@@ -16,9 +17,15 @@ const USAGE = `Usage: npm run loom -- <command>
   new-campaign "<name>"      Create an empty campaign
   campaigns                  List campaigns
   threads [id]               List threads for a campaign (default: most recent campaign)
-  recap <file> [--session N] [--campaign id]
+  recap <file> [--session N] [--campaign id] [--model name]
                              Read a session recap and propose thread changes for you to approve
   apply <proposal.json>      Apply a (hand-edited) proposal file saved by "recap"
+  improv "<what happened>" [--campaign id] [--why] [--all] [--model name]
+                             2-3 options tied to existing threads. --why shows which threads were
+                             retrieved and why; --all sends every open thread instead (for comparison)
+
+  --model takes haiku, sonnet, opus, fable or a full model id.
+  Defaults: recap = opus, improv = sonnet, everything else = haiku.
   ping                       Make one small LLM call to check the API key and logging
   costs                      Show LLM calls, latency and cost so far`;
 
@@ -123,7 +130,7 @@ async function main() {
 
       const recap = readFileSync(path, "utf8");
       console.log(`Reading session ${sessionNumber} recap for campaign ${campaignId}…`);
-      const res = await proposeRecapChanges(campaignId, recap);
+      const res = await proposeRecapChanges(campaignId, recap, flag(args, "model"));
       console.log(`(${res.latencyMs} ms · ${res.inputTokens} in / ${res.outputTokens} out · ${usd(res.costUsd)})`);
 
       const file: ProposalFile = { campaignId, sessionNumber, recap, proposal: res.data };
@@ -131,6 +138,30 @@ async function main() {
       const out = `data/proposals/c${campaignId}-s${sessionNumber}.json`;
       writeFileSync(out, JSON.stringify(file, null, 2));
       await reviewAndApply(file, out);
+      break;
+    }
+    case "improv": {
+      const moment = args[0];
+      if (!moment || moment.startsWith("--")) return console.log(USAGE);
+      const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
+      const r = await improv(campaignId, moment, args.includes("--all") ? "all" : "ranked", flag(args, "model"));
+
+      if (args.includes("--why")) {
+        console.log("\nThreads considered:");
+        for (const t of r.threads) console.log(`  ${t.score.toFixed(1).padStart(5)}  T${t.id} ${t.title}  (${t.reasons.join("; ") || "recency"})`);
+      }
+      console.log("");
+      r.options.forEach((o, i) => {
+        const ties = [o.thread_id, ...o.also_ties_to].map((id) => r.titleOf.get(id)).join(" + ");
+        console.log(`${i + 1}. ${o.label.toUpperCase()}   ⟵ ${ties}`);
+        console.log(`   ${o.option}`);
+        console.log(`   why: ${o.why}\n`);
+      });
+      if (r.dropped) console.log(`(${r.dropped} option(s) dropped: cited a thread that wasn't provided)`);
+      const l = r.llm;
+      console.log(
+        `${l.model} · ${(l.latencyMs / 1000).toFixed(1)} s · ${l.inputTokens} in / ${l.outputTokens} out · ${usd(l.costUsd)} · ${r.threads.length} threads sent`,
+      );
       break;
     }
     case "apply": {
