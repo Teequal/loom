@@ -1,0 +1,13 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1792659846905,
+      "tag": "0000_wide_thunderball",
+      "breakpoints": true
+    }
+  ]
+}
