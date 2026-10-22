@@ -110,7 +110,7 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
 ## Phase 1 progress
 
 - [x] Step 1: Project setup, schema, potion fixture, `seed` / `campaigns` / `threads` commands
-- [ ] Step 2: LLM interface + call logging (`loom costs`)
+- [x] Step 2: LLM interface + call logging (`ping`, `costs`). All calls go through `callLlm` in `src/core/llm/`, return Zod-validated JSON and default to effort `low`. Prices live in `PRICES` there.
 - [ ] Step 3: Recap → proposed thread changes → approve
 - [ ] Step 4: Improv box (retrieval + 2–3 tied-back options)
 - [ ] Step 5: Scenario runner
