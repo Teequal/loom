@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
-import type { EntityTraits } from "./entity-fields";
+import type { CampaignMechanic, EntityTraits } from "./entity-fields";
 
 // The scene: where the party is, who's here, the party roster and compact cards for the
 // entities in play. Built from structured data so the model can't contradict continuity,
@@ -14,6 +14,9 @@ export interface Scene {
   text: string; // prompt block
   partyLocation: Entity | null;
   pcs: Entity[];
+  entities: Entity[];
+  mechanics: CampaignMechanic[];
+  safetyLines: string[];
   /** Resolves a name as the model wrote it ("Zara", "the alchemist") to an entity. */
   resolve: (name: string) => Entity | undefined;
   presence: (e: Entity) => Presence;
@@ -127,7 +130,17 @@ export async function buildScene(
     for (const e of cardEntities) lines.push(`- ${card(e, { nameOf, presence: party ? presence(e) : null, relations: relationsOf(e) })}`);
   }
 
-  return { text: lines.join("\n"), partyLocation: party, pcs, resolve, presence, whereabouts };
+  return {
+    text: lines.join("\n"),
+    partyLocation: party,
+    pcs,
+    entities,
+    mechanics: campaign?.mechanics ?? [],
+    safetyLines: campaign?.safetyLines ?? [],
+    resolve,
+    presence,
+    whereabouts,
+  };
 }
 
 function relationText(r: Relation, _selfId: number, nameOf: (id: number | null) => string | null) {

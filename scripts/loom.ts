@@ -5,6 +5,7 @@ import { desc, eq, max } from "drizzle-orm";
 import { z } from "zod";
 import { costSummary } from "@/core/costs";
 import { db, initDb, schema } from "@/core/db/client";
+import { flavour } from "@/core/flavour";
 import { improv } from "@/core/improv";
 import { callLlm } from "@/core/llm";
 import { applyProposal, numberItems, proposeEnrichment, proposeRecapChanges, type ProposalFile } from "@/core/recap";
@@ -49,6 +50,7 @@ Engine
   improv "<what happened>" [--campaign id] [--why] [--all] [--model name]
                              2-3 options tied to existing threads. --why shows which threads were
                              retrieved and why; --all sends every open thread instead (for comparison)
+  flavor <n> [--model name]  Read-aloud version of option n from the last improv (default: opus)
 
   suggest [--campaign id] [--model name]
                              Between-session prep: thread collisions, an idea per player
@@ -62,7 +64,7 @@ Engine
   costs                      Show LLM calls, latency and cost so far
 
   --model takes haiku, sonnet, opus, fable or a full model id.
-  Defaults: recap = opus, suggest = opus, improv = sonnet, everything else = haiku.`;
+  Defaults: recap, suggest, enrich, flavor = opus; improv = sonnet; everything else = haiku.`;
 
 const usd = (n: number | null) => `$${(n ?? 0).toFixed(5)}`;
 
@@ -230,6 +232,7 @@ async function main() {
         for (const t of r.threads) console.log(`  ${t.score.toFixed(1).padStart(5)}  T${t.id} ${t.title}  (${t.reasons.join("; ") || "recency"})`);
       }
       console.log("");
+      if (r.safetyNote) console.log(`⚠ ${r.safetyNote}\n`);
       r.options.forEach((o, i) => {
         const ties = [o.thread_id, ...o.also_ties_to].map((id) => r.titleOf.get(id)).join(" + ");
         console.log(`${i + 1}. ${o.label.toUpperCase()}   ⟵ ${ties}`);
@@ -241,6 +244,27 @@ async function main() {
       console.log(
         `${l.model} · ${(l.latencyMs / 1000).toFixed(1)} s · ${l.inputTokens} in / ${l.outputTokens} out · ${usd(l.costUsd)} · ${r.threads.length} threads sent${l.attempts > 1 ? ` · ${l.attempts} attempts` : ""}`,
       );
+      // Saved so `flavor <n>` can polish one of these options.
+      mkdirSync("data", { recursive: true });
+      writeFileSync(
+        "data/last-improv.json",
+        JSON.stringify({ campaignId, moment, options: r.options.map((o) => ({ label: o.label, threads: [o.thread_id, ...o.also_ties_to].map((id) => r.titleOf.get(id)), scaffold: o.scaffold })) }, null, 2),
+      );
+      if (r.options.length) console.log(`Read-aloud version of one: npm run loom -- flavor <1-${r.options.length}>`);
+      break;
+    }
+    case "flavor": {
+      const n = Number(args[0]);
+      const last = JSON.parse(readFileSync("data/last-improv.json", "utf8"));
+      const picked = last.options[n - 1];
+      if (!picked) return console.log(`Pick an option from the last improv: 1-${last.options.length}`);
+      const f = await flavour({ campaignId: last.campaignId, moment: last.moment, scaffold: picked.scaffold }, flag(args, "model"));
+      console.log(`\n${picked.label.toUpperCase()}   ⟵ ${picked.threads.join(" + ")}\n`);
+      for (const b of f.beats) console.log(`   ${b}`);
+      console.log(`\n   → ${f.handOff}${f.mechanic && !f.handOff.includes(f.mechanic) ? ` (${f.mechanic})` : ""}`);
+      if (f.onFail) console.log(`   On a failure: ${f.onFail}`);
+      for (const x of f.fallbacks) console.log(`(kept the plain line for ${x})`);
+      console.log(`\n${f.llm.model} · ${(f.llm.latencyMs / 1000).toFixed(1)} s · ${usd(f.llm.costUsd)}`);
       break;
     }
     case "suggest": {
