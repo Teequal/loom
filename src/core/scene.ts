@@ -2,7 +2,8 @@ import { eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import { type EffectInPlay, loadEffectsInPlay } from "./effects";
 import type { EntityTraits } from "./entity-fields";
-import { capabilitiesOf, togglesText } from "./rules";
+import type { Budget } from "./graph";
+import { capabilitiesOf, RELATION_LAWS, togglesText } from "./rules";
 
 // The scene: where the party is, who's here, the party roster and compact cards for the
 // entities in play. Built from structured data so the model can't contradict continuity,
@@ -30,7 +31,14 @@ const MAX_CARDS = 10;
 
 export async function buildScene(
   campaignId: number,
-  opts: { mentioned: Set<string>; threadEntities: string[]; storyConditions?: Map<string, string[]> },
+  opts: {
+    mentioned: Set<string>;
+    threadEntities: string[];
+    storyConditions?: Map<string, string[]>;
+    // Context by distance: how many links each entity is from the moment, and how much to show.
+    distances?: Map<number, number>;
+    budget?: Budget;
+  },
 ): Promise<Scene> {
   const [campaign] = await db.select().from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
   const entities = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
@@ -88,11 +96,20 @@ export async function buildScene(
   };
 
   const pcs = entities.filter((e) => e.type === "pc");
-  const relationsOf = (e: Entity) =>
-    relations
+  // Two-way relationships (ally, enemy…) are stored both ways; show each once.
+  const relationsOf = (e: Entity) => {
+    const seen = new Set<string>();
+    return relations
       .filter((r) => r.fromEntityId === e.id || r.toEntityId === e.id)
+      .filter((r) => {
+        const key = RELATION_LAWS[r.type]?.symmetric ? `${r.type}:${[r.fromEntityId, r.toEntityId].sort().join("-")}` : `${r.id}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
       .map((r) => relationText(r, e.id, nameOf))
       .slice(0, 6);
+  };
 
   // Cards: entities named in the moment first, then those on the threads in play, then NPCs
   // who are here; major ones before minor. PCs are covered by the roster.
@@ -102,10 +119,37 @@ export async function buildScene(
     (threadNames.has(e.name) ? 10 : 0) +
     (e.type === "npc" && presence(e) === "here" ? 5 : 0) +
     (e.importance === "major" ? 2 : e.importance === "minor" ? 1 : 0);
-  const cardEntities = entities
-    .filter((e) => e.type !== "pc" && e.type !== "location" && rank(e) >= 5)
-    .sort((a, b) => rank(b) - rank(a))
-    .slice(0, MAX_CARDS);
+  // With distances, detail follows closeness: full cards nearest the moment, briefs one step
+  // out, names two steps out, nothing beyond. Without, the older ranking applies.
+  const dist = opts.distances;
+  const budget = opts.budget;
+  const levels = new Map<number, "full" | "brief">();
+  const nearby: Entity[] = [];
+  let cardEntities: Entity[];
+  if (dist && budget) {
+    const candidates = entities
+      .filter((e) => e.type !== "pc" && e.type !== "location" && dist.has(e.id))
+      .sort((a, b) => dist.get(a.id)! - dist.get(b.id)! || rank(b) - rank(a));
+    let full = 0;
+    let brief = 0;
+    for (const e of candidates) {
+      const d = dist.get(e.id)!;
+      if (d === 0 && full < budget.full) {
+        levels.set(e.id, "full");
+        full++;
+      } else if (d <= 1 && brief < budget.brief) {
+        levels.set(e.id, "brief");
+        brief++;
+      } else if (nearby.length < budget.names) nearby.push(e);
+    }
+    cardEntities = candidates.filter((e) => levels.has(e.id));
+  } else {
+    cardEntities = entities
+      .filter((e) => e.type !== "pc" && e.type !== "location" && rank(e) >= 5)
+      .sort((a, b) => rank(b) - rank(a))
+      .slice(0, MAX_CARDS);
+    for (const e of cardEntities) levels.set(e.id, "full");
+  }
 
   const here = entities.filter((e) => e.type === "npc" && e.status !== "dead" && presence(e) === "here").map((e) => e.name);
   const dead = entities.filter((e) => e.type === "npc" && e.status === "dead").map((e) => e.name);
@@ -121,21 +165,28 @@ export async function buildScene(
   // The rules layer: toggles that differ from standard 5e, and every effect with who it reaches now.
   const effects = await loadEffectsInPlay(campaignId, entities, party?.id ?? null);
   const toggles = togglesText(campaign?.ruleToggles ?? {});
-  if (toggles.length || effects.length) {
+  // With distances, only rules that reach someone now or whose source is close by.
+  const shown = dist ? effects.filter((e) => e.targets.length > 0 || (e.effect.sourceEntityId != null && dist.has(e.effect.sourceEntityId))) : effects;
+  if (toggles.length || shown.length) {
     lines.push("", "RULES IN PLAY (5e unless noted)");
     for (const t of toggles) lines.push(`- ${t}`);
-    for (const e of effects) lines.push(`- ${e.text}`);
+    for (const e of shown) lines.push(`- ${e.text}`);
   }
 
   lines.push("", "THE PARTY (player characters, controlled by the players)");
   for (const p of pcs) {
     const story = opts.storyConditions?.get(p.name) ?? [];
-    lines.push(`- ${card(p, { nameOf, presence: null, relations: relationsOf(p) })}${story.length ? ` Story conditions: ${story.join("; ")}.` : ""}`);
+    // PCs in the moment get everything; the rest of the party a brief line.
+    const level = !dist || dist.get(p.id) === 0 || opts.mentioned.has(p.name) ? "full" : "brief";
+    lines.push(`- ${card(p, { nameOf, presence: null, relations: relationsOf(p), level })}${story.length ? ` Story conditions: ${story.join("; ")}.` : ""}`);
   }
 
   if (cardEntities.length) {
     lines.push("", "WHO AND WHAT IS IN PLAY");
-    for (const e of cardEntities) lines.push(`- ${card(e, { nameOf, presence: party ? presence(e) : null, relations: relationsOf(e) })}`);
+    for (const e of cardEntities) lines.push(`- ${card(e, { nameOf, presence: party ? presence(e) : null, relations: relationsOf(e), level: levels.get(e.id) ?? "full" })}`);
+  }
+  if (nearby.length) {
+    lines.push("", `ALSO NEARBY (name only): ${nearby.map((e) => `${e.name} (${e.type}${e.status === "dead" ? ", dead" : ""})`).join("; ")}`);
   }
 
   return {
@@ -163,7 +214,8 @@ function relationText(r: Relation, _selfId: number, nameOf: (id: number | null) 
 
 // One compact line per entity. Secret fields are kept but tagged, so they shape what happens
 // without being revealed.
-function card(e: Entity, ctx: { nameOf: (id: number | null) => string | null; presence: Presence | null; relations: string[] }) {
+function card(e: Entity, ctx: { nameOf: (id: number | null) => string | null; presence: Presence | null; relations: string[]; level?: "full" | "brief" }) {
+  const brief = ctx.level === "brief";
   const secret = (field: string) => (e.fieldMeta[field]?.secret ? " [GM secret]" : "");
   const t = e.traits as EntityTraits;
   const label = e.type === "pc" ? "PC" : e.type === "npc" ? "NPC" : e.type;
@@ -191,19 +243,27 @@ function card(e: Entity, ctx: { nameOf: (id: number | null) => string | null; pr
     parts.push(`Right now: ${[cant.length && `can't ${cant.join(", ")}`, ...caps.laws].filter(Boolean).join("; ")}.`);
   }
   list("abilities", "Abilities");
-  list("languages", "Languages");
-  list("gear", "Gear");
+  // A brief card keeps what continuity needs (state, abilities, goal, key ties) and drops colour.
+  if (!brief) {
+    list("languages", "Languages");
+    list("gear", "Gear");
+  }
   list("goal", "Goal");
-  list("wants", "Wants");
-  list("fears", "Fears");
-  list("voice", "Voice");
-  list("personality_traits", "Personality");
-  list("flaws", "Flaws");
-  list("secrets", "Secrets");
+  if (!brief) {
+    list("wants", "Wants");
+    list("fears", "Fears");
+    list("voice", "Voice");
+    list("personality_traits", "Personality");
+    list("flaws", "Flaws");
+    list("secrets", "Secrets");
+  }
   list("known_properties", "Known properties");
-  list("true_properties", "True properties");
-  list("cost", "Cost of use");
-  list("plan", "Plan");
-  if (ctx.relations.length) parts.push(`Relationships: ${ctx.relations.join("; ")}.`);
+  if (!brief) {
+    list("true_properties", "True properties");
+    list("cost", "Cost of use");
+    list("plan", "Plan");
+  }
+  const rels = brief ? ctx.relations.slice(0, 2) : ctx.relations;
+  if (rels.length) parts.push(`Relationships: ${rels.join("; ")}.`);
   return `${e.name} (${head}). ${parts.join(" ")}`;
 }

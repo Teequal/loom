@@ -2,6 +2,7 @@ import { z } from "zod";
 import { callLlm, type LlmResult } from "./llm";
 import { findMentions, loadThreadContexts, retrieveThreads, type ThreadContext } from "./retrieval";
 import { PILLARS, type Pillar } from "./db/schema";
+import { BUDGETS, distancesFrom } from "./graph";
 import { listMoments, momentLine } from "./moments";
 import { personalLines, spotlightScore, tableSeats, tableText } from "./players";
 import { buildScene, type Scene } from "./scene";
@@ -217,7 +218,9 @@ function gainsSource(eff: Scene["effects"][number], who: string, gained: Map<str
 }
 
 // The lists that shape the answer format, and the context the checks use.
-export function buildLists(scene: Scene, moment: string, mentioned: Set<string>) {
+// `reach`: entity ids close enough to the moment to be offered as actors (see graph.ts). Without
+// it, every entity is offered.
+export function buildLists(scene: Scene, moment: string, mentioned: Set<string>, reach?: Map<number, number>) {
   const tagger = makeTagger(scene);
   const alive = (e: Scene["entities"][number]) => e.status !== "dead";
   const free = (e: Scene["entities"][number]) => e.status !== "captured" && e.status !== "missing";
@@ -264,7 +267,14 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>)
     tagger,
     notes,
     check: { scene, tagger, present, remoteOk, outcomePcs, possession } satisfies CheckContext,
-    actors: [...present, ...absentNpcs, ...scene.pcs.map((p) => p.name)],
+    // Actors on offer: those within reach of the moment (and anyone it names), plus the PCs. A
+    // shorter list is cheaper to send and more reliable for the model to choose from.
+    actors: [...present, ...absentNpcs]
+      .filter((n) => {
+        const e = scene.entities.find((x) => x.name === n);
+        return !reach || mentioned.has(n) || (e != null && reach.has(e.id));
+      })
+      .concat(scene.pcs.map((p) => p.name)),
     handOff: scene.pcs.filter((p) => p.status !== "dead" && capabilitiesOf(p).aware).map((p) => p.name),
     pcs: scene.pcs.map((p) => p.name),
     // Only effects that reach someone right now can be offered for a roll.
@@ -286,7 +296,7 @@ async function safetyCheck(lines: string[], texts: string[]) {
 // mode "ranked" sends the top retrieved threads; "all" sends every open thread (baseline for comparison).
 export async function improv(campaignId: number, moment: string, mode: "ranked" | "all" = "ranked", model?: string) {
   const allThreads = await loadThreadContexts(campaignId);
-  const threads = mode === "all" ? allThreads.map((t) => ({ ...t, score: 0, reasons: [] as string[] })) : await retrieveThreads(campaignId, moment);
+  const threads = mode === "all" ? allThreads.map((t) => ({ ...t, score: 0, reasons: [] as string[] })) : await retrieveThreads(campaignId, moment, BUDGETS.improv.threads);
   if (threads.length === 0) throw new Error("This campaign has no open threads yet.");
 
   // The scene (party location, who's here, roster, cards for what's in play) comes from
@@ -296,8 +306,17 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   const storyConditions = new Map(
     base.pcs.map((p) => [p.name, allThreads.filter((t) => t.kind === "condition" && t.entities.includes(p.name)).map((t) => t.title)]),
   );
-  const scene = await buildScene(campaignId, { mentioned, threadEntities: threads.flatMap((t) => t.entities), storyConditions });
-  const lists = buildLists(scene, moment, mentioned);
+  // Context by distance: start from who and what the moment names, where the party is, and who
+  // is on the two most relevant threads; walk two links out.
+  const nameToId = new Map(base.entities.map((e) => [e.name, e.id]));
+  const seeds = [
+    ...[...mentioned].map((n) => nameToId.get(n)),
+    base.partyLocation?.id,
+    ...threads.slice(0, 2).flatMap((t) => t.entities.map((n) => nameToId.get(n))),
+  ].filter((id): id is number => id != null);
+  const distances = await distancesFrom(campaignId, seeds, BUDGETS.improv.depth);
+  const scene = await buildScene(campaignId, { mentioned, threadEntities: threads.flatMap((t) => t.entities), storyConditions, distances, budget: BUDGETS.improv });
+  const lists = buildLists(scene, moment, mentioned, mode === "all" ? undefined : distances);
   const typeOf = new Map(scene.entities.map((e) => [e.name, e.type]));
 
   // The player layer: who has been quiet and what their players enjoy (ranking only).
@@ -331,7 +350,7 @@ WHO MAY ACT
 - Not here (only kind "arrival" or "remote"): ${lists.actors.filter((n) => typeOf.get(n) === "npc" && !lists.check.present.has(n)).join(", ") || "nobody"}
 ${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 OPEN THREADS
-${threads.map((t) => threadBlock(t, titleOf, typeOf)).join("\n\n")}
+${threads.map((t, i) => (mode === "all" || i < BUDGETS.improv.fullThreads ? threadBlock(t, titleOf, typeOf) : `T${t.id} [${t.kind}] ${t.title}: ${t.summary}`)).join("\n\n")}
 ${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callbacks.map(momentLine).join("\n")}\n` : ""}${tableBlock ? `\n${tableBlock}\n` : ""}
 WHAT JUST HAPPENED AT THE TABLE
 ${moment}`;
@@ -341,7 +360,14 @@ ${moment}`;
   const accepted: ScaffoldOption[] = [];
   const rejected: { label: string; reason: string }[] = [];
   for (let attempt = 0; attempt < 2 && accepted.length < 2; attempt++) {
-    const res = await callLlm({ feature: "improv", system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
+    // A malformed answer (e.g. a name outside the allowed list) counts as a failed attempt.
+    let res: LlmResult<z.infer<typeof OptionsSchema>>;
+    try {
+      res = await callLlm({ feature: "improv", system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
+    } catch (err) {
+      rejected.push({ label: `attempt ${attempt + 1}`, reason: `unusable answer (${err instanceof Error ? err.message.slice(0, 60) : "error"}…)` });
+      continue;
+    }
     calls.push(res);
     for (const o of res.data.options as ScaffoldOption[]) {
       normaliseHandOff(o, lists.check);
@@ -397,7 +423,7 @@ IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}
   }));
 
   const llm = {
-    model: calls[0].model,
+    model: calls[0]?.model ?? "(no answer)",
     latencyMs: calls.reduce((s, c) => s + c.latencyMs, 0),
     inputTokens: calls.reduce((s, c) => s + c.inputTokens, 0),
     outputTokens: calls.reduce((s, c) => s + c.outputTokens, 0),

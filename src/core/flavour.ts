@@ -3,6 +3,7 @@ import { buildLists, renderBeat, renderOnFail, type ScaffoldOption } from "./imp
 import { callLlm } from "./llm";
 import { findMentions } from "./retrieval";
 import { checkBeat, checkOnFail } from "./scaffold";
+import { BUDGETS, distancesFrom } from "./graph";
 import { buildScene } from "./scene";
 
 // The flavour pass: turns one chosen scaffold into vivid read-aloud text, using the facts behind
@@ -49,7 +50,10 @@ export async function flavour(input: FlavourInput, model?: string) {
     scaffold.on_fail.effect,
   ].join(" ");
   for (const n of lists0.tagger.tagsIn(lists0.tagger.tag(allText))) tagged.add(n);
-  const scene = await buildScene(campaignId, { mentioned: tagged, threadEntities: [] });
+  // Full cards for exactly what the option names; nothing else.
+  const tagIds = base.entities.filter((e) => tagged.has(e.name)).map((e) => e.id);
+  const distances = await distancesFrom(campaignId, tagIds, BUDGETS.flavour.depth);
+  const scene = await buildScene(campaignId, { mentioned: tagged, threadEntities: [], distances, budget: BUDGETS.flavour });
   const lists = buildLists(scene, moment, mentioned);
   const t = lists.tagger;
 

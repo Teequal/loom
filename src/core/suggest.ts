@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db, schema } from "./db/client";
 import { callLlm } from "./llm";
 import { loadThreadContexts, type ThreadContext } from "./retrieval";
+import { BUDGETS, distancesFrom } from "./graph";
 import { listMoments, momentLine } from "./moments";
 import { tableSeats, tableText } from "./players";
 import { buildScene } from "./scene";
@@ -64,8 +65,13 @@ export async function suggest(campaignId: number, model?: string) {
 
   // Same scene block as the improv box: where the party is, who's alive and where, the party
   // with their abilities and story conditions, and cards for the major figures in the threads.
+  // Context by distance from the whole party and where they are, three links out.
+  const [camp] = await db.select().from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
+  const distances = await distancesFrom(campaignId, [...pcs.map((p) => p.id), ...(camp?.partyLocationId ? [camp.partyLocationId] : [])], BUDGETS.suggest.depth);
   const scene = await buildScene(campaignId, {
     mentioned: new Set(),
+    distances,
+    budget: BUDGETS.suggest,
     threadEntities: threads.flatMap((t) => t.entities),
     storyConditions: new Map(pcs.map((p) => [p.name, threads.filter((t) => t.kind === "condition" && t.entities.includes(p.name)).map((t) => t.title)])),
   });

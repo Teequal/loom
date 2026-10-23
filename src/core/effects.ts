@@ -158,7 +158,8 @@ export function effectsInPlay(opts: {
       effect.check && `check: ${effect.check}`,
       effect.onFail && `on fail: ${effect.onFail}`,
       effect.escalation && `escalates: ${effect.escalation}`,
-      effect.rule && `rule: ${effect.rule}`,
+      // The plain-words version only when the structure doesn't already say it.
+      effect.rule && !(effect.check && effect.onFail) && `rule: ${effect.rule}`,
     ].filter(Boolean);
     return { effect, sourceName, holders, targets, tableWide, text: parts.join("; ") };
   });

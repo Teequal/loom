@@ -269,6 +269,15 @@ Jacob approved the model on 24 Oct 2026: layers L0 Rules › L1 Identity › L2 
   - **Suggest:** per-player ideas are ordered quietest first and marked ◎; players' personal lines join the safety check (tested: "spiders" steered a web-filled cellar).
   - **Duradan:** Iresia has been quiet since session 1, which matches the notes. Suggest now leads with her, and the open camp moment led with her hand-off. **Jacob still needs to add the real players** (`player add`).
   - Also closed: a captured NPC can only reach out or arrive by escaping or getting word out (bribing a guard, smuggling a note).
-- [ ] Step 5: Context assembly by graph distance, with per-feature budgets
+- [x] **Step 5: Context by graph distance** (`src/core/graph.ts`).
+  - `distancesFrom` walks relationships, parents, locations and small shared threads (up to 4 entities) out from seeds.
+  - `BUDGETS` per feature:
+    - improv: depth 2, 4 full cards, 6 briefs, 10 names, 6 threads (3 in full).
+    - suggest: depth 3, larger.
+    - flavour: full cards for tagged entities only.
+  - The scene shows distance-0 entities as full cards, distance 1 as briefs (state, abilities, goal, 2 ties), distance 2 as "ALSO NEARBY" names. PCs not in the moment get brief lines. Only rules that reach someone or have a nearby source appear. Two-way relationships print once; rules skip the plain-words copy when structured.
+  - Improv's allowed-actor list is limited to entities within reach, plus anyone named and the PCs. A malformed answer now counts as a failed attempt and is retried (it used to crash the call).
+  - **Measured (10 Duradan moments, Haiku):** expected-thread hits 9/9 → 9/9; input tokens −7 to −15%; speed per call ~5.2–5.4 s, unchanged.
+  - **Finding:** latency is dominated by output (~850–920 tokens for three structured options), so context size isn't the speed lever. What it buys is relevance, and prompts that stay bounded as campaigns grow. Real speed levers: stream options as they're written (web UI), shorten the scaffold (fewer/shorter fields), or fewer options.
 - [ ] Step 6: Embeddings as entry points
 - [ ] Step 7: Stress tests and a blind rerun
