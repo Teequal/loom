@@ -21,16 +21,19 @@ export const anthropicProvider: LlmProvider = {
     const workspaceId = process.env.ANTHROPIC_WORKSPACE_ID;
     client ??= new Anthropic(workspaceId ? { defaultHeaders: { "anthropic-workspace-id": workspaceId } } : {});
     const fallback = SUPPORTS_FALLBACK.has(model);
-    const response = await client.beta.messages.parse({
+    const params = {
       model,
       max_tokens: req.maxTokens ?? 4000,
       system: req.system,
-      messages: [{ role: "user", content: req.prompt }],
+      messages: [{ role: "user" as const, content: req.prompt }],
       // Low effort keeps live calls fast; recap extraction can ask for more.
       output_config: { effort: req.effort ?? "low", format: betaZodOutputFormat(req.schema) },
       ...(req.fast && CAN_DISABLE_THINKING.has(model) ? { thinking: { type: "disabled" as const } } : {}),
       ...(fallback ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
-    });
+    };
+    // Large responses must stream (the SDK refuses long non-streaming requests); same result either way.
+    const response =
+      params.max_tokens > 16000 ? await client.beta.messages.stream(params).finalMessage() : await client.beta.messages.parse(params);
 
     if (response.stop_reason === "refusal") throw new Error("Model declined the request");
     if (response.stop_reason === "max_tokens") throw new Error(`Response cut off at max_tokens (${req.maxTokens ?? 4000})`);

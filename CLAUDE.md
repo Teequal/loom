@@ -194,7 +194,15 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - `thread set <id> deadline= stakes= secret=`
   - `entity show` marks every value ✎ (entered by you), ⚙ (extracted, with session) or 🔒 (GM-only).
   - Shared loader in `src/core/entity-card.ts` (`findEntity`, `loadEntityCard`), to be reused for prompt cards in step 4.
-- [ ] Step 3: Extraction proposes entity and relationship changes; backfill Duradan
+- [x] Step 3: Extraction proposes entity details, relationships and the party's location (`src/core/entity-extraction.ts`).
+  - `recap` now proposes these alongside thread changes, in the same numbered approve flow.
+  - `enrich` re-reads every stored recap to backfill a campaign (Opus, ~$0.10 for Duradan).
+  - Changes apply as source "extracted": where the notes disagree with a DM entry, the DM's value is kept and the difference is reported (tested: Ysolde hand-set "hostile", notes said "friendly").
+  - Requests over 16k output tokens now stream automatically (SDK requirement).
+  - **Duradan backfilled:** 23 entities with details, 15 relationships, 2 new places, location hierarchy (Ritual Site › Time Pocket › Hidden Cave › Whispering Woods), Gary dead, party at the Northern Gate Outpost. Skipped one item that put Dahlia's abilities in an item-only field.
+  - **To check:** Professor Vex marked "captured", which the notes only imply.
+  - **Abilities field added**, after the backfill put Dahlia's wildshape in an item-only field. Dahlia's and Darius's abilities are fixed in Duradan.
+  - **5e story fields added** to traits: background, personality traits, languages, health band, conditions, notable gear, wealth, passive Perception/Insight. Character-sheet numbers (scores, AC, HP, slots) are deliberately not stored; importing from D&D Beyond or Foundry is the Phase 2 path for those.
 - [ ] Step 4: Entity cards and party location in prompts; slip checks
 - [ ] Step 5: Embeddings and hybrid retrieval
 - [ ] Step 6: Test on known slips; blind rerun

@@ -2,19 +2,29 @@ import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "./db/client";
 import { ENTITY_TYPES, THREAD_KINDS } from "./db/schema";
+import {
+  applyEntityChanges,
+  ENTITY_RULES,
+  EntityChangesShape,
+  entityStateText,
+  type EntityApplyResult,
+  type EntityUpdate,
+  type RelationChange,
+} from "./entity-extraction";
 import { callLlm } from "./llm";
+
+const NewEntitySchema = z.object({
+  name: z.string(),
+  type: z.enum(ENTITY_TYPES),
+  aliases: z.array(z.string()),
+  description: z.string(),
+});
 
 // What the model proposes after reading a recap. Existing threads are referred to as "T<id>",
 // new threads as "N<n>", entities by exact name. Nothing is stored until the DM approves.
 export const ProposalSchema = z.object({
-  new_entities: z.array(
-    z.object({
-      name: z.string(),
-      type: z.enum(ENTITY_TYPES),
-      aliases: z.array(z.string()),
-      description: z.string(),
-    }),
-  ),
+  ...EntityChangesShape,
+  new_entities: z.array(NewEntitySchema),
   new_threads: z.array(
     z.object({
       ref: z.string(),
@@ -36,12 +46,30 @@ export const ProposalSchema = z.object({
 });
 export type Proposal = z.infer<typeof ProposalSchema>;
 
+// Backfill: entity details only, read from recaps already stored.
+const EnrichSchema = z.object({ new_entities: z.array(NewEntitySchema), ...EntityChangesShape });
+
 // A proposal plus what's needed to apply it later (possibly after the DM edits the file).
+// kind "enrich" proposals don't touch the session's stored recap.
 export interface ProposalFile {
+  kind?: "recap" | "enrich";
   campaignId: number;
   sessionNumber: number;
   recap: string;
   proposal: Proposal;
+}
+
+// Proposal files saved before entity extraction existed lack these fields.
+function withDefaults(p: Partial<Proposal>): Proposal {
+  return {
+    new_entities: p.new_entities ?? [],
+    new_threads: p.new_threads ?? [],
+    thread_updates: p.thread_updates ?? [],
+    thread_links: p.thread_links ?? [],
+    entity_updates: p.entity_updates ?? [],
+    relations: p.relations ?? [],
+    party_location: p.party_location ?? "",
+  };
 }
 
 const SYSTEM = `You maintain the thread list for a tabletop RPG campaign, so the game master can tie future moments back to what already happened.
@@ -71,7 +99,20 @@ new_entities
 thread_links
 - Clear connections between threads, using "T<id>" or "N<n>": same cause, one explains the other, or one could resolve the other. note: a few words.
 
+${ENTITY_RULES}
+
 Use only what the recap says; do not invent facts. Lists of unanswered questions in the recap are strong signals for threads.`;
+
+const ENRICH_SYSTEM = `You maintain the records of the characters, places, items and factions in a tabletop RPG campaign, so the game master's assistant never contradicts established facts (a dead NPC acting, someone appearing where they can't be).
+
+Read the session recaps (oldest first) and propose entity details as they stand at the end of the latest session. Later sessions override earlier ones.
+
+new_entities
+- Places, characters, items or factions that the notes name and that matter, but which are not yet entities (e.g. a district or building used as a location). type "pc" for player characters, "npc" for everyone else. aliases: other names used, otherwise []. description: one short line.
+
+${ENTITY_RULES}
+
+Use only what the recaps say; do not invent facts.`;
 
 async function campaignState(campaignId: number) {
   const entities = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
@@ -85,13 +126,10 @@ async function campaignState(campaignId: number) {
 export async function proposeRecapChanges(campaignId: number, recap: string, model?: string) {
   const { entities, threads } = await campaignState(campaignId);
 
-  const entityLines = entities.map(
-    (e) => `- ${e.name} (${e.type})${e.aliases.length ? ` aka ${e.aliases.join(", ")}` : ""}: ${e.description}`,
-  );
+  void entities; // listed, with their fields, by entityStateText
   const threadLines = threads.map((t) => `- T${t.id} [${t.status}] (${t.kind}) ${t.title}: ${t.summary}`);
 
-  const prompt = `EXISTING ENTITIES
-${entityLines.join("\n") || "(none yet)"}
+  const prompt = `${await entityStateText(campaignId)}
 
 EXISTING OPEN THREADS
 ${threadLines.join("\n") || "(none yet)"}
@@ -110,20 +148,47 @@ ${recap}`;
   });
 }
 
+// Reads every stored recap for the campaign and proposes entity details (no thread changes).
+export async function proposeEnrichment(campaignId: number, model?: string) {
+  const sessions = await db
+    .select()
+    .from(schema.sessions)
+    .where(eq(schema.sessions.campaignId, campaignId))
+    .orderBy(schema.sessions.number);
+  const withRecaps = sessions.filter((s) => s.recap.trim());
+  if (withRecaps.length === 0) throw new Error("No stored session recaps to read.");
+
+  const prompt = `${await entityStateText(campaignId)}
+
+SESSION RECAPS (oldest first)
+${withRecaps.map((s) => `=== Session ${s.number} ===\n${s.recap}`).join("\n\n")}`;
+
+  const res = await callLlm({ feature: "enrich", system: ENRICH_SYSTEM, prompt, schema: EnrichSchema, maxTokens: 32000, effort: "medium", model });
+  const latest = withRecaps.at(-1)!.number;
+  return { ...res, data: withDefaults(res.data), sessionNumber: latest };
+}
+
 // Flat, numbered view of a proposal so the DM can accept or skip individual items.
 export type ProposalItem =
   | { n: number; kind: "entity"; item: Proposal["new_entities"][number] }
   | { n: number; kind: "thread"; item: Proposal["new_threads"][number] }
   | { n: number; kind: "update"; item: Proposal["thread_updates"][number] }
-  | { n: number; kind: "link"; item: Proposal["thread_links"][number] };
+  | { n: number; kind: "link"; item: Proposal["thread_links"][number] }
+  | { n: number; kind: "entity_update"; item: EntityUpdate }
+  | { n: number; kind: "relation"; item: RelationChange }
+  | { n: number; kind: "party"; item: string };
 
-export function numberItems(p: Proposal): ProposalItem[] {
+export function numberItems(raw: Partial<Proposal>): ProposalItem[] {
+  const p = withDefaults(raw);
   let n = 0;
   return [
     ...p.new_entities.map((item) => ({ n: ++n, kind: "entity" as const, item })),
     ...p.new_threads.map((item) => ({ n: ++n, kind: "thread" as const, item })),
     ...p.thread_updates.map((item) => ({ n: ++n, kind: "update" as const, item })),
     ...p.thread_links.map((item) => ({ n: ++n, kind: "link" as const, item })),
+    ...p.entity_updates.map((item) => ({ n: ++n, kind: "entity_update" as const, item })),
+    ...p.relations.map((item) => ({ n: ++n, kind: "relation" as const, item })),
+    ...(p.party_location.trim() ? [{ n: ++n, kind: "party" as const, item: p.party_location }] : []),
   ];
 }
 
@@ -135,6 +200,7 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
   const items = numberItems(file.proposal).filter((i) => !skip.has(i.n));
   const warnings: string[] = [];
   const counts = { entities: 0, threads: 0, updates: 0, links: 0 };
+  let sessionId: number | null = null;
 
   await db.transaction(async (tx) => {
     // Session row: reuse if this session was already recorded, otherwise create it.
@@ -143,10 +209,11 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
       .from(schema.sessions)
       .where(and(eq(schema.sessions.campaignId, campaignId), eq(schema.sessions.number, sessionNumber)));
     if (session) {
-      await tx.update(schema.sessions).set({ recap }).where(eq(schema.sessions.id, session.id));
+      if (file.kind !== "enrich") await tx.update(schema.sessions).set({ recap }).where(eq(schema.sessions.id, session.id));
     } else {
       [session] = await tx.insert(schema.sessions).values({ campaignId, number: sessionNumber, recap }).returning();
     }
+    sessionId = session.id;
 
     const existingEntities = await tx.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
     const entityByName = new Map<string, number>();
@@ -226,5 +293,15 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
     }
   });
 
-  return { counts, warnings };
+  // Entity details go through the provenance rules (never overwriting the DM), outside the
+  // transaction because those writes use their own queries.
+  const of = <K extends ProposalItem["kind"]>(k: K) => items.filter((i) => i.kind === k).map((i) => i.item as Extract<ProposalItem, { kind: K }>["item"]);
+  const entityResult: EntityApplyResult = await applyEntityChanges(campaignId, sessionId, {
+    entity_updates: of("entity_update"),
+    relations: of("relation"),
+    party_location: of("party")[0] ?? null,
+  });
+  warnings.push(...entityResult.warnings);
+
+  return { counts, warnings, entityResult };
 }

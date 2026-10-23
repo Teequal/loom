@@ -22,6 +22,10 @@ export const ALIGNMENTS = [
   "unaligned",
 ] as const;
 
+// A rough health band rather than hit points: enough to keep stories consistent
+// ("still in critical condition"), without duplicating the character sheet.
+export const HEALTH = ["healthy", "wounded", "bloodied", "critical", "unconscious"] as const;
+
 export const RELATION_TYPES = [
   // feelings
   "loves", "cherishes", "likes", "trusts", "distrusts", "dislikes", "hates", "fears", "rivals",
@@ -58,11 +62,22 @@ export const TraitsSchema = z
     ideals: list,
     bonds: list,
     flaws: list,
+    abilities: list, // what they can do: spells, features, powers ("wildshape: alley cat", "Temporal Echoes")
     secrets: list, // secrets this character holds
     knowledge: list, // rumours and facts they'd share if asked
     player: z.string(), // PCs: who plays them
     backstory_hooks: list,
     party_role: z.string(),
+    // 5e character details that change what's worth suggesting (stats stay on the character sheet)
+    background: z.string(), // acolyte, criminal, noble …
+    personality_traits: list,
+    languages: list,
+    health: z.enum(HEALTH),
+    conditions: list, // short-term mechanical: charmed, frightened, poisoned, exhaustion 2 …
+    gear: list, // notable mundane gear a clever option could use: rope, disguise kit, holy symbol
+    wealth: z.string(), // rough band: broke / ~50 gp / flush
+    passive_perception: z.string(),
+    passive_insight: z.string(),
     // locations
     location_type: z.string(),
     hazards: list, // location effects, e.g. mind-affecting butterflies
@@ -81,7 +96,8 @@ export const TraitsSchema = z
 export type EntityTraits = z.infer<typeof TraitsSchema>;
 export const TRAIT_KEYS = Object.keys(TraitsSchema.shape) as (keyof EntityTraits)[];
 export const LIST_TRAITS = new Set<string>([
-  "appearance", "wants", "fears", "ideals", "bonds", "flaws", "secrets", "knowledge", "backstory_hooks", "hazards", "atmosphere",
+  "appearance", "wants", "fears", "ideals", "bonds", "flaws", "abilities", "secrets", "knowledge", "backstory_hooks", "hazards", "atmosphere",
+  "personality_traits", "languages", "conditions", "gear",
 ]);
 
 // Provenance: where each value came from. Keyed by column name ("status") or

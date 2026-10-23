@@ -39,8 +39,24 @@ Tiers, used throughout:
 | Appearance descriptors | T3 | 2–3 words: "scarred, tall, nervous". |
 | Voice / mannerisms | T3 | DMs love this: "speaks in riddles", "taps his cane". |
 | Importance | T2 | major / minor / walk-on. Weights retrieval. |
-| Power | T3 | Rough level or CR, notable abilities. |
+| Abilities | T2 | What they can do: spells, features, powers ("wildshape: alley cat", Darius's Temporal Echoes). Options that use what a character can already do tie back better than new tricks. |
+| Power | T3 | Rough level or CR. |
 | First / last appeared | T1 | Session numbers (derived automatically). |
+
+**5e character details** (PCs and statted NPCs). These are only the parts of a character sheet that change what's worth suggesting:
+
+| Field | Tier | Notes |
+|---|---|---|
+| Health band | T1 | healthy / wounded / bloodied / critical / unconscious. "Still in critical condition" shaped many suggestions; an unconscious PC can't act. |
+| Conditions | T1 | Short-term 5e conditions: charmed, frightened, poisoned, exhaustion 2… Lasting story afflictions stay as threads. |
+| Background | T2 | Acolyte, criminal, noble…: a ready-made source of hooks. |
+| Personality traits | T2 | Completes the 5e personality block (traits, ideals, bonds, flaws). |
+| Languages | T2 | Who can talk to whom, or read the note. |
+| Notable gear | T2 | Rope, disguise kit, holy symbol: things a clever option could use. Significant items are "holds" relationships instead. |
+| Wealth | T2 | Rough band ("broke", "~50 gp", "flush"): are bribes on the table? |
+| Passive Perception / Insight | T2 | Lets options say who notices something without a roll. |
+
+**Deliberately not stored:** ability scores, AC, hit points, saving throws, skill bonuses, spell slots, hit dice, XP and death saves. They don't change the story, they go stale every session, and the DM's character sheet or VTT already holds them. The upgrade path is importing from D&D Beyond or Foundry (Phase 2), which would fill the fields above automatically.
 
 **PC-only:**
 

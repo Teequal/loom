@@ -26,6 +26,7 @@ const FEATURE_MODELS: Record<string, string> = {
   recap: "claude-opus-5-5",
   improv: "claude-sonnet-5-5",
   suggest: "claude-opus-5-5", // between-session prep: quality over speed
+  enrich: "claude-opus-5-5", // one-off backfill of entity details from stored recaps
 };
 
 const provider: LlmProvider = anthropicProvider;

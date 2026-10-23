@@ -91,7 +91,17 @@ export async function updateEntity(entityId: number, patch: EntityPatch, opts: W
       throw new Error(`${loc?.name ?? `Entity ${id}`} isn't a location in this campaign, so it can't be ${entity.name}'s ${f.replace("LocationId", "").replace(/([A-Z])/g, " $1").toLowerCase().trim()} location`);
     }
   }
-  const traits = patch.traits ? TraitsSchema.parse(patch.traits) : {};
+  let traits: EntityTraits = {};
+  if (patch.traits) {
+    const parsed = TraitsSchema.safeParse(patch.traits);
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      const key = String(issue.path[0] ?? "trait");
+      const allowed = "values" in issue && Array.isArray(issue.values) ? ` Use: ${issue.values.join(", ")}` : "";
+      throw new Error(`"${String((patch.traits as Record<string, unknown>)[key])}" isn't a valid ${key.replace(/_/g, " ")}.${allowed}`);
+    }
+    traits = parsed.data;
+  }
 
   // Flatten traits to "traits.<key>" so each attribute carries its own provenance.
   const { traits: _omit, ...columns } = patch;

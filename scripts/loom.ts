@@ -7,7 +7,7 @@ import { costSummary } from "@/core/costs";
 import { db, initDb, schema } from "@/core/db/client";
 import { improv } from "@/core/improv";
 import { callLlm } from "@/core/llm";
-import { applyProposal, numberItems, proposeRecapChanges, type ProposalFile } from "@/core/recap";
+import { applyProposal, numberItems, proposeEnrichment, proposeRecapChanges, type ProposalFile } from "@/core/recap";
 import {
   blindReportMarkdown,
   reportMarkdown,
@@ -42,7 +42,10 @@ Campaign data
 Engine
   recap <file> [--session N] [--campaign id] [--model name]
                              Read a session recap and propose thread changes for you to approve
-  apply <proposal.json>      Apply a (hand-edited) proposal file saved by "recap"
+  apply <proposal.json>      Apply a (hand-edited) proposal file saved by "recap" or "enrich"
+  enrich [--campaign id] [--model name]
+                             Re-read all stored recaps and propose entity details, relationships
+                             and the party's location (for campaigns recorded before these existed)
   improv "<what happened>" [--campaign id] [--why] [--all] [--model name]
                              2-3 options tied to existing threads. --why shows which threads were
                              retrieved and why; --all sends every open thread instead (for comparison)
@@ -76,7 +79,7 @@ async function printProposal(file: ProposalFile) {
     .where(eq(schema.threads.campaignId, file.campaignId));
   const refTitles = new Map([
     ...existing.map((t) => [`T${t.id}`, t.title] as const),
-    ...file.proposal.new_threads.map((t) => [t.ref.toUpperCase(), t.title] as const),
+    ...(file.proposal.new_threads ?? []).map((t) => [t.ref.toUpperCase(), t.title] as const),
   ]);
   const label = (ref: string) => refTitles.get(ref.trim().toUpperCase()) ?? ref;
   let section = "";
@@ -98,9 +101,29 @@ async function printProposal(file: ProposalFile) {
       heading("THREAD UPDATES");
       console.log(`${n} ${i.item.change.toUpperCase()}: ${label(i.item.thread)}`);
       console.log(`        ${i.item.note}`);
-    } else {
+    } else if (i.kind === "link") {
       heading("LINKS");
       console.log(`${n} ${label(i.item.from)} → ${label(i.item.to)} (${i.item.note})`);
+    } else if (i.kind === "entity_update") {
+      heading("ENTITY DETAILS");
+      const u = i.item;
+      const facts = [
+        u.status && `status ${u.status}`,
+        u.attitude && `attitude ${u.attitude}`,
+        u.importance && `importance ${u.importance}`,
+        u.last_known_location && `last seen at ${u.last_known_location}`,
+        u.parent_location && `inside ${u.parent_location}`,
+        ...u.traits.filter((t) => t.value.trim()).map((t) => `${t.key.replace(/_/g, " ")}: ${t.value}`),
+      ].filter(Boolean);
+      console.log(`${n} ${u.name}: ${facts.join(" · ")}`);
+    } else if (i.kind === "relation") {
+      heading("RELATIONSHIPS");
+      const r = i.item;
+      const s = r.strength ? ` (${r.strength > 0 ? "+" : ""}${r.strength})` : "";
+      console.log(`${n} ${r.from} ${r.type.replace(/_/g, " ")} ${r.to}${s}${r.note ? `: ${r.note}` : ""}`);
+    } else {
+      heading("PARTY LOCATION");
+      console.log(`${n} The party is at ${i.item}`);
     }
   }
 }
@@ -117,11 +140,21 @@ async function reviewAndApply(file: ProposalFile, path: string) {
   if (answer === "" || answer.toLowerCase() === "n") return console.log("Nothing applied.");
 
   const skip = new Set(answer.toLowerCase() === "a" ? [] : (answer.match(/\d+/g) ?? []).map(Number));
-  const { counts, warnings } = await applyProposal(file, skip);
+  const { counts, warnings, entityResult: er } = await applyProposal(file, skip);
   console.log(
-    `\nApplied: ${counts.entities} entities, ${counts.threads} new threads, ${counts.updates} updates, ${counts.links} links.`,
+    `\nApplied: ${counts.entities} new entities, ${counts.threads} new threads, ${counts.updates} thread updates, ${counts.links} links, ` +
+      `${er.updated} entities' details, ${er.relations} relationships${er.party ? ", party location" : ""}.`,
   );
   for (const w of warnings) console.log(`  ! ${w}`);
+  if (er.conflicts.length) {
+    console.log("\nKept your values where Loom read the notes differently:");
+    for (const c of er.conflicts) {
+      for (const p of c.proposals) {
+        console.log(`  • ${c.entity} · ${p.field}: yours ${JSON.stringify(p.current)}, notes suggest ${JSON.stringify(p.proposed)}`);
+      }
+    }
+    console.log("  To take Loom's version, set it yourself with entity set / relate / campaign set.");
+  }
 }
 
 async function latestCampaignId() {
@@ -279,6 +312,18 @@ async function main() {
         console.log(`${r.model.padEnd(21)} ${`${r.ticked} of ${r.offered}`.padEnd(19)} ${r.moments} of ${r.total}`);
       }
       console.log(`\nThe unblinded report is next to it: ${args[0].replace(/-blind\.md$/, "-revealed.md")}`);
+      break;
+    }
+    case "enrich": {
+      const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
+      console.log(`Re-reading stored recaps for campaign ${campaignId}…`);
+      const res = await proposeEnrichment(campaignId, flag(args, "model"));
+      console.log(`(${res.model} · ${(res.latencyMs / 1000).toFixed(1)} s · ${res.inputTokens} in / ${res.outputTokens} out · ${usd(res.costUsd)})`);
+      const file: ProposalFile = { kind: "enrich", campaignId, sessionNumber: res.sessionNumber, recap: "", proposal: res.data };
+      mkdirSync("data/proposals", { recursive: true });
+      const out = `data/proposals/c${campaignId}-enrich.json`;
+      writeFileSync(out, JSON.stringify(file, null, 2));
+      await reviewAndApply(file, out);
       break;
     }
     case "apply": {
