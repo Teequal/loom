@@ -144,9 +144,13 @@ function optionsSchema(lists: { threads: string[]; actors: string[]; handOff: st
           mechanic: z.enum(nonEmpty(["none", ...lists.mechanics], "none")),
           text: z.string(),
         }),
-        on_fail: z.object({ target: z.enum(nonEmpty(["none", ...lists.pcs], "none")), effect: z.string() }),
+        // Free text, normalised in code (normaliseHandOff): one odd target ("everyone") used to make the
+        // whole answer unparseable.
+        on_fail: z.object({ target: z.string(), effect: z.string() }),
         why: z.string(),
-        callback: z.enum(nonEmpty(["none", ...lists.moments], "none")),
+        // Free text, checked in code: with no key moments the enum was just "none", and a model that
+        // wrote anything else made the whole answer unparseable.
+        callback: z.string(),
         pillar: z.enum(PILLARS),
       }),
     ),
@@ -178,7 +182,7 @@ export function renderBeat(b: ScaffoldBeat, tagger: Tagger) {
   // "Uses the tables as cover" after a name reads "Vex'ahlia uses…"; names (tagged) keep their capital.
   const does = tagger.render(b.kind === "world" || tagged.startsWith("{") ? tagged : tagged.replace(/^([A-Z])(?=[a-z])/, (c) => c.toLowerCase())).trim();
   if (b.kind === "world") return sentence(capitalise(does));
-  const subject = b.kind === "walk_on" ? capitalise(tagger.render(b.walk_on).trim() || "someone") : b.actor;
+  const subject = b.kind === "walk_on" || b.actor === "walk-on" ? capitalise(tagger.render(b.walk_on).trim() || "someone") : b.actor;
   const startsWithSubject = does.toLowerCase().startsWith(subject.toLowerCase()) || does.toLowerCase().startsWith(subject.split(/[\s,]+/)[0].toLowerCase());
   return sentence(startsWithSubject ? capitalise(does) : `${subject} ${does}`);
 }
@@ -196,7 +200,7 @@ export function renderOption(o: ScaffoldOption, tagger: Tagger) {
 // "loses her grip…" → "Salaena loses her grip…"; drops a repeated "On a failure," prefix.
 export function renderOnFail(target: string, effect: string, tagger: Tagger) {
   const text = tagger.render(tagger.tag(effect)).trim().replace(/^on a fail(?:ure|ed roll)?[,:]?\s*/i, "");
-  const startsWithVerb = /^[a-z]/.test(text) && !/^(?:he|she|they|it|his|her|their|its|the|a|an|for|as|while|when|with)\b/.test(text);
+  const startsWithVerb = target !== "table" && /^[a-z]/.test(text) && !/^(?:he|she|they|it|his|her|their|its|the|a|an|for|as|while|when|with)\b/.test(text);
   return sentence(capitalise(startsWithVerb ? `${target} ${text}` : text));
 }
 
@@ -205,9 +209,14 @@ const TABLE_TALK = /\b(?:spotlight|quiet (?:soul|one|player|lately|this session)
 
 // A hand-off to "the table" whose text names exactly one PC is really to that PC.
 export function normaliseHandOff(o: ScaffoldOption, c: CheckContext) {
-  if (o.hand_off.to !== "table") return;
-  const named = [...new Set(c.tagger.tagsIn(c.tagger.tag(o.hand_off.text)).filter((n) => c.tagger.entityOf(n)?.type === "pc"))];
-  if (named.length === 1) o.hand_off.to = named[0];
+  if (o.hand_off.to === "table") {
+    const named = [...new Set(c.tagger.tagsIn(c.tagger.tag(o.hand_off.text)).filter((n) => c.tagger.entityOf(n)?.type === "pc"))];
+    if (named.length === 1) o.hand_off.to = named[0];
+  }
+  // The failure lands on whoever rolled; for a table roll, on whoever fails.
+  const pcs = new Set(c.scene.pcs.map((p) => p.name));
+  if (o.on_fail.target !== "none" && !pcs.has(o.on_fail.target)) o.on_fail.target = o.hand_off.to;
+  if (!o.on_fail.effect.trim()) o.on_fail.target = "none";
 }
 
 export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
