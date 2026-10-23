@@ -1,7 +1,10 @@
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { callLlm, type LlmResult } from "./llm";
 import { findMentions, loadThreadContexts, retrieveThreads, selectThreads, type SelectedThread, type ThreadContext } from "./retrieval";
 import { PILLARS, type Pillar } from "./db/schema";
+import { db, schema } from "./db/client";
+import { embeddingProvider, ensureEmbeddings, searchByMeaning, type MeaningSearch } from "./embeddings";
 import { BUDGETS, distancesFrom } from "./graph";
 import { listMoments, momentLine } from "./moments";
 import { personalLines, spotlightScore, tableSeats, tableText } from "./players";
@@ -217,6 +220,17 @@ function gainsSource(eff: Scene["effects"][number], who: string, gained: Map<str
   return false;
 }
 
+// What meaning search found, for --why.
+function meaningSummary(m: MeaningSearch | undefined, entities: Scene["entities"], sessionNumber: Map<number, number>, model: string | null, note: string | null) {
+  if (!m) return { model, note, lines: [] as string[] };
+  const nameOf = (id: number) => entities.find((e) => e.id === id)?.name ?? `#${id}`;
+  const lines = [
+    ...m.entities.filter((h) => h.z >= 1.5).slice(0, 3).map((h) => `entity ${nameOf(h.ownerId)} (${h.sim.toFixed(2)})`),
+    ...m.scenes.filter((h) => h.z >= 1.5).slice(0, 2).map((h) => `scene from session ${sessionNumber.get(h.ownerId) ?? "?"} (${h.sim.toFixed(2)}): ${h.text.slice(0, 70)}…`),
+  ];
+  return { model, note, lines };
+}
+
 // The lists that shape the answer format, and the context the checks use.
 // `reach`: entity ids close enough to the moment to be offered as actors (see graph.ts). Without
 // it, every entity is offered.
@@ -296,6 +310,7 @@ async function safetyCheck(lines: string[], texts: string[]) {
 export interface ImprovOptions {
   focused?: boolean; // a tighter scene and fewer threads (cheapest); the default is wide
   threads?: number; // send exactly this many threads (plus any tied to what the moment names)
+  embeddings?: string; // "local" | "voyage" | "off"; default from LOOM_EMBEDDINGS (local)
 }
 
 // mode "ranked" selects threads adaptively; "all" sends every open thread (baseline for comparison).
@@ -306,10 +321,24 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   // What the moment names decides which threads are guaranteed a place.
   const base = await buildScene(campaignId, { mentioned: new Set(), threadEntities: [] });
   const mentioned = new Set(findMentions(base.entities, moment).keys());
+
+  // Meaning (embeddings): finds what the moment is about even when it names nothing. It adds
+  // evidence and entry points; the structure still decides what's allowed. If it fails, carry on.
+  const provider = embeddingProvider(opts.embeddings);
+  let meaning: MeaningSearch | undefined;
+  let meaningNote: string | null = null;
+  if (provider && mode !== "all") {
+    try {
+      await ensureEmbeddings(campaignId, provider);
+      meaning = await searchByMeaning(campaignId, provider, moment);
+    } catch (err) {
+      meaningNote = `Meaning search skipped (${err instanceof Error ? err.message : String(err)})`;
+    }
+  }
   const threads: SelectedThread[] =
     mode === "all"
       ? allThreads.map((t) => ({ ...t, score: 0, reasons: [] as string[], detail: "full" as const, guaranteed: false }))
-      : selectThreads(await retrieveThreads(campaignId, moment, Number.POSITIVE_INFINITY), mentioned, { ...budget.threads, exact: opts.threads });
+      : selectThreads(await retrieveThreads(campaignId, moment, Number.POSITIVE_INFINITY, meaning), mentioned, { ...budget.threads, exact: opts.threads });
   if (threads.length === 0) throw new Error("This campaign has no open threads yet.");
 
   const storyConditions = new Map(
@@ -322,6 +351,8 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
     ...[...mentioned].map((n) => nameToId.get(n)),
     base.partyLocation?.id,
     ...threads.slice(0, 2).flatMap((t) => t.entities.map((n) => nameToId.get(n))),
+    // Up to three characters, places or things unusually close in meaning.
+    ...(meaning?.entities.filter((h) => h.z >= 1.5).slice(0, 3).map((h) => h.ownerId) ?? []),
   ].filter((id): id is number => id != null);
   const distances = await distancesFrom(campaignId, seeds, budget.depth);
   const scene = await buildScene(campaignId, { mentioned, threadEntities: threads.flatMap((t) => t.entities), storyConditions, distances, budget });
@@ -344,11 +375,24 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   // Key moments involving who and what is in play: what a callback could draw on (up to 3).
   const inPlay = new Set([...mentioned, ...threads.slice(0, 4).flatMap((t) => t.entities)]);
   const callbacks = (await listMoments(campaignId, ["key"]))
-    .map((m) => ({ m, overlap: m.entities.filter((e) => inPlay.has(e)).length + (m.threads.some((t) => threads.some((x) => x.id === t.id)) ? 1 : 0) }))
+    .map((m) => ({
+      m,
+      overlap:
+        m.entities.filter((e) => inPlay.has(e)).length +
+        (m.threads.some((t) => threads.some((x) => x.id === t.id)) ? 1 : 0) +
+        ((meaning?.moments.find((h) => h.ownerId === m.id)?.z ?? 0) >= 1.2 ? 2 : 0),
+    }))
     .filter((x) => x.overlap > 0)
     .sort((a, b) => b.overlap - a.overlap || b.m.id - a.m.id)
     .slice(0, 3)
     .map((x) => x.m);
+
+  // The closest scenes from the recaps themselves: things that may never have become threads.
+  const sessionNumber = new Map((await db.select().from(schema.sessions).where(eq(schema.sessions.campaignId, campaignId))).map((x) => [x.id, x.number]));
+  const closeScenes = meaning?.scenes.filter((h) => h.z >= 1.5).slice(0, 2) ?? [];
+  const sceneBlock = closeScenes.length
+    ? `\nFROM YOUR NOTES (closest in meaning; facts only, use if they fit)\n${closeScenes.map((h) => `- Session ${sessionNumber.get(h.ownerId) ?? "?"}: "${h.text.slice(0, 320)}${h.text.length > 320 ? "…" : ""}"`).join("\n")}\n`
+    : "";
 
   const titleOf = new Map(threads.map((t) => [t.id, t.title]));
   const OptionsSchema = optionsSchema({ threads: threads.map((t) => `T${t.id}`), actors: lists.actors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`) });
@@ -360,7 +404,7 @@ WHO MAY ACT
 ${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 OPEN THREADS
 ${threads.map((t) => (t.detail === "full" ? threadBlock(t, titleOf, typeOf) : `T${t.id} [${t.kind}] ${t.title}: ${t.summary}`)).join("\n")}
-${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callbacks.map(momentLine).join("\n")}\n` : ""}${tableBlock ? `\n${tableBlock}\n` : ""}
+${sceneBlock}${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callbacks.map(momentLine).join("\n")}\n` : ""}${tableBlock ? `\n${tableBlock}\n` : ""}
 WHAT JUST HAPPENED AT THE TABLE
 ${moment}`;
 
@@ -439,5 +483,5 @@ IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}
     costUsd: calls.reduce((s, c) => s + c.costUsd, 0),
     attempts: calls.filter((c) => c.model !== "safety" && c !== safety.call).length,
   };
-  return { options, dropped: rejected.length, rejected, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes, quiet: new Map(seats.map((x) => [x.pc.name, x.quietFor])) };
+  return { options, dropped: rejected.length, rejected, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes, quiet: new Map(seats.map((x) => [x.pc.name, x.quietFor])), meaning: meaningSummary(meaning, base.entities, sessionNumber, provider?.model ?? null, meaningNote) };
 }

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { type AnySQLiteColumn, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { type AnySQLiteColumn, blob, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import {
   ATTITUDES,
   type CampaignMechanic,
@@ -147,7 +147,28 @@ export const stateChanges = sqliteTable("state_changes", {
   createdAt: createdAt(),
 });
 
-export const MOMENT_TONES = ["comedic", "heroic", "tragic", "eerie", "tense", "triumphant", "tender", "other"] as const;
+// Embeddings: a derived property of threads, entities, key moments and recap scenes, kept in its own
+// table because it's large, binary, never edited, tied to a model, and regenerated whenever the
+// text it was made from changes (text_hash). Similarity is computed in code: a campaign has
+// hundreds of vectors, not millions.
+export const embeddings = sqliteTable(
+  "embeddings",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+    ownerType: text("owner_type", { enum: ["thread", "entity", "moment", "scene"] }).notNull(),
+    ownerId: integer("owner_id").notNull(), // thread, entity or moment id; for scenes, the session id
+    chunk: integer("chunk").notNull().default(0), // scenes: which part of the recap
+    model: text("model").notNull(),
+    textHash: text("text_hash").notNull(),
+    text: text("text").notNull(), // what was embedded (scenes are quoted back from this)
+    vector: blob("vector", { mode: "buffer" }).notNull(), // Float32 values
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("embeddings_owner").on(t.ownerType, t.ownerId, t.chunk, t.model)],
+);
+
+export const MOMENT_TONES =["comedic", "heroic", "tragic", "eerie", "tense", "triumphant", "tender", "other"] as const;
 
 // Key moments: the curated history callbacks draw on. The DM flags them (or accepts ones Loom
 // suggests from recaps), so callbacks reference what mattered rather than trivia.

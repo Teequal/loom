@@ -43,6 +43,13 @@
       "when": 1792788920359,
       "tag": "0005_heavy_boom_boom",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1792789600804,
+      "tag": "0006_worried_vargas",
+      "breakpoints": true
     }
   ]
 }

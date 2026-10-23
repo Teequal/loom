@@ -11,6 +11,7 @@ import { callLlm } from "@/core/llm";
 import { applyProposal, proposeEnrichment, proposeRecapChanges, type ProposalFile } from "@/core/recap";
 import { reviewProposal, splitRisky } from "@/core/review";
 import { latestBatch, recentBatches, undoBatch, undoOne } from "@/core/undo";
+import { embeddingProvider, ensureEmbeddings, searchByMeaning } from "@/core/embeddings";
 import {
   blindReportMarkdown,
   reportMarkdown,
@@ -49,6 +50,8 @@ Campaign data
                              Key moments: the history callbacks draw on
   entity history "<name>"    What changed about it, when, and on whose word
   changes [--last N]         Recent changes, grouped by batch (a recap, an enrich, a command)
+  embed [search "<text>"] [--model local|voyage]
+                             Refresh embeddings (meaning search); optionally see what a phrase is closest to
   undo                       Undo the latest batch · undo --batch "<label>" · undo <change id> [--force]
   player list | player add "<handle>" plays="<PC>" enjoys="mystery 3, comedy 2" lines="…"
                              The real people at the table (DM-only): steers who gets the spotlight
@@ -71,7 +74,7 @@ Engine
   suggest [--campaign id] [--model name]
                              Between-session prep: thread collisions, an idea per player
                              character, and ways back into quiet threads
-  scenarios <file.json> [--models sonnet,opus] [--only id1,id2] [--blind] [--focused]
+  scenarios <file.json> [--models sonnet,opus] [--only id1,id2] [--blind] [--focused] [--embed off|local|voyage]
                              Run saved moments through the improv box on each model and write a
                              side-by-side report to data/runs/ (default model: sonnet).
                              --blind shuffles all models' options together with models hidden
@@ -211,6 +214,26 @@ async function main() {
       else await relateCommand(campaignId, args, command === "unrelate");
       break;
     }
+    case "embed": {
+      const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
+      const provider = embeddingProvider(flag(args, "model") ?? flag(args, "embed"));
+      if (!provider) return console.log("Embeddings are off (LOOM_EMBEDDINGS=off).");
+      const t0 = performance.now();
+      const r = await ensureEmbeddings(campaignId, provider);
+      console.log(`${provider.model}: ${r.total} items · ${r.embedded} embedded now · ${r.removed} removed · ${Math.round(performance.now() - t0)} ms`);
+      if (args[0] === "search" && args[1]) {
+        const m = await searchByMeaning(campaignId, provider, args[1]);
+        const ents = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
+        const thr = await db.select().from(schema.threads).where(eq(schema.threads.campaignId, campaignId));
+        const label = (h: (typeof m.threads)[number]) =>
+          h.ownerType === "thread" ? thr.find((t) => t.id === h.ownerId)?.title : h.ownerType === "entity" ? ents.find((e) => e.id === h.ownerId)?.name : h.text.slice(0, 70) + "…";
+        for (const [kind, hits] of [["threads", m.threads], ["entities", m.entities], ["moments", m.moments], ["scenes", m.scenes]] as const) {
+          console.log(`\n${kind}`);
+          for (const h of hits.slice(0, 4)) console.log(`  ${h.sim.toFixed(3)} (z ${h.z.toFixed(1)}) ${label(h) ?? h.text.slice(0, 60)}`);
+        }
+      }
+      return;
+    }
     case "changes": {
       const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
       const batches = await recentBatches(campaignId, Number(flag(args, "last") ?? 8));
@@ -282,12 +305,15 @@ async function main() {
       const r = await improv(campaignId, moment, args.includes("--all") ? "all" : "ranked", flag(args, "model"), {
         focused: args.includes("--focused"),
         threads: flag(args, "threads") ? Number(flag(args, "threads")) : undefined,
+        embeddings: flag(args, "embed"),
       });
 
       if (args.includes("--why")) {
         console.log("\nThreads considered:");
         for (const t of r.threads) console.log(`  ${t.score.toFixed(1).padStart(5)} ${t.detail === "full" ? "full" : "line"}${t.guaranteed ? " ★" : "  "} T${t.id} ${t.title}  (${t.reasons.join("; ") || "recency"})`);
         console.log("  full = sent in detail · line = title and summary · ★ = tied to something the moment names");
+        if (r.meaning.note) console.log(`  ${r.meaning.note}`);
+        else if (r.meaning.model) console.log(`\nClose in meaning (${r.meaning.model}):${r.meaning.lines.length ? "" : " nothing unusually close"}\n${r.meaning.lines.map((l) => `  ${l}`).join("\n")}`);
       }
       console.log("");
       if (r.safetyNote) console.log(`⚠ ${r.safetyNote}\n`);
@@ -367,7 +393,7 @@ async function main() {
       const models = (flag(args, "models") ?? "sonnet").split(",");
 
       console.log(`Running ${file.scenarios.length} scenario(s) × ${models.length} model(s)…`);
-      const results = await runScenarios(file, models, (msg) => console.log(`  ${msg}`), { focused: args.includes("--focused") });
+      const results = await runScenarios(file, models, (msg) => console.log(`  ${msg}`), { focused: args.includes("--focused"), embeddings: flag(args, "embed") });
 
       console.log("\nModel                 Expected  Avg / max latency   Cost      Dropped  Errors");
       for (const s of summarise(results)) {

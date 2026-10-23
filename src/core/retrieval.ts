@@ -1,5 +1,6 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "./db/client";
+import type { MeaningSearch } from "./embeddings";
 
 // Finds the open threads most relevant to a moment, without calling an LLM.
 // Signals: entities named in the moment (and their aliases), word overlap with the
@@ -41,6 +42,8 @@ function tokens(text: string): string[] {
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const mentions = (text: string, phrase: string) =>
   new RegExp(`(^|[^a-z0-9])${escape(phrase.toLowerCase())}([^a-z0-9]|$)`).test(text);
+
+const MEANING_WEIGHT = 2;
 
 export async function loadThreadContexts(campaignId: number): Promise<ThreadContext[]> {
   const threads = await db
@@ -142,7 +145,8 @@ export function selectThreads(ranked: ScoredThread[], named: Set<string>, sel: T
   return ordered.slice(0, Math.max(limit, 1)).map((t, i) => ({ ...t, detail: i < sel.full ? "full" : "line", guaranteed: guaranteed.has(t.id) }));
 }
 
-export async function retrieveThreads(campaignId: number, moment: string, limit = 8): Promise<ScoredThread[]> {
+// `meaning`: optional results of searching by meaning (embeddings), blended in as extra evidence.
+export async function retrieveThreads(campaignId: number, moment: string, limit = 8, meaning?: MeaningSearch): Promise<ScoredThread[]> {
   const threads = await loadThreadContexts(campaignId);
   if (threads.length === 0) return [];
   const momentTokens = new Set(tokens(moment));
@@ -159,6 +163,13 @@ export async function retrieveThreads(campaignId: number, moment: string, limit 
 
   const latestSession = Math.max(0, ...threads.map((t) => t.lastTouchedSession ?? 0));
 
+  // Meaning finds a scene in the notes; structure reads who's named in it. Threads involving
+  // them get a boost (the tavern moment → "Locate Professor Vex" → Vex's thread).
+  const inCloseScenes = new Map<string, number>();
+  for (const h of meaning?.scenes.filter((x) => x.z >= 1.5).slice(0, 2) ?? []) {
+    for (const [name] of findMentions(entities, h.text)) inCloseScenes.set(name, Math.max(inCloseScenes.get(name) ?? 0, h.z));
+  }
+
   const scored: ScoredThread[] = threads.map((t, i) => {
     const reasons: string[] = [];
     let score = 0;
@@ -173,6 +184,29 @@ export async function retrieveThreads(campaignId: number, moment: string, limit 
     if (shared.length) {
       score += shared.reduce((s, tok) => s + idf(tok), 0);
       reasons.push(`words: ${shared.join(", ")}`);
+    }
+    // Meaning: a thread unusually close to the moment (above the typical match) gains score;
+    // so does one involving a character or thing that's unusually close.
+    const near = meaning?.threads.find((h) => h.ownerId === t.id);
+    if (near && near.z > 0.5) {
+      score += (near.z - 0.5) * MEANING_WEIGHT;
+      reasons.push(`meaning ${near.sim.toFixed(2)}`);
+    }
+    for (const name of t.entities) {
+      const id = entities.find((e) => e.name === name)?.id;
+      const e = meaning?.entities.find((h) => h.ownerId === id && h.z >= 1.5);
+      if (e) {
+        score += 1;
+        reasons.push(`close in meaning: ${name}`);
+        break;
+      }
+    }
+    // A character or thing named in a scene that's close in meaning. Party-wide names (the PCs)
+    // are in most scenes, so only non-PCs count.
+    const fromScene = t.entities.find((n) => inCloseScenes.has(n) && entities.find((e) => e.name === n)?.type !== "pc");
+    if (fromScene) {
+      score += 1.5;
+      reasons.push(`in a close scene: ${fromScene}`);
     }
     return { ...t, score, reasons };
   });

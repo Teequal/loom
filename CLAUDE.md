@@ -308,5 +308,24 @@ Jacob approved the model on 24 Oct 2026: layers L0 Rules › L1 Identity › L2 
   - **Undo** (`src/core/undo.ts`): every write is logged with a batch label (one per recap or enrich). `changes` lists recent batches; `undo` reverses the latest; `undo --batch "<label>"` or `undo <id>` reverse others. Undo reverses fields, relationships (both directions for two-way ones), created entities and threads, thread progress (and its event), links and suggested moments, and marks rows undone. It refuses when a later change touched the same thing (unless `--force`).
   - **Tested on the fixture:** a crafted session sorted 15 / 8 / 4 across the tiers with all quotes verified. Declining Ysolde's attitude change kept her other details; a confirmed vial hand-over overrode the DM's holder as intended; one `undo` reversed all 43 changes; undo blocked an out-of-order reversal. The 25 earlier cases still pass.
   - Not yet: manual CLI writes aren't batched (undo them by id); learning which kinds of change a DM always accepts.
-- [ ] Step 6: Embeddings as entry points
+- [x] **Step 6: Embeddings as entry points** (migration `drizzle/0006`, `src/core/embeddings/`).
+  - **Providers** behind one interface (`LOOM_EMBEDDINGS=local|voyage|off`, `--embed` on improv and scenarios):
+    - **local** (default): BAAI bge-small through Transformers.js. 384 dims, ~35 MB downloaded once into `data/models`, offline after.
+    - **voyage**: `voyage-3.5-lite`, needs `VOYAGE_API_KEY`. Built but **untested: no key yet**.
+  - **Storage:** a derived property in its own `embeddings` table (owner type and id, chunk, model, text hash, the embedded text, Float32 vector). What gets embedded: threads, entity cards, key and suggested moments, and recap scenes (paragraph chunks). `ensureEmbeddings` re-embeds only what changed (hash) and drops what's gone. A full Duradan embed (137 items) takes ~1.7 s; a no-change refresh ~12 ms. Similarity is computed in code (hundreds of vectors).
+  - **Blending** (`searchByMeaning` gives z-scores within each kind, so no per-model thresholds):
+    - A thread unusually close in meaning gains score.
+    - Entities close in meaning (z ≥ 1.5, up to 3) become graph seeds and boost their threads.
+    - The closest recap scenes are quoted in the prompt ("FROM YOUR NOTES"), and **non-PC characters named in those scenes boost their threads**. That's the bridge that closed the tavern → Professor Vex miss.
+    - Key moments close in meaning become callback candidates.
+    - `--why` shows what meaning search found. `embed` refreshes; `embed search "<text>"` shows the nearest matches.
+  - **Measured (10 Duradan moments, Haiku, wide):**
+
+    | | Hits | Retrieval misses | Input tokens | Model latency | End to end | Cost |
+    |---|---|---|---|---|---|---|
+    | Off | 9/9 | 1 | ~7.4k | 5.20 s | 5.2 s | $0.0121 |
+    | Local | 9/9 | **0** (first ever) | ~8.0k | 5.25 s | 5.9 s | $0.0138 |
+
+    The extra ~0.7 s end to end is loading the embedding model in each CLI process; in a long-running web server it loads once.
+  - Still to do: the Voyage comparison once a key exists.
 - [ ] Step 7: Stress tests and a blind rerun
