@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db, schema } from "./db/client";
 import { callLlm } from "./llm";
 import { loadThreadContexts, type ThreadContext } from "./retrieval";
+import { buildScene } from "./scene";
 
 // Between-session prep: collisions (open threads that pay each other off), something for each
 // player character, and payoffs for threads that have gone quiet. Not latency-sensitive, so
@@ -33,6 +34,7 @@ Rules:
 - Use only the facts listed. You may propose hidden connections (that is the point), but never contradict what the threads say.
 - Threads marked as GM secrets are unknown to players: use them to shape what happens, not as things characters learn for free.
 - Set up situations; never decide what player characters choose, say or feel.
+- Respect continuity from THE SCENE and the cards: dead characters stay dead (they can be remembered, found or avenged), and an NPC elsewhere has to travel, send word or be sought out. Use characters' abilities and the GM's mechanics where they fit. Never include anything on the safety lines.
 - Refer to threads by name in the text, never by number.`;
 
 function threadLine(t: ThreadContext, typeOf: Map<string, string>, latestSession: number) {
@@ -56,8 +58,15 @@ export async function suggest(campaignId: number, model?: string) {
   const pcs = entities.filter((e) => e.type === "pc");
   const latestSession = Math.max(0, ...threads.map((t) => t.lastTouchedSession ?? 0));
 
-  const prompt = `THE PARTY (player characters)
-${pcs.map((p) => `- ${p.name}: ${p.description}`).join("\n") || "(unknown)"}
+  // Same scene block as the improv box: where the party is, who's alive and where, the party
+  // with their abilities and story conditions, and cards for the major figures in the threads.
+  const scene = await buildScene(campaignId, {
+    mentioned: new Set(),
+    threadEntities: threads.flatMap((t) => t.entities),
+    storyConditions: new Map(pcs.map((p) => [p.name, threads.filter((t) => t.kind === "condition" && t.entities.includes(p.name)).map((t) => t.title)])),
+  });
+
+  const prompt = `${scene.text}
 
 OPEN THREADS (latest session: ${latestSession})
 ${threads.map((t) => threadLine(t, typeOf, latestSession)).join("\n\n")}`;

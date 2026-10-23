@@ -1,8 +1,10 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "./db/client";
+import type { EntityTraits } from "./entity-fields";
 import { callLlm, type LlmResult } from "./llm";
-import { loadThreadContexts, retrieveThreads, type ThreadContext } from "./retrieval";
+import { findMentions, loadThreadContexts, retrieveThreads, type ThreadContext } from "./retrieval";
+import { buildScene, type Scene } from "./scene";
 
 // Options come back in parts so the code can enforce player agency: the setup may only be
 // things the world or NPCs do; players get involved through a question or a roll; and a
@@ -20,7 +22,7 @@ const OptionsSchema = z.object({
     }),
   ),
 });
-type RawOption = z.infer<typeof OptionsSchema>["options"][number];
+export type RawOption = z.infer<typeof OptionsSchema>["options"][number];
 
 export interface ImprovOption {
   thread_id: number;
@@ -39,6 +41,8 @@ Rules:
 - The GM controls the world, NPCs and consequences; the players control their characters (marked PC). Never decide what a PC does, says, thinks or feels.
 - Threads marked as GM secrets are unknown to players: let them show through consequences, never state them outright.
 - Use only the facts listed. Small table-level details (a sound, a line of dialogue) are fine; new plots, factions or major NPCs are not.
+- Respect continuity from THE SCENE and the cards: dead characters never act; an NPC who isn't here (or is captured or missing) can only appear by arriving ("Zara bursts in") or act from afar (a message, a runner, a voice through magic), and the beat must say so. Never include anything on the safety lines.
+- Use what's already established: characters' abilities, health, gear and relationships, and the GM's mechanics.
 - Make the options genuinely different from each other.
 
 Each option has these parts:
@@ -64,7 +68,7 @@ const AGENCY_VERBS =
 
 // Finds text that opens with a PC as the subject ("Salaena lunges…") and returns the rest of
 // the sentence. Possessives ("Khayiulad's figurine grows warm") and other characters don't match.
-function pcSubjectMatcher(pcs: Pc[]) {
+export function pcSubjectMatcher(pcs: Pc[]) {
   const names = pcs.flatMap((p) => [p.name, ...p.aliases, p.name.split(" ")[0]]).filter((n) => n.length >= 3);
   if (names.length === 0) return () => null;
   const escaped = [...new Set(names)].sort((a, b) => b.length - a.length).map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
@@ -72,15 +76,71 @@ function pcSubjectMatcher(pcs: Pc[]) {
   return (text: string) => text.match(re)?.[1].trim() ?? null;
 }
 
-function validate(o: RawOption, titleOf: Map<number, string>, pcSubject: (s: string) => string | null): string | null {
+// A PC's body moving on its own ("Khayiulad's fingers tighten…") is a forced action, allowed
+// only after a failed roll (on_fail), never in the setup.
+const FORCED_BODY =
+  /^['’]s\s+(?:hands?|fingers?|grip|arms?|legs?|feet|body|mouth|jaw|voice|eyes)\s+(?:\w+ly\s+)?(?:tighten|clench|close|refuse|reach|move|grab|seize|lock|twitch|jerk|drag|pull|speak|cry|scream|open)/i;
+
+// Ways an absent NPC can legitimately enter a scene: arriving, or acting from afar.
+const ARRIVAL =
+  /\b(?:arriv|burst|appear|enter|walk\w* in|step\w* (?:in|out of|through)|strides? in|rush\w* in|run\w* up|catch\w* up|emerge|track\w* (?:them|the party) down|find\w* (?:them|the party)|sends?\b|sent\b|deliver|runner|courier|messenger|voice (?:echo|carr)|vision of|reflection of|illusion of|projection of|(?:stagger|limp|stumbl|crawl|slip|sneak|creep)\w* in|from afar|from across|escap|freed|break\w* free|broke free|broken free)/i;
+
+// The entity a sentence opens with as its subject ("Professor Aldric Vex mutters…"), if any.
+// A possessive opening ("Vex's notes…") is an object, not someone acting.
+function leadingEntity(action: string, scene: Scene) {
+  const words = action.trim().replace(/^the\s+/i, "").split(/\s+/);
+  for (let n = Math.min(4, words.length); n >= 1; n--) {
+    const phrase = words.slice(0, n).join(" ").replace(/[,.;:!?]+$/, "");
+    if (/['’]s$/.test(phrase)) continue;
+    const e = scene.resolve(phrase);
+    if (e) return e;
+  }
+  return undefined;
+}
+
+// Moments where the players themselves reach someone at a distance; that NPC may then act from afar.
+const REMOTE_CONTACT =
+  /\b(?:sending|message|messenger|letter|scry|scrying|telepath\w*|dream\w*|commune|animal messenger|whisper\w* to|call\w* out to|contact\w*|reach(?:es|ing)? out|speak\w* with|crystal ball|mirror)\b/i;
+
+export function validate(
+  o: RawOption,
+  titleOf: Map<number, string>,
+  pcSubject: (s: string) => string | null,
+  scene: Scene,
+  remoteOk: Set<number> = new Set(), // NPCs the moment itself put in remote contact
+): string | null {
   if (!titleOf.has(o.thread_id)) return "cites a thread that wasn't provided";
   for (const beat of o.setup) {
-    const rest = pcSubject(beat.action) ?? (pcSubject(beat.actor) !== null ? "" : null);
-    if (rest === null) continue; // the world or an NPC acts
-    // A PC may only be the subject of an outcome of what the players already declared,
-    // and even then not choosing, speaking or feeling.
-    if (beat.type !== "outcome") return `a player character acts in a ${beat.type} beat: "${beat.action}"`;
-    if (AGENCY_VERBS.test(rest)) return `an outcome decides what a player character does: "${beat.action}"`;
+    const pcRest = pcSubject(beat.action) ?? (pcSubject(beat.actor) !== null ? "" : null);
+    if (pcRest !== null) {
+      // A PC may only be the subject of an outcome of what the players already declared,
+      // and even then not choosing, speaking or feeling.
+      if (beat.type !== "outcome") return `a player character acts in a ${beat.type} beat: "${beat.action}"`;
+      if (AGENCY_VERBS.test(pcRest)) return `an outcome decides what a player character does: "${beat.action}"`;
+    }
+    if (beat.type !== "outcome") {
+      for (const pc of scene.pcs) {
+        const at = beat.action.toLowerCase().indexOf(`${pc.name.split(" ")[0].toLowerCase()}`);
+        if (at >= 0 && FORCED_BODY.test(beat.action.slice(at + pc.name.split(" ")[0].length))) {
+          return `forces ${pc.name}'s body to act before any roll: "${beat.action}"`;
+        }
+      }
+    }
+    // The NPC acting: the named actor of an npc beat, or the subject a world beat opens with.
+    const npc = beat.type === "npc" ? scene.resolve(beat.actor) : beat.type === "world" ? leadingEntity(beat.action, scene) : undefined;
+    if (npc && npc.type === "npc") {
+      if (npc.status === "dead") return `${npc.name} is dead but acts: "${beat.action}"`;
+      const absent = scene.presence(npc) === "elsewhere" || npc.status === "captured" || npc.status === "missing";
+      if (absent && !remoteOk.has(npc.id) && !ARRIVAL.test(beat.action)) {
+        return npc.status === "captured" || npc.status === "missing"
+          ? `${npc.name} is ${npc.status} but acts freely: "${beat.action}"`
+          : `${npc.name} isn't here (${scene.whereabouts(npc)}) but acts without arriving: "${beat.action}"`;
+      }
+    }
+  }
+  const target = scene.pcs.find((p) => p.name.toLowerCase() === o.hand_off.to.trim().toLowerCase() || p.name.split(" ")[0].toLowerCase() === o.hand_off.to.trim().toLowerCase());
+  if (target && o.hand_off.kind === "question" && (target.traits as EntityTraits).health === "unconscious") {
+    return `asks what ${target.name} does, but ${target.name} is unconscious`;
   }
   return null;
 }
@@ -114,23 +174,26 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
     mode === "all" ? allThreads.map((t) => ({ ...t, score: 0, reasons: [] as string[] })) : await retrieveThreads(campaignId, moment);
   if (threads.length === 0) throw new Error("This campaign has no open threads yet.");
 
-  const entities = await db
-    .select({ name: schema.entities.name, type: schema.entities.type, aliases: schema.entities.aliases, description: schema.entities.description })
-    .from(schema.entities)
-    .where(and(eq(schema.entities.campaignId, campaignId)));
+  const entities = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
   const typeOf = new Map(entities.map((e) => [e.name, e.type]));
   const pcs: Pc[] = entities.filter((e) => e.type === "pc");
   const pcSubject = pcSubjectMatcher(pcs);
 
-  // Party roster: each PC with their current conditions, so the model knows who the players are.
-  const roster = pcs.map((p) => {
-    const conditions = allThreads.filter((t) => t.kind === "condition" && t.entities.includes(p.name)).map((t) => t.title);
-    return `- ${p.name} (PC): ${p.description}${conditions.length ? ` Conditions: ${conditions.join("; ")}.` : ""}`;
+  // The scene (party location, who's here, roster, cards for what's in play) comes from
+  // structured data; each PC also lists the story conditions on their threads.
+  const storyConditions = new Map(
+    pcs.map((p) => [p.name, allThreads.filter((t) => t.kind === "condition" && t.entities.includes(p.name)).map((t) => t.title)]),
+  );
+  const mentioned = new Set(findMentions(entities, moment).keys());
+  const remoteOk = new Set(REMOTE_CONTACT.test(moment) ? entities.filter((e) => e.type === "npc" && mentioned.has(e.name)).map((e) => e.id) : []);
+  const scene = await buildScene(campaignId, {
+    mentioned,
+    threadEntities: threads.flatMap((t) => t.entities),
+    storyConditions,
   });
 
   const titleOf = new Map(threads.map((t) => [t.id, t.title]));
-  const prompt = `THE PARTY (player characters, controlled by the players)
-${roster.join("\n") || "(unknown)"}
+  const prompt = `${scene.text}
 
 OPEN THREADS
 ${threads.map((t) => threadBlock(t, titleOf, typeOf)).join("\n\n")}
@@ -146,7 +209,7 @@ ${moment}`;
     const res = await callLlm({ feature: "improv", system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
     calls.push(res);
     for (const o of res.data.options) {
-      const reason = validate(o, titleOf, pcSubject);
+      const reason = validate(o, titleOf, pcSubject, scene, remoteOk);
       if (reason) rejected.push({ label: o.label, reason });
       else accepted.push(o);
     }

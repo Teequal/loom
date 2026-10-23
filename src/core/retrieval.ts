@@ -86,24 +86,30 @@ export async function loadThreadContexts(campaignId: number): Promise<ThreadCont
   }));
 }
 
-export async function retrieveThreads(campaignId: number, moment: string, limit = 8): Promise<ScoredThread[]> {
-  const threads = await loadThreadContexts(campaignId);
-  if (threads.length === 0) return [];
-  const text = moment.toLowerCase();
-  const momentTokens = new Set(tokens(moment));
-
-  // 1. Entities named in the moment. A full name or alias counts more than a single
-  //    distinctive word from a name ("Vex" for "Professor Aldric Vex").
-  const entities = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
+// Entities named in a piece of text, by name → weight. A full name or alias counts more than
+// a single distinctive word from a name ("Vex" for "Professor Aldric Vex").
+export function findMentions(entities: { name: string; aliases: string[] }[], text: string) {
+  const lower = text.toLowerCase();
+  const textTokens = new Set(tokens(text));
   const nameTokenCounts = new Map<string, number>();
   for (const e of entities) for (const t of new Set(tokens(e.name))) nameTokenCounts.set(t, (nameTokenCounts.get(t) ?? 0) + 1);
 
-  const entityHits = new Map<string, number>(); // entity name -> weight
+  const hits = new Map<string, number>();
   for (const e of entities) {
-    if ([e.name, ...e.aliases].some((n) => mentions(text, n))) entityHits.set(e.name, 3);
-    else if (tokens(e.name).some((t) => t.length >= 4 && (nameTokenCounts.get(t) ?? 0) <= 2 && momentTokens.has(t)))
-      entityHits.set(e.name, 2);
+    if ([e.name, ...e.aliases].some((n) => mentions(lower, n))) hits.set(e.name, 3);
+    else if (tokens(e.name).some((t) => t.length >= 4 && (nameTokenCounts.get(t) ?? 0) <= 2 && textTokens.has(t))) hits.set(e.name, 2);
   }
+  return hits;
+}
+
+export async function retrieveThreads(campaignId: number, moment: string, limit = 8): Promise<ScoredThread[]> {
+  const threads = await loadThreadContexts(campaignId);
+  if (threads.length === 0) return [];
+  const momentTokens = new Set(tokens(moment));
+
+  // 1. Entities named in the moment.
+  const entities = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
+  const entityHits = findMentions(entities, moment);
 
   // 2. Word overlap, weighted so rare words count more than common ones.
   const docs = threads.map((t) => new Set(tokens(`${t.title} ${t.title} ${t.summary} ${t.latestNote}`)));
