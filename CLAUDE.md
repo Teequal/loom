@@ -39,6 +39,9 @@ Loom should produce that kind of moment, on demand.
 - **The DM stays in charge.** Loom suggests; it never decides. Everything editable.
 - **Simple enough for the least enthusiastic user.** Lesson from a previous project of mine: I built a tool that suited my own detail-oriented style and nobody else wanted to use it. Minimal input, minimal setup.
 - **The string board is the visual layer, not the engine.** Show what's dangling and what's connected. Build it after the engine works.
+- **Manual and extracted data are equal citizens.** DMs can type anything by hand or let Loom extract it; manual features are highly valued and must never be removed. Every value records its source, extraction never overwrites a DM entry (it proposes instead), and blanks beat guesses.
+- **Skeleton and intuition.** Structured entity data (status, locations, relationships, traits) is the skeleton that keeps continuity and prevents slips. Embeddings are the intuition that finds relevance by meaning. Both matter; richer structure makes better embeddings. Full design: [docs/entity-model.md](docs/entity-model.md).
+- **UX a class above.** Cut through the nonsense and get the DM to the magic fast. Show the essentials first and fold the depth away.
 
 ## Rough data model (starting point, not final)
 
