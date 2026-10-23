@@ -171,5 +171,5 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
 - [x] Step 6: Between-session suggestions (`suggest`, logic in `src/core/suggest.ts`, Opus by default). It returns 3 collisions (2+ threads paying each other off), one idea per PC, and ways back into threads quiet for 2+ sessions. Every open thread is sent, since prep isn't latency-sensitive: ~20–36 s, ~$0.04–0.09 per run.
   - **Potion fixture:** found a near-match for the real cure swap ("matched-pair potions; neither can be cured without the other"). The prompt hints at the general pattern (one PC's affliction may hold the key to another's), not the answer.
   - **Duradan:** strong hidden connections, e.g. Khayiulad's stolen Ka'Anshar book may be the Codex the Whisperer wants, and the Lodestone may anchor the party's madness at a risk. Collisions tend to stack 4–5 threads; 2–3 is probably tighter.
-- [ ] Step 7: Real-campaign test (Darkness in Duradan, sessions 1–5)
+- [x] Step 7: Real-campaign test (Darkness in Duradan, sessions 1–5). **Verdict: pass, with speed as the weak criterion.** See [docs/spike-verdict.md](docs/spike-verdict.md) for the evidence and the fix list before showing other DMs.
 - [ ] Step 8 (optional): One-box local web page
