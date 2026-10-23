@@ -17,6 +17,9 @@ import {
 // Shared by `recap` (alongside thread changes) and `enrich` (backfill from stored recaps).
 // Everything is applied as source "extracted", so the DM's own entries are never overwritten.
 
+// Traits extraction may propose. Settings the DM controls (possession: single or shared) are left out.
+const EXTRACTABLE_TRAITS = TRAIT_KEYS.filter((k) => k !== "possession") as [string, ...string[]];
+
 export const EntityUpdateSchema = z.object({
   name: z.string(),
   status: z.string(), // "" if not stated
@@ -24,7 +27,8 @@ export const EntityUpdateSchema = z.object({
   importance: z.enum(["", ...IMPORTANCE]),
   last_known_location: z.string(),
   parent_location: z.string(),
-  traits: z.array(z.object({ key: z.enum(TRAIT_KEYS as [string, ...string[]]), value: z.string() })),
+  traits: z.array(z.object({ key: z.enum(EXTRACTABLE_TRAITS), value: z.string() })),
+  evidence: z.string(), // a short exact quote from the notes that supports this
 });
 export const RelationChangeSchema = z.object({
   from: z.string(),
@@ -32,23 +36,27 @@ export const RelationChangeSchema = z.object({
   to: z.string(),
   note: z.string(),
   strength: z.number(),
+  evidence: z.string(),
 });
 export const EntityChangesShape = {
   entity_updates: z.array(EntityUpdateSchema),
   relations: z.array(RelationChangeSchema),
   party_location: z.string(),
+  party_evidence: z.string(),
 };
 export type EntityUpdate = z.infer<typeof EntityUpdateSchema>;
 export type RelationChange = z.infer<typeof RelationChangeSchema>;
 
-export const ENTITY_RULES = `entity_updates
+export const ENTITY_RULES = `EVIDENCE: every entity update, relationship and the party location carries evidence: a short exact quote (under 20 words) copied word for word from the notes that supports it. If nothing in the notes supports a change, don't propose it.
+
+entity_updates
 - For characters, places, items and factions (new or existing) whose details the notes state or clearly show. One entry per entity; only fields that are new or changed compared with the current state below.
 - status: for characters alive / dead / missing / captured / transformed; for places intact / destroyed / occupied / abandoned; for items intact / used / broken / lost; otherwise "".
 - attitude: the entity's attitude toward the party (hostile / unfriendly / indifferent / friendly / helpful), otherwise "".
 - importance: major / minor / walk-on, otherwise "".
 - last_known_location: the name of the place the party last saw them (characters) or last saw it (items), otherwise "".
 - parent_location: for places only, the larger place they are inside (the Tannery is inside Duradan), otherwise "".
-- traits: a list of {key, value} pairs, only for what the notes state. Use the field that fits: what a character can do (spells, wildshape, special powers) goes in abilities; known_properties and true_properties are for items only. health is one of healthy / wounded / bloodied / critical / unconscious, as of the end of the notes. conditions are short-term game conditions (charmed, frightened, poisoned, exhaustion 2…); lasting story afflictions are threads, not conditions. Never record numbers from a character sheet (ability scores, AC, hit points). Keys: ${TRAIT_KEYS.join(", ")}. For ${[...LIST_TRAITS].join(", ")}, separate several values with "; ". alignment must be one of: lawful good, neutral good, chaotic good, lawful neutral, true neutral, chaotic neutral, lawful evil, neutral evil, chaotic evil, unaligned. Only set alignment, age, motives or secrets when the notes make them clear; blanks are better than guesses.
+- traits: a list of {key, value} pairs, only for what the notes state. Use the field that fits: what a character can do (spells, wildshape, special powers) goes in abilities; known_properties and true_properties are for items only. health is one of healthy / wounded / bloodied / critical / unconscious, as of the end of the notes. conditions are short-term game conditions (charmed, frightened, poisoned, exhaustion 2…); lasting story afflictions are threads, not conditions. Never record numbers from a character sheet (ability scores, AC, hit points). Keys: ${EXTRACTABLE_TRAITS.join(", ")}. For ${[...LIST_TRAITS].join(", ")}, separate several values with "; ". alignment must be one of: lawful good, neutral good, chaotic good, lawful neutral, true neutral, chaotic neutral, lawful evil, neutral evil, chaotic evil, unaligned. Only set alignment, age, motives or secrets when the notes make them clear; blanks are better than guesses.
 - Any place used as a location must exist as an entity or be added in new_entities.
 
 relations
@@ -108,9 +116,11 @@ export async function applyEntityChanges(
   campaignId: number,
   sessionId: number | null,
   changes: { entity_updates: EntityUpdate[]; relations: RelationChange[]; party_location: string | null },
+  batch?: string,
+  source: "dm" | "extracted" = "extracted", // "dm" when the GM explicitly confirmed these
 ): Promise<EntityApplyResult> {
   const result: EntityApplyResult = { updated: 0, relations: 0, party: false, warnings: [], conflicts: [] };
-  const opts = { source: "extracted" as const, sessionId };
+  const opts = { source, sessionId, batch };
   const entities = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
   const byName = new Map<string, (typeof entities)[number]>();
   for (const e of entities) for (const n of [e.name, ...e.aliases]) byName.set(norm(n), e);

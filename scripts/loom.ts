@@ -8,7 +8,9 @@ import { db, initDb, schema } from "@/core/db/client";
 import { flavour } from "@/core/flavour";
 import { improv } from "@/core/improv";
 import { callLlm } from "@/core/llm";
-import { applyProposal, numberItems, proposeEnrichment, proposeRecapChanges, type ProposalFile } from "@/core/recap";
+import { applyProposal, proposeEnrichment, proposeRecapChanges, type ProposalFile } from "@/core/recap";
+import { reviewProposal, splitRisky } from "@/core/review";
+import { latestBatch, recentBatches, undoBatch, undoOne } from "@/core/undo";
 import {
   blindReportMarkdown,
   reportMarkdown,
@@ -46,6 +48,8 @@ Campaign data
   moment list | moment add "<title>" … | moment from-improv <n> | moment star|dismiss <id>
                              Key moments: the history callbacks draw on
   entity history "<name>"    What changed about it, when, and on whose word
+  changes [--last N]         Recent changes, grouped by batch (a recap, an enrich, a command)
+  undo                       Undo the latest batch · undo --batch "<label>" · undo <change id> [--force]
   player list | player add "<handle>" plays="<PC>" enjoys="mystery 3, comedy 2" lines="…"
                              The real people at the table (DM-only): steers who gets the spotlight
                              House rules and effects: what fires when, and who it applies to
@@ -85,96 +89,94 @@ function flag(args: string[], name: string) {
   return i >= 0 ? args[i + 1] : undefined;
 }
 
-async function printProposal(file: ProposalFile) {
-  // Show titles, not bare "T12" / "N3" references.
-  const existing = await db
-    .select({ id: schema.threads.id, title: schema.threads.title })
-    .from(schema.threads)
-    .where(eq(schema.threads.campaignId, file.campaignId));
-  const refTitles = new Map([
-    ...existing.map((t) => [`T${t.id}`, t.title] as const),
-    ...(file.proposal.new_threads ?? []).map((t) => [t.ref.toUpperCase(), t.title] as const),
-  ]);
-  const label = (ref: string) => refTitles.get(ref.trim().toUpperCase()) ?? ref;
-  let section = "";
-  const heading = (s: string) => {
-    if (s !== section) console.log(`\n${(section = s)}`);
-  };
-  for (const i of numberItems(file.proposal)) {
-    const n = `[${i.n}]`.padStart(5);
-    if (i.kind === "entity") {
-      heading("NEW ENTITIES");
-      const aka = i.item.aliases.length ? ` aka ${i.item.aliases.join(", ")}` : "";
-      console.log(`${n} ${i.item.name} (${i.item.type})${aka}: ${i.item.description}`);
-    } else if (i.kind === "thread") {
-      heading("NEW THREADS");
-      console.log(`${n} ${i.item.ref} (${i.item.kind}) ${i.item.title}`);
-      console.log(`        ${i.item.summary}`);
-      if (i.item.entities.length) console.log(`        ↳ ${i.item.entities.join(", ")}`);
-    } else if (i.kind === "update") {
-      heading("THREAD UPDATES");
-      console.log(`${n} ${i.item.change.toUpperCase()}: ${label(i.item.thread)}`);
-      console.log(`        ${i.item.note}`);
-    } else if (i.kind === "link") {
-      heading("LINKS");
-      console.log(`${n} ${label(i.item.from)} → ${label(i.item.to)} (${i.item.note})`);
-    } else if (i.kind === "entity_update") {
-      heading("ENTITY DETAILS");
-      const u = i.item;
-      const facts = [
-        u.status && `status ${u.status}`,
-        u.attitude && `attitude ${u.attitude}`,
-        u.importance && `importance ${u.importance}`,
-        u.last_known_location && `last seen at ${u.last_known_location}`,
-        u.parent_location && `inside ${u.parent_location}`,
-        ...u.traits.filter((t) => t.value.trim()).map((t) => `${t.key.replace(/_/g, " ")}: ${t.value}`),
-      ].filter(Boolean);
-      console.log(`${n} ${u.name}: ${facts.join(" · ")}`);
-    } else if (i.kind === "relation") {
-      heading("RELATIONSHIPS");
-      const r = i.item;
-      const s = r.strength ? ` (${r.strength > 0 ? "+" : ""}${r.strength})` : "";
-      console.log(`${n} ${r.from} ${r.type.replace(/_/g, " ")} ${r.to}${s}${r.note ? `: ${r.note}` : ""}`);
-    } else if (i.kind === "party") {
-      heading("PARTY LOCATION");
-      console.log(`${n} The party is at ${i.item}`);
-    } else {
-      heading("KEY MOMENTS (saved as suggestions to star)");
-      const m = i.item;
-      console.log(`${n} ☆ s${m.session} · ${m.tone}  ${m.title}`);
-      console.log(`        ${m.description}`);
-      if (m.callback) console.log(`        callback: ${m.callback}`);
-    }
+// Asks a question, falling back to a default when input has ended (piped answers, scripts).
+// Piped input (scripts, tests) is read up front, one answer per line.
+async function asker() {
+  if (!process.stdin.isTTY) {
+    let text = "";
+    for await (const chunk of process.stdin) text += chunk;
+    const lines = text.split("\n");
+    return {
+      ask: async (q: string, fallback: string) => {
+        const a = lines.length ? lines.shift()! : fallback;
+        console.log(`${q}${a}`);
+        return a;
+      },
+      close: () => {},
+    };
   }
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return { ask: (q: string, fallback: string) => rl.question(q).catch(() => fallback), close: () => rl.close() };
 }
 
-async function reviewAndApply(file: ProposalFile, path: string) {
-  await printProposal(file);
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = (
-    await rl.question(
-      `\nApply? [a] all · [n] none · or numbers to SKIP, e.g. "3, 7, 12"\n(To edit wording, answer n, edit ${path}, then run: npm run loom -- apply ${path})\n> `,
-    )
-  ).trim();
-  rl.close();
-  if (answer === "" || answer.toLowerCase() === "n") return console.log("Nothing applied.");
+const EVIDENCE_MARK: Record<string, string> = { exact: "✓ in your notes", close: "≈ close to your notes", missing: "(no quote)", "not-found": "⚠ not in your notes" };
 
-  const skip = new Set(answer.toLowerCase() === "a" ? [] : (answer.match(/\d+/g) ?? []).map(Number));
-  const { counts, warnings, entityResult: er, moments } = await applyProposal(file, skip);
+// Tiered review: low-risk details are added (and undoable), ordinary changes are confirmed in
+// groups with one keypress, risky ones one at a time.
+async function reviewAndApply(original: ProposalFile, path: string) {
+  const file = await splitRisky(original); // risky fields become their own items
+  const reviewed = await reviewProposal(file);
+  const auto = reviewed.filter((r) => r.tier === "auto");
+  const quick = reviewed.filter((r) => r.tier === "quick");
+  const must = reviewed.filter((r) => r.tier === "must");
+  console.log(`\n${reviewed.length} proposed changes: ${auto.length} added automatically · ${quick.length} to confirm in groups · ${must.length} need a yes`);
+
+  const groupBy = (rows: typeof reviewed) => {
+    const out = new Map<string, typeof reviewed>();
+    for (const r of rows) out.set(r.group, [...(out.get(r.group) ?? []), r]);
+    return [...out.entries()];
+  };
+
+  if (auto.length) {
+    console.log("\nADDED AUTOMATICALLY (low-risk details straight from your notes; undo anytime)");
+    for (const [g, rows] of groupBy(auto)) console.log(`  • ${g}: ${rows.map((r) => r.summary).join(" · ")}`);
+  }
+
+  const groups = groupBy(quick);
+  if (groups.length) {
+    console.log("\nCONFIRM IN GROUPS");
+    groups.forEach(([g, rows], i) => {
+      console.log(`  [${i + 1}] ${g}`);
+      for (const r of rows) console.log(`        ${r.summary}${r.evidence ? `   “${r.evidence}”` : ""}`);
+    });
+  }
+  if (must.length) {
+    console.log("\nNEED A YES (one at a time)");
+    must.forEach((r, i) => {
+      console.log(`  (${String.fromCharCode(97 + i)}) ${r.group}: ${r.summary}`);
+      console.log(`        why: ${r.reasons.join("; ")}`);
+      console.log(`        evidence: ${r.evidence ? `“${r.evidence}” ` : ""}${EVIDENCE_MARK[r.check]}`);
+    });
+  }
+
+  const io = await asker();
+  const skip = new Set<number>();
+  const confirmed = new Set<number>(); // risky items the GM said yes to
+  if (groups.length) {
+    const a = (await io.ask(`\nGroups: Enter = accept all · n = none · or numbers to skip (e.g. "2, 4")\n> `, "")).trim().toLowerCase();
+    if (a === "n") for (const r of quick) skip.add(r.item.n);
+    else for (const num of a.match(/\d+/g) ?? []) for (const r of groups[Number(num) - 1]?.[1] ?? []) skip.add(r.item.n);
+  }
+  for (const [i, r] of must.entries()) {
+    const a = (await io.ask(`(${String.fromCharCode(97 + i)}) ${r.group}: ${r.summary}: apply? [y/N] `, "n")).trim().toLowerCase();
+    if (a !== "y" && a !== "yes") skip.add(r.item.n);
+    else confirmed.add(r.item.n);
+  }
+  io.close();
+  console.log(`\n(To change wording instead, edit ${path} and run: npm run loom -- apply ${path})`);
+
+  if (skip.size === reviewed.length) return console.log("Nothing applied.");
+  const { counts, warnings, entityResult: er, moments, batch } = await applyProposal(file, skip, undefined, confirmed);
   console.log(
     `\nApplied: ${counts.entities} new entities, ${counts.threads} new threads, ${counts.updates} thread updates, ${counts.links} links, ` +
-      `${er.updated} entities' details, ${er.relations} relationships${er.party ? ", party location" : ""}, ${moments} suggested key moments (moment list).`,
+      `${er.updated} entities' details, ${er.relations} relationships${er.party ? ", party location" : ""}, ${moments} suggested key moments.`,
   );
   for (const w of warnings) console.log(`  ! ${w}`);
   if (er.conflicts.length) {
     console.log("\nKept your values where Loom read the notes differently:");
-    for (const c of er.conflicts) {
-      for (const p of c.proposals) {
-        console.log(`  • ${c.entity} · ${p.field}: yours ${JSON.stringify(p.current)}, notes suggest ${JSON.stringify(p.proposed)}`);
-      }
-    }
-    console.log("  To take Loom's version, set it yourself with entity set / relate / campaign set.");
+    for (const c of er.conflicts) for (const p of c.proposals) console.log(`  • ${c.entity} · ${p.field}: yours ${JSON.stringify(p.current)}, notes suggest ${JSON.stringify(p.proposed)}`);
   }
+  console.log(`\nUndo all of this: npm run loom -- undo        (batch "${batch}")`);
 }
 
 async function latestCampaignId() {
@@ -208,6 +210,34 @@ async function main() {
       else if (command === "player") await playerCommand(campaignId, args);
       else await relateCommand(campaignId, args, command === "unrelate");
       break;
+    }
+    case "changes": {
+      const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
+      const batches = await recentBatches(campaignId, Number(flag(args, "last") ?? 8));
+      if (!batches.length) return console.log("No changes recorded yet.");
+      for (const b of batches) {
+        console.log(`\n${b.undone ? "↶ undone · " : ""}${b.batch}  (${b.changes.length} change${b.changes.length > 1 ? "s" : ""})`);
+        for (const c of b.changes.slice(0, 6).reverse()) console.log(`   #${c.id} ${c.kind.padEnd(16)} ${c.subject}${c.field ? ` · ${c.field}` : ""}${c.undoneAt ? " (undone)" : ""}`);
+        if (b.changes.length > 6) console.log(`   … and ${b.changes.length - 6} more`);
+      }
+      return;
+    }
+    case "undo": {
+      const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
+      const force = args.includes("--force");
+      const id = args[0] && /^\d+$/.test(args[0]) ? Number(args[0]) : null;
+      let label: string | undefined = flag(args, "batch");
+      if (!id && !label) label = (await latestBatch(campaignId))?.batch;
+      if (!id && !label) return console.log("Nothing to undo.");
+      const r = id ? await undoOne(campaignId, id, { force }) : await undoBatch(campaignId, label!, { force });
+      if (r.blocked.length) {
+        console.log("Not undone: later changes build on this.");
+        for (const b of r.blocked) console.log(`  • ${b}`);
+        return console.log("Undo the later ones first, or add --force to undo anyway.");
+      }
+      console.log(`↶ Undid ${r.undone} of ${r.total} change${r.total === 1 ? "" : "s"}${id ? ` (#${id})` : ` from "${label}"`}.`);
+      for (const n of r.notes) console.log(`  ! ${n}`);
+      return;
     }
     case "thread":
       await threadCommand(args);

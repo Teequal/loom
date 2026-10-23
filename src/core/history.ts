@@ -63,6 +63,6 @@ export async function historyOf(campaignId: number, entity: { id: number; name: 
         : r.kind === "created"
           ? "first recorded"
           : `${r.kind === "relation-added" ? "+" : r.kind === "relation-removed" ? "−" : "~"} ${r.subject}${r.after && typeof r.after === "object" && "note" in (r.after as object) && (r.after as { note: string }).note ? ` (${(r.after as { note: string }).note})` : ""}`;
-    return { session: sessions.find((s) => s.id === r.sessionId)?.number ?? null, when: r.createdAt, text, source: r.source };
+    return { session: sessions.find((s) => s.id === r.sessionId)?.number ?? null, when: r.createdAt, text: r.undoneAt ? `${text} (undone)` : text, source: r.source };
   });
 }

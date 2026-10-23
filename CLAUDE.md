@@ -297,5 +297,16 @@ Jacob approved the model on 24 Oct 2026: layers L0 Rules › L1 Identity › L2 
     | Wide | 9/9 | 1 | ~7.5k | 5.2 s | $0.0133 | 5 |
 
     The heresy bounty is recovered via guaranteed threads. **Wide is no slower and costs ~8% more, so it's now the default** (Jacob, 24 Oct); `--focused` is the lighter option.
+- [x] **Tiered review and undo** (Jacob's request: confirmations without friction; migration `drizzle/0005`).
+  - **Evidence:** every proposed entity, thread, thread update, entity update, relationship and party move carries a short exact quote from the notes. `checkEvidence` (`src/core/review.ts`) marks each as in the notes / close / not found.
+  - **Tiers** (`reviewProposal`):
+    - **Added automatically:** filling blanks with quoted facts, new non-PC entities, structural relationships (member_of, located_at, lives_at, made, knows_about), suggested moments, a first party location.
+    - **Confirm in groups:** new threads, progress, links, other relationships, changes to extracted values.
+    - **Need a yes:** changes to the DM's own entries; dead / captured / missing / destroyed; alignment, secrets, true properties; a held item changing hands; closing a thread; a new PC; any quote not found in the notes.
+  - `splitRisky` gives each risky field its own item, so declining one keeps the safe details beside it. A yes on a must-confirm is applied as the DM's own entry.
+  - **Review screen:** a digest of automatic additions; groups accepted with Enter (or numbers to skip); risky items one at a time with the reason and the evidence check. Piped answers work for scripts.
+  - **Undo** (`src/core/undo.ts`): every write is logged with a batch label (one per recap or enrich). `changes` lists recent batches; `undo` reverses the latest; `undo --batch "<label>"` or `undo <id>` reverse others. Undo reverses fields, relationships (both directions for two-way ones), created entities and threads, thread progress (and its event), links and suggested moments, and marks rows undone. It refuses when a later change touched the same thing (unless `--force`).
+  - **Tested on the fixture:** a crafted session sorted 15 / 8 / 4 across the tiers with all quotes verified. Declining Ysolde's attitude change kept her other details; a confirmed vial hand-over overrode the DM's holder as intended; one `undo` reversed all 43 changes; undo blocked an out-of-order reversal. The 25 earlier cases still pass.
+  - Not yet: manual CLI writes aren't batched (undo them by id); learning which kinds of change a DM always accepts.
 - [ ] Step 6: Embeddings as entry points
 - [ ] Step 7: Stress tests and a blind rerun

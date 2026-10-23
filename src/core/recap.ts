@@ -34,6 +34,7 @@ const MOMENT_RULES = `key_moments
 - entities: exact names of who and what was involved. threads: related threads as "T<id>" (or "N<n>" for new ones).`;
 
 const NewEntitySchema = z.object({
+  evidence: z.string(),
   name: z.string(),
   type: z.enum(ENTITY_TYPES),
   aliases: z.array(z.string()),
@@ -52,6 +53,7 @@ export const ProposalSchema = z.object({
       kind: z.enum(THREAD_KINDS),
       summary: z.string(),
       entities: z.array(z.string()),
+      evidence: z.string(),
     }),
   ),
   thread_updates: z.array(
@@ -60,6 +62,7 @@ export const ProposalSchema = z.object({
       change: z.enum(["progressed", "resolved"]),
       note: z.string(),
       new_summary: z.string(),
+      evidence: z.string(),
     }),
   ),
   thread_links: z.array(z.object({ from: z.string(), to: z.string(), note: z.string() })),
@@ -90,6 +93,7 @@ function withDefaults(p: Partial<Proposal>): Proposal {
     entity_updates: p.entity_updates ?? [],
     relations: p.relations ?? [],
     party_location: p.party_location ?? "",
+    party_evidence: p.party_evidence ?? "",
     key_moments: p.key_moments ?? [],
   };
 }
@@ -99,6 +103,8 @@ const SYSTEM = `You maintain the thread list for a tabletop RPG campaign, so the
 A thread is anything with unspent narrative payoff: an unresolved hook or mission, a mystery, a player character condition (curse, madness, false belief, lasting injury, lost ability), an NPC promise or debt, a grudge, an item whose purpose is unknown, a consequence that hasn't landed yet. Not threads: events that are fully over with nothing lingering, combat blow-by-blow, scenery.
 
 Given the current campaign state and a new session recap, propose changes:
+
+Every new entity, new thread and thread update also carries evidence: a short exact quote (under 20 words) copied from the recap.
 
 new_threads
 - Only situations with real payoff potential. Prefer fewer, meatier threads over many thin ones.
@@ -223,7 +229,10 @@ export function numberItems(raw: Partial<Proposal>): ProposalItem[] {
 const norm = (s: string) => s.trim().toLowerCase();
 
 // Writes the accepted items in one transaction. Returns warnings for anything that couldn't be applied.
-export async function applyProposal(file: ProposalFile, skip: Set<number> = new Set()) {
+// `batch` groups everything this apply writes, so `undo --batch` can reverse it in one go.
+// `confirmed`: items the GM explicitly said yes to; they're applied as the GM's own entries, so
+// they can change values the GM recorded earlier.
+export async function applyProposal(file: ProposalFile, skip: Set<number> = new Set(), batch = newBatch(file), confirmed: Set<number> = new Set()) {
   const { campaignId, sessionNumber, recap } = file;
   const items = numberItems(file.proposal).filter((i) => !skip.has(i.n));
   const warnings: string[] = [];
@@ -231,6 +240,7 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
   let sessionId: number | null = null;
   let threadByRef = new Map<string, number>();
   const created: { id: number; name: string }[] = [];
+  const logs: Parameters<typeof logChanges>[0] = [];
 
   await db.transaction(async (tx) => {
     // Session row: reuse if this session was already recorded, otherwise create it.
@@ -251,7 +261,9 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
 
     for (const { item } of items.filter((i) => i.kind === "entity") as Extract<ProposalItem, { kind: "entity" }>[]) {
       if (entityByName.has(norm(item.name))) continue;
-      const [e] = await tx.insert(schema.entities).values({ campaignId, ...item }).returning();
+      const { evidence: _evidence, ...fields } = item;
+      void _evidence;
+      const [e] = await tx.insert(schema.entities).values({ campaignId, ...fields }).returning();
       created.push({ id: e.id, name: e.name });
       for (const name of [e.name, ...e.aliases]) entityByName.set(norm(name), e.id);
       counts.entities++;
@@ -281,6 +293,7 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
         .returning();
       threadByRef.set(item.ref.trim().toUpperCase(), t.id);
       await tx.insert(schema.threadEvents).values({ threadId: t.id, sessionId: session.id, change: "new" });
+      logs.push({ campaignId, sessionId: session.id, subject: t.title, threadId: t.id, kind: "thread-created", after: { threadId: t.id }, source: "extracted", batch });
       counts.threads++;
 
       const entityIds = new Set<number>();
@@ -300,15 +313,26 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
         warnings.push(`Update to unknown thread ${item.thread} skipped`);
         continue;
       }
-      await tx
-        .update(schema.threads)
-        .set({
-          status: item.change === "resolved" ? "resolved" : "progressing",
-          lastTouchedSessionId: session.id,
-          ...(item.new_summary.trim() ? { summary: item.new_summary } : {}),
-        })
-        .where(eq(schema.threads.id, threadId));
-      await tx.insert(schema.threadEvents).values({ threadId, sessionId: session.id, change: item.change, note: item.note });
+      const [before] = await tx.select().from(schema.threads).where(eq(schema.threads.id, threadId));
+      const next = {
+        status: item.change === "resolved" ? ("resolved" as const) : ("progressing" as const),
+        lastTouchedSessionId: session.id,
+        ...(item.new_summary.trim() ? { summary: item.new_summary } : {}),
+      };
+      await tx.update(schema.threads).set(next).where(eq(schema.threads.id, threadId));
+      const [ev] = await tx.insert(schema.threadEvents).values({ threadId, sessionId: session.id, change: item.change, note: item.note }).returning();
+      logs.push({
+        campaignId,
+        sessionId: session.id,
+        subject: before.title,
+        threadId,
+        kind: "thread-updated",
+        field: item.change,
+        before: { status: before.status, summary: before.summary, lastTouchedSessionId: before.lastTouchedSessionId },
+        after: { ...next, eventId: ev.id },
+        source: "extracted",
+        batch,
+      });
       counts.updates++;
     }
 
@@ -319,23 +343,36 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
         warnings.push(`Link ${item.from} → ${item.to} skipped (thread not found or skipped)`);
         continue;
       }
-      await tx.insert(schema.threadLinks).values({ fromThreadId: from, toThreadId: to, note: item.note }).onConflictDoNothing();
+      const inserted = await tx.insert(schema.threadLinks).values({ fromThreadId: from, toThreadId: to, note: item.note }).onConflictDoNothing().returning();
+      if (inserted.length) logs.push({ campaignId, sessionId: session.id, subject: `${item.from} → ${item.to}`, threadId: from, kind: "link-added", after: { from, to }, source: "extracted", batch });
       counts.links++;
     }
   });
 
-  await logChanges(
-    created.map((e) => ({ campaignId, sessionId, subject: e.name, entityId: e.id, kind: "created" as const, source: "extracted" as const })),
-  );
+  await logChanges([
+    ...created.map((e) => ({ campaignId, sessionId, subject: e.name, entityId: e.id, kind: "created" as const, source: "extracted" as const, batch })),
+    ...logs,
+  ]);
 
   // Entity details go through the provenance rules (never overwriting the DM), outside the
   // transaction because those writes use their own queries.
-  const of = <K extends ProposalItem["kind"]>(k: K) => items.filter((i) => i.kind === k).map((i) => i.item as Extract<ProposalItem, { kind: K }>["item"]);
+  const of = <K extends ProposalItem["kind"]>(k: K, dm?: boolean) =>
+    items.filter((i) => i.kind === k && (dm === undefined || confirmed.has(i.n) === dm)).map((i) => i.item as Extract<ProposalItem, { kind: K }>["item"]);
   const entityResult: EntityApplyResult = await applyEntityChanges(campaignId, sessionId, {
-    entity_updates: of("entity_update"),
-    relations: of("relation"),
-    party_location: of("party")[0] ?? null,
-  });
+    entity_updates: of("entity_update", false),
+    relations: of("relation", false),
+    party_location: of("party", false)[0] ?? null,
+  }, batch);
+  const confirmedResult = await applyEntityChanges(campaignId, sessionId, {
+    entity_updates: of("entity_update", true),
+    relations: of("relation", true),
+    party_location: of("party", true)[0] ?? null,
+  }, batch, "dm");
+  entityResult.updated += confirmedResult.updated;
+  entityResult.relations += confirmedResult.relations;
+  entityResult.party ||= confirmedResult.party;
+  entityResult.warnings.push(...confirmedResult.warnings);
+  entityResult.conflicts.push(...confirmedResult.conflicts);
   warnings.push(...entityResult.warnings);
 
   // Suggested key moments: saved as ☆ suggestions for the DM to star or dismiss.
@@ -353,9 +390,18 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
       .filter((id): id is number => id != null);
     // A recap is one session; only a backfill spans several.
     const sid = file.kind === "enrich" ? (sess.find((x) => x.number === m.session)?.id ?? sessionId) : sessionId;
-    await addMoment(campaignId, { title: m.title, description: m.description, tone: m.tone, callback: m.callback, entityIds, threadIds, sessionId: sid }, "extracted", "suggested");
+    const row = await addMoment(campaignId, { title: m.title, description: m.description, tone: m.tone, callback: m.callback, entityIds, threadIds, sessionId: sid }, "extracted", "suggested");
+    await logChanges([{ campaignId, sessionId: sid, subject: m.title, kind: "moment-added", after: { momentId: row.id }, source: "extracted", batch }]);
     moments++;
   }
 
-  return { counts, warnings, entityResult, moments };
+  return { counts, warnings, entityResult, moments, batch };
+}
+
+// A readable batch label: what it was, plus a short unique suffix.
+export function newBatch(file: Pick<ProposalFile, "kind" | "sessionNumber">) {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const when = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return `${file.kind === "enrich" ? "enrich" : `recap s${file.sessionNumber}`} ${when} #${Math.random().toString(36).slice(2, 6)}`;
 }

@@ -20,6 +20,7 @@ export interface WriteOptions {
   source: Source;
   sessionId?: number | null;
   secret?: string[]; // fields (e.g. "actualLocationId", "traits.secrets") to mark GM-only
+  batch?: string; // groups changes for undo (a recap, an enrich, one command)
 }
 
 export interface Proposal {
@@ -147,6 +148,7 @@ export async function updateEntity(entityId: number, patch: EntityPatch, opts: W
       before: current[field] ?? null,
       after: apply[field] ?? null,
       source: opts.source,
+      batch: opts.batch,
     })),
   );
   return result;
@@ -228,7 +230,7 @@ export async function setRelation(campaignId: number, input: RelationInput, opts
     for (const r of clash) {
       await db.delete(schema.entityRelations).where(eq(schema.entityRelations.id, r.id));
       const subject = `${nameOf(r.fromEntityId)} ${verb(input.type)} ${nameOf(r.toEntityId)}`;
-      await logChanges([{ campaignId, sessionId: opts.sessionId, subject, entityId: r.fromEntityId, kind: "relation-removed", field: input.type, before: { note: r.note }, after: null, source: opts.source }]);
+      await logChanges([{ campaignId, sessionId: opts.sessionId, subject, entityId: r.fromEntityId, kind: "relation-removed", field: input.type, before: { from: r.fromEntityId, to: r.toEntityId, type: r.type, note: r.note, strength: r.strength, secret: r.secret, source: r.source }, after: null, source: opts.source, batch: opts.batch }]);
       notes.push(`replaces: ${subject}`);
     }
   }
@@ -270,7 +272,7 @@ async function upsertRelation(campaignId: number, input: RelationInput, opts: Wr
       sinceSessionId: opts.sessionId ?? null,
       source: opts.source,
     });
-    await logChanges([{ campaignId, sessionId: opts.sessionId, subject, entityId: input.fromEntityId, kind: "relation-added", field: input.type, before: null, after: { note: input.note ?? "", strength }, source: opts.source }]);
+    await logChanges([{ campaignId, sessionId: opts.sessionId, subject, entityId: input.fromEntityId, kind: "relation-added", field: input.type, before: null, after: { from: input.fromEntityId, to: input.toEntityId, type: input.type, note: input.note ?? "", strength }, source: opts.source, batch: opts.batch }]);
     return { written: [label], proposed: [] };
   }
 
@@ -280,18 +282,18 @@ async function upsertRelation(campaignId: number, input: RelationInput, opts: Wr
     return { written: [], proposed: [{ field: label, current: { note: existing.note, strength: existing.strength }, proposed: next }] };
   }
   await db.update(schema.entityRelations).set({ ...next, source: opts.source }).where(eq(schema.entityRelations.id, existing.id));
-  await logChanges([{ campaignId, sessionId: opts.sessionId, subject, entityId: input.fromEntityId, kind: "relation-changed", field: input.type, before: { note: existing.note, strength: existing.strength }, after: next, source: opts.source }]);
+  await logChanges([{ campaignId, sessionId: opts.sessionId, subject, entityId: input.fromEntityId, kind: "relation-changed", field: input.type, before: { from: existing.fromEntityId, to: existing.toEntityId, type: existing.type, note: existing.note, strength: existing.strength, secret: existing.secret }, after: { from: existing.fromEntityId, to: existing.toEntityId, type: existing.type, ...next }, source: opts.source, batch: opts.batch }]);
   return { written: [label], proposed: [] };
 }
 
 // Removes a relationship; a two-way one is removed in both directions.
-export async function removeRelation(relationId: number, source: "dm" | "extracted" = "dm") {
+export async function removeRelation(relationId: number, source: "dm" | "extracted" = "dm", batch?: string) {
   const [rel] = await db.select().from(schema.entityRelations).where(eq(schema.entityRelations.id, relationId));
   if (!rel) return;
   await db.delete(schema.entityRelations).where(eq(schema.entityRelations.id, relationId));
   const ents = await db.select({ id: schema.entities.id, name: schema.entities.name }).from(schema.entities).where(inArray(schema.entities.id, [rel.fromEntityId, rel.toEntityId]));
   const n = (id: number) => ents.find((e) => e.id === id)?.name ?? `#${id}`;
-  await logChanges([{ campaignId: rel.campaignId, subject: `${n(rel.fromEntityId)} ${verb(rel.type)} ${n(rel.toEntityId)}`, entityId: rel.fromEntityId, kind: "relation-removed", field: rel.type, before: { note: rel.note }, after: null, source }]);
+  await logChanges([{ campaignId: rel.campaignId, subject: `${n(rel.fromEntityId)} ${verb(rel.type)} ${n(rel.toEntityId)}`, entityId: rel.fromEntityId, kind: "relation-removed", field: rel.type, before: { from: rel.fromEntityId, to: rel.toEntityId, type: rel.type, note: rel.note, strength: rel.strength, secret: rel.secret, source: rel.source }, after: null, source, batch }]);
   if (RELATION_LAWS[rel.type]?.symmetric) {
     await db
       .delete(schema.entityRelations)
@@ -324,7 +326,7 @@ export async function updateCampaign(campaignId: number, patch: CampaignPatch, o
   if (result.written.length) {
     await db.update(schema.campaigns).set({ ...apply, fieldMeta: nextMeta }).where(eq(schema.campaigns.id, campaignId));
     const current = campaign as Record<string, unknown>;
-    await logChanges(Object.keys(apply).map((field) => ({ campaignId, sessionId: opts.sessionId, subject: "campaign", kind: "field" as const, field, before: current[field] ?? null, after: apply[field] ?? null, source: opts.source })));
+    await logChanges(Object.keys(apply).map((field) => ({ campaignId, sessionId: opts.sessionId, subject: "campaign", kind: "field" as const, field, before: current[field] ?? null, after: apply[field] ?? null, source: opts.source, batch: opts.batch })));
   }
   return result;
 }
@@ -342,7 +344,7 @@ export async function updateThread(threadId: number, patch: ThreadPatch, opts: W
   if (result.written.length) {
     await db.update(schema.threads).set({ ...apply, fieldMeta: nextMeta }).where(eq(schema.threads.id, threadId));
     const current = thread as Record<string, unknown>;
-    await logChanges(Object.keys(apply).map((field) => ({ campaignId: thread.campaignId, sessionId: opts.sessionId, subject: thread.title, kind: "field" as const, field, before: current[field] ?? null, after: apply[field] ?? null, source: opts.source })));
+    await logChanges(Object.keys(apply).map((field) => ({ campaignId: thread.campaignId, sessionId: opts.sessionId, subject: thread.title, threadId, kind: "field" as const, field, before: current[field] ?? null, after: apply[field] ?? null, source: opts.source, batch: opts.batch })));
     await db.insert(schema.threadEvents).values({
       threadId,
       sessionId: opts.sessionId ?? null,
