@@ -57,15 +57,17 @@ Engine
   enrich [--campaign id] [--model name]
                              Re-read all stored recaps and propose entity details, relationships
                              and the party's location (for campaigns recorded before these existed)
-  improv "<what happened>" [--campaign id] [--why] [--all] [--model name]
+  improv "<what happened>" [--campaign id] [--why] [--focused] [--threads N] [--all] [--model name]
                              2-3 options tied to existing threads. --why shows which threads were
-                             retrieved and why; --all sends every open thread instead (for comparison)
+                             retrieved and why; --focused uses a tighter scene and fewer threads;
+                             --threads N sends exactly N (plus threads tied to what you named);
+                             --all sends every open thread (for comparison)
   flavor <n> [--model name]  Read-aloud version of option n from the last improv (default: opus)
 
   suggest [--campaign id] [--model name]
                              Between-session prep: thread collisions, an idea per player
                              character, and ways back into quiet threads
-  scenarios <file.json> [--models sonnet,opus] [--only id1,id2] [--blind]
+  scenarios <file.json> [--models sonnet,opus] [--only id1,id2] [--blind] [--focused]
                              Run saved moments through the improv box on each model and write a
                              side-by-side report to data/runs/ (default model: sonnet).
                              --blind shuffles all models' options together with models hidden
@@ -247,11 +249,15 @@ async function main() {
       const moment = args[0];
       if (!moment || moment.startsWith("--")) return console.log(USAGE);
       const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
-      const r = await improv(campaignId, moment, args.includes("--all") ? "all" : "ranked", flag(args, "model"));
+      const r = await improv(campaignId, moment, args.includes("--all") ? "all" : "ranked", flag(args, "model"), {
+        focused: args.includes("--focused"),
+        threads: flag(args, "threads") ? Number(flag(args, "threads")) : undefined,
+      });
 
       if (args.includes("--why")) {
         console.log("\nThreads considered:");
-        for (const t of r.threads) console.log(`  ${t.score.toFixed(1).padStart(5)}  T${t.id} ${t.title}  (${t.reasons.join("; ") || "recency"})`);
+        for (const t of r.threads) console.log(`  ${t.score.toFixed(1).padStart(5)} ${t.detail === "full" ? "full" : "line"}${t.guaranteed ? " ★" : "  "} T${t.id} ${t.title}  (${t.reasons.join("; ") || "recency"})`);
+        console.log("  full = sent in detail · line = title and summary · ★ = tied to something the moment names");
       }
       console.log("");
       if (r.safetyNote) console.log(`⚠ ${r.safetyNote}\n`);
@@ -331,7 +337,7 @@ async function main() {
       const models = (flag(args, "models") ?? "sonnet").split(",");
 
       console.log(`Running ${file.scenarios.length} scenario(s) × ${models.length} model(s)…`);
-      const results = await runScenarios(file, models, (msg) => console.log(`  ${msg}`));
+      const results = await runScenarios(file, models, (msg) => console.log(`  ${msg}`), { focused: args.includes("--focused") });
 
       console.log("\nModel                 Expected  Avg / max latency   Cost      Dropped  Errors");
       for (const s of summarise(results)) {

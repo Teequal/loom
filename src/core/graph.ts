@@ -1,5 +1,6 @@
 import { eq, inArray } from "drizzle-orm";
 import { db, schema } from "./db/client";
+import type { ThreadSelection } from "./retrieval";
 
 // Context by graph distance (docs/loom-model.md §7). Starting from what the moment is about, walk
 // the network: relationships, possession, location, sets and kinds, and shared threads. What's
@@ -11,14 +12,16 @@ export interface Budget {
   full: number; // full cards
   brief: number; // 2-3 line cards
   names: number; // name-and-role mentions
-  threads: number; // open threads sent
-  fullThreads: number; // of those, how many with full detail (the rest get title and summary)
+  threads: ThreadSelection; // which open threads to send, and how many in full
 }
 
 export const BUDGETS = {
-  improv: { depth: 2, full: 4, brief: 6, names: 10, threads: 6, fullThreads: 3 },
-  suggest: { depth: 3, full: 8, brief: 10, names: 16, threads: 40, fullThreads: 40 },
-  flavour: { depth: 1, full: 8, brief: 0, names: 0, threads: 0, fullThreads: 0 },
+  // Wide (the default): reaches further. Measured no slower than focused, misses less, ~8% more cost.
+  improv: { depth: 3, full: 6, brief: 10, names: 16, threads: { min: 8, max: 20, cutoff: 0.15, full: 6 } },
+  // Focused (--focused): a tighter scene and fewer threads, for the cheapest calls.
+  improvFocused: { depth: 2, full: 4, brief: 6, names: 10, threads: { min: 4, max: 12, cutoff: 0.35, full: 4 } },
+  suggest: { depth: 3, full: 8, brief: 10, names: 16, threads: { min: 40, max: 40, cutoff: 0, full: 40 } },
+  flavour: { depth: 1, full: 8, brief: 0, names: 0, threads: { min: 0, max: 0, cutoff: 1, full: 0 } },
 } satisfies Record<string, Budget>;
 
 // Shortest number of links from any seed to every entity within `depth`.

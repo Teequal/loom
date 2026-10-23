@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "./db/client";
-import { improv, type ImprovOption } from "./improv";
+import { improv, type ImprovOption, type ImprovOptions } from "./improv";
 import { resolveModel } from "./llm";
 
 // A scenario file: saved table moments for one campaign, each with the threads a good answer
@@ -39,7 +39,7 @@ export interface ScenarioResult {
 
 const matches = (title: string, piece: string) => title.toLowerCase().includes(piece.toLowerCase());
 
-export async function runScenarios(file: ScenarioFile, models: string[], onProgress?: (msg: string) => void) {
+export async function runScenarios(file: ScenarioFile, models: string[], onProgress?: (msg: string) => void, opts: ImprovOptions = {}) {
   const [campaign] = await db.select().from(schema.campaigns).where(eq(schema.campaigns.name, file.campaign));
   if (!campaign) throw new Error(`No campaign named "${file.campaign}"`);
 
@@ -50,7 +50,7 @@ export async function runScenarios(file: ScenarioFile, models: string[], onProgr
       const model = resolveModel(name);
       onProgress?.(`${scenario.id} · ${model}`);
       try {
-        const r = await improv(campaign.id, scenario.moment, "ranked", model);
+        const r = await improv(campaign.id, scenario.moment, "ranked", model, opts);
         result.retrieved = r.threads.map((t) => t.title);
         result.retrievalFound = scenario.expect.filter((p) => result.retrieved.some((t) => matches(t, p)));
         const options = r.options.map((o) => ({

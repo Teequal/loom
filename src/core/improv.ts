@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { callLlm, type LlmResult } from "./llm";
-import { findMentions, loadThreadContexts, retrieveThreads, type ThreadContext } from "./retrieval";
+import { findMentions, loadThreadContexts, retrieveThreads, selectThreads, type SelectedThread, type ThreadContext } from "./retrieval";
 import { PILLARS, type Pillar } from "./db/schema";
 import { BUDGETS, distancesFrom } from "./graph";
 import { listMoments, momentLine } from "./moments";
@@ -293,16 +293,25 @@ async function safetyCheck(lines: string[], texts: string[]) {
   return { flagged: new Set(call.data.flagged.map((f) => f.option - 1)), call };
 }
 
-// mode "ranked" sends the top retrieved threads; "all" sends every open thread (baseline for comparison).
-export async function improv(campaignId: number, moment: string, mode: "ranked" | "all" = "ranked", model?: string) {
-  const allThreads = await loadThreadContexts(campaignId);
-  const threads = mode === "all" ? allThreads.map((t) => ({ ...t, score: 0, reasons: [] as string[] })) : await retrieveThreads(campaignId, moment, BUDGETS.improv.threads);
-  if (threads.length === 0) throw new Error("This campaign has no open threads yet.");
+export interface ImprovOptions {
+  focused?: boolean; // a tighter scene and fewer threads (cheapest); the default is wide
+  threads?: number; // send exactly this many threads (plus any tied to what the moment names)
+}
 
-  // The scene (party location, who's here, roster, cards for what's in play) comes from
-  // structured data; each PC also lists the story conditions on their threads.
+// mode "ranked" selects threads adaptively; "all" sends every open thread (baseline for comparison).
+export async function improv(campaignId: number, moment: string, mode: "ranked" | "all" = "ranked", model?: string, opts: ImprovOptions = {}) {
+  const budget = opts.focused ? BUDGETS.improvFocused : BUDGETS.improv;
+  const allThreads = await loadThreadContexts(campaignId);
+
+  // What the moment names decides which threads are guaranteed a place.
   const base = await buildScene(campaignId, { mentioned: new Set(), threadEntities: [] });
   const mentioned = new Set(findMentions(base.entities, moment).keys());
+  const threads: SelectedThread[] =
+    mode === "all"
+      ? allThreads.map((t) => ({ ...t, score: 0, reasons: [] as string[], detail: "full" as const, guaranteed: false }))
+      : selectThreads(await retrieveThreads(campaignId, moment, Number.POSITIVE_INFINITY), mentioned, { ...budget.threads, exact: opts.threads });
+  if (threads.length === 0) throw new Error("This campaign has no open threads yet.");
+
   const storyConditions = new Map(
     base.pcs.map((p) => [p.name, allThreads.filter((t) => t.kind === "condition" && t.entities.includes(p.name)).map((t) => t.title)]),
   );
@@ -314,8 +323,8 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
     base.partyLocation?.id,
     ...threads.slice(0, 2).flatMap((t) => t.entities.map((n) => nameToId.get(n))),
   ].filter((id): id is number => id != null);
-  const distances = await distancesFrom(campaignId, seeds, BUDGETS.improv.depth);
-  const scene = await buildScene(campaignId, { mentioned, threadEntities: threads.flatMap((t) => t.entities), storyConditions, distances, budget: BUDGETS.improv });
+  const distances = await distancesFrom(campaignId, seeds, budget.depth);
+  const scene = await buildScene(campaignId, { mentioned, threadEntities: threads.flatMap((t) => t.entities), storyConditions, distances, budget });
   const lists = buildLists(scene, moment, mentioned, mode === "all" ? undefined : distances);
   const typeOf = new Map(scene.entities.map((e) => [e.name, e.type]));
 
@@ -350,7 +359,7 @@ WHO MAY ACT
 - Not here (only kind "arrival" or "remote"): ${lists.actors.filter((n) => typeOf.get(n) === "npc" && !lists.check.present.has(n)).join(", ") || "nobody"}
 ${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 OPEN THREADS
-${threads.map((t, i) => (mode === "all" || i < BUDGETS.improv.fullThreads ? threadBlock(t, titleOf, typeOf) : `T${t.id} [${t.kind}] ${t.title}: ${t.summary}`)).join("\n\n")}
+${threads.map((t) => (t.detail === "full" ? threadBlock(t, titleOf, typeOf) : `T${t.id} [${t.kind}] ${t.title}: ${t.summary}`)).join("\n")}
 ${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callbacks.map(momentLine).join("\n")}\n` : ""}${tableBlock ? `\n${tableBlock}\n` : ""}
 WHAT JUST HAPPENED AT THE TABLE
 ${moment}`;

@@ -102,6 +102,46 @@ export function findMentions(entities: { name: string; aliases: string[] }[], te
   return hits;
 }
 
+export interface ThreadSelection {
+  min: number; // always send at least this many (by rank)
+  max: number; // never more than this
+  cutoff: number; // also send anything scoring at least this share of the best match (0-1)
+  full: number; // how many get full detail; the rest go as one-liners
+  exact?: number; // a fixed count instead (the --threads override), plus guaranteed ones
+}
+
+export interface SelectedThread extends ScoredThread {
+  detail: "full" | "line";
+  guaranteed: boolean; // tied to something the moment names
+}
+
+// Adaptive thread selection: a focused moment gets a few threads, a sprawling one more.
+// Threads tied directly to anything the moment names are always kept, whatever their rank
+// (Khayiulad's heresy bounty when Khayiulad is named). The strongest few go in full; the rest as
+// one-liners, which cost almost nothing (latency is output-bound).
+export function selectThreads(ranked: ScoredThread[], named: Set<string>, sel: ThreadSelection): SelectedThread[] {
+  if (!ranked.length) return [];
+  const top = ranked[0].score;
+  const guaranteed = new Set(ranked.filter((t) => t.entities.some((n) => named.has(n))).map((t) => t.id));
+  const picked: ScoredThread[] = [];
+  const add = (t: ScoredThread) => {
+    if (!picked.includes(t)) picked.push(t);
+  };
+
+  if (sel.exact != null) {
+    ranked.slice(0, sel.exact).forEach(add);
+    ranked.filter((t) => guaranteed.has(t.id)).forEach(add);
+  } else {
+    ranked.filter((t) => guaranteed.has(t.id)).slice(0, sel.max).forEach(add);
+    // A moment that names nothing ("they start a bar fight") gets a few more hooks to choose from.
+    ranked.slice(0, named.size ? sel.min : Math.max(sel.min, 6)).forEach(add);
+    for (const t of ranked) if (picked.length < sel.max && t.score > 0 && t.score >= top * sel.cutoff) add(t);
+  }
+  const ordered = picked.sort((a, b) => b.score - a.score);
+  const limit = sel.exact != null ? ordered.length : sel.max;
+  return ordered.slice(0, Math.max(limit, 1)).map((t, i) => ({ ...t, detail: i < sel.full ? "full" : "line", guaranteed: guaranteed.has(t.id) }));
+}
+
 export async function retrieveThreads(campaignId: number, moment: string, limit = 8): Promise<ScoredThread[]> {
   const threads = await loadThreadContexts(campaignId);
   if (threads.length === 0) return [];

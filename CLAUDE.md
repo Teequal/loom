@@ -279,5 +279,23 @@ Jacob approved the model on 24 Oct 2026: layers L0 Rules › L1 Identity › L2 
   - Improv's allowed-actor list is limited to entities within reach, plus anyone named and the PCs. A malformed answer now counts as a failed attempt and is retried (it used to crash the call).
   - **Measured (10 Duradan moments, Haiku):** expected-thread hits 9/9 → 9/9; input tokens −7 to −15%; speed per call ~5.2–5.4 s, unchanged.
   - **Finding:** latency is dominated by output (~850–920 tokens for three structured options), so context size isn't the speed lever. What it buys is relevance, and prompts that stay bounded as campaigns grow. Real speed levers: stream options as they're written (web UI), shorten the scaffold (fewer/shorter fields), or fewer options.
+- [x] **Step 5b: Adaptive thread selection** (`selectThreads` in `retrieval.ts`; budgets in `graph.ts`).
+  - Threads tied to anything the moment names are always kept.
+  - Plus everything scoring at least a share of the best match, with a floor and a ceiling. A moment naming nothing gets at least 6.
+  - The strongest few go in full; the rest as one-liners.
+  - Modes:
+    - wide (default): depth 3, more cards, min 8, max 20, cutoff 0.15, 6 full.
+    - `--focused`: depth 2, min 4, max 12, cutoff 0.35, 4 full.
+    - `--threads N`: exactly N plus the guaranteed ones.
+  - `--why` marks each thread full/line and ★ when guaranteed. The scenario runner also takes `--focused`.
+  - **Measured (10 Duradan moments, Haiku):**
+
+    | | Hits | Retrieval misses | Input tokens | Speed | Cost | Rejected |
+    |---|---|---|---|---|---|---|
+    | Fixed 6 | 9/9 | 3 | ~6.2k | 5.2 s | — | — |
+    | Focused | 9/9 | 2 | ~6.45k | 5.3 s | $0.0123 | 10 |
+    | Wide | 9/9 | 1 | ~7.5k | 5.2 s | $0.0133 | 5 |
+
+    The heresy bounty is recovered via guaranteed threads. **Wide is no slower and costs ~8% more, so it's now the default** (Jacob, 24 Oct); `--focused` is the lighter option.
 - [ ] Step 6: Embeddings as entry points
 - [ ] Step 7: Stress tests and a blind rerun
