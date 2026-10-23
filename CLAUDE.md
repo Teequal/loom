@@ -176,3 +176,19 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - **Duradan:** strong hidden connections, e.g. Khayiulad's stolen Ka'Anshar book may be the Codex the Whisperer wants, and the Lodestone may anchor the party's madness at a risk. Collisions tend to stack 4–5 threads; 2–3 is probably tighter.
 - [x] Step 7: Real-campaign test (Darkness in Duradan, sessions 1–5). **Verdict: pass, with speed as the weak criterion.** See [docs/spike-verdict.md](docs/spike-verdict.md) for the evidence and the fix list before showing other DMs.
 - [ ] Step 8 (optional): One-box local web page
+
+## Entity model build (docs/entity-model.md)
+
+- [x] Step 1: Schema with provenance (migration `drizzle/0001`):
+  - **Entities:** tier-1 columns (status, attitude, importance, last-known / actual / parent location) plus a `traits` JSON validated by `TraitsSchema` in `src/core/entity-fields.ts`.
+  - **Relationships:** `entity_relations` with a fixed type list, note, strength (-3…+3), secret flag and source.
+  - **Threads:** deadline, stakes and a secret flag.
+  - **Campaign:** party location, in-game date, tone, mechanics and safety lines.
+  - **Provenance:** every value records its source in `field_meta`. All writes go through `src/core/entities.ts` (`updateEntity`, `setRelation`, `updateCampaign`), which applies the rule: DM always writes; extraction fills blanks, proposes over DM values, and never erases.
+  - `isWithin` walks the location hierarchy.
+  - `seed` now keeps the fixture's campaign id, so reseeding doesn't change which campaign is the default.
+- [ ] Step 2: Manual entry commands (`entity show` / `entity set`)
+- [ ] Step 3: Extraction proposes entity and relationship changes; backfill Duradan
+- [ ] Step 4: Entity cards and party location in prompts; slip checks
+- [ ] Step 5: Embeddings and hybrid retrieval
+- [ ] Step 6: Test on known slips; blind rerun

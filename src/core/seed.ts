@@ -7,9 +7,11 @@ const FIXTURE_NAME = "Fixture: The Potion Swap";
 // The DM's real fix (give each player the other's cure) is deliberately NOT stored:
 // Loom should be able to find it from these threads.
 export async function seedFixture() {
+  // Reuse the fixture's id so reseeding doesn't make it the "most recent" campaign.
+  const [old] = await db.select().from(schema.campaigns).where(eq(schema.campaigns.name, FIXTURE_NAME));
   await db.delete(schema.campaigns).where(eq(schema.campaigns.name, FIXTURE_NAME));
 
-  const [campaign] = await db.insert(schema.campaigns).values({ name: FIXTURE_NAME }).returning();
+  const [campaign] = await db.insert(schema.campaigns).values({ id: old?.id, name: FIXTURE_NAME }).returning();
   const campaignId = campaign.id;
 
   const [s1, s2] = await db
