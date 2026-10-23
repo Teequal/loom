@@ -373,7 +373,9 @@ export async function isWithin(entityId: number, ancestorId: number) {
 // Two records turned out to be one character ("the mysterious guard" was Vex'ahlia all along).
 // The duplicate's name and aliases become aliases, its threads, relationships, moments and rules
 // move over, and the duplicate is deleted. Not undoable: the duplicate's row is gone.
-export async function mergeEntities(campaignId: number, fromId: number, intoId: number) {
+// `secret`: the players don't know they're the same. Threads stay unlinked from the real record (a
+// prompt would show "Involves: Vex'ahlia" on the mystery), and the identity becomes a GM-only secret.
+export async function mergeEntities(campaignId: number, fromId: number, intoId: number, opts: { secret?: boolean } = {}) {
   if (fromId === intoId) throw new Error("That's the same record.");
   const [from] = await db.select().from(schema.entities).where(and(eq(schema.entities.id, fromId), eq(schema.entities.campaignId, campaignId)));
   const [into] = await db.select().from(schema.entities).where(and(eq(schema.entities.id, intoId), eq(schema.entities.campaignId, campaignId)));
@@ -384,7 +386,7 @@ export async function mergeEntities(campaignId: number, fromId: number, intoId: 
   // Threads: move links, dropping any the survivor already has.
   const has = new Set((await db.select().from(schema.threadEntities).where(eq(schema.threadEntities.entityId, intoId))).map((r) => r.threadId));
   for (const r of await db.select().from(schema.threadEntities).where(eq(schema.threadEntities.entityId, fromId))) {
-    if (has.has(r.threadId)) continue;
+    if (has.has(r.threadId) || opts.secret) continue;
     await db.insert(schema.threadEntities).values({ ...r, entityId: intoId });
     moved.threads++;
   }
@@ -412,8 +414,18 @@ export async function mergeEntities(campaignId: number, fromId: number, intoId: 
 
   // The survivor learns the duplicate's names, and its description if it had none.
   const aliases = [...new Set([...into.aliases, from.name, ...from.aliases])].filter((a) => a !== into.name);
-  const result = await updateEntity(intoId, { aliases, ...(!into.description && from.description ? { description: from.description } : {}) }, { source: "dm" });
+  const traits = into.traits as EntityTraits;
+  const identity = `Secretly also "${from.name}"${from.description ? `: ${from.description}` : ""} The players don't know.`;
+  const result = await updateEntity(
+    intoId,
+    {
+      aliases,
+      ...(!into.description && from.description && !opts.secret ? { description: from.description } : {}),
+      ...(opts.secret ? { traits: { secrets: [...(traits.secrets ?? []), identity] } } : {}),
+    },
+    { source: "dm", ...(opts.secret ? { secret: ["traits.secrets"] } : {}) },
+  );
   await db.delete(schema.entities).where(eq(schema.entities.id, fromId));
   await logChanges([{ campaignId, subject: into.name, entityId: intoId, kind: "field", field: "merged", before: from.name, after: into.name, source: "dm" }]);
-  return { from, into, moved, notes: result.notes ?? [], keptDescription: from.description && into.description ? from.description : null };
+  return { from, into, moved, notes: result.notes ?? [], keptDescription: from.description && into.description && !opts.secret ? from.description : null };
 }
