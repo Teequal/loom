@@ -1,7 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "./db/client";
-import { ENTITY_TYPES, THREAD_KINDS } from "./db/schema";
+import { ENTITY_TYPES, MOMENT_TONES, THREAD_KINDS } from "./db/schema";
 import {
   applyEntityChanges,
   ENTITY_RULES,
@@ -11,7 +11,27 @@ import {
   type EntityUpdate,
   type RelationChange,
 } from "./entity-extraction";
+import { logChanges } from "./history";
 import { callLlm } from "./llm";
+import { addMoment } from "./moments";
+
+// Moments worth calling back later. Saved as suggestions; the DM stars the ones to keep.
+const MomentSchema = z.object({
+  session: z.number(), // which session it happened in
+  title: z.string(),
+  description: z.string(),
+  tone: z.enum(MOMENT_TONES),
+  callback: z.string(),
+  entities: z.array(z.string()),
+  threads: z.array(z.string()), // "T12" or "N3"
+});
+export type MomentSuggestion = z.infer<typeof MomentSchema>;
+
+const MOMENT_RULES = `key_moments
+- 0-3 moments per session worth calling back later: a big laugh, a turning point, a dramatic reveal, a character-defining choice, a costly mistake. Not routine events.
+- session: the session number it happened in. title: under 8 words. description: one or two sentences of what happened. tone: ${MOMENT_TONES.join(", ")}.
+- callback: one sentence on how it could come back later (an NPC remembers, a consequence lands, an echo of the moment).
+- entities: exact names of who and what was involved. threads: related threads as "T<id>" (or "N<n>" for new ones).`;
 
 const NewEntitySchema = z.object({
   name: z.string(),
@@ -43,11 +63,12 @@ export const ProposalSchema = z.object({
     }),
   ),
   thread_links: z.array(z.object({ from: z.string(), to: z.string(), note: z.string() })),
+  key_moments: z.array(MomentSchema),
 });
 export type Proposal = z.infer<typeof ProposalSchema>;
 
 // Backfill: entity details only, read from recaps already stored.
-const EnrichSchema = z.object({ new_entities: z.array(NewEntitySchema), ...EntityChangesShape });
+const EnrichSchema = z.object({ new_entities: z.array(NewEntitySchema), ...EntityChangesShape, key_moments: z.array(MomentSchema) });
 
 // A proposal plus what's needed to apply it later (possibly after the DM edits the file).
 // kind "enrich" proposals don't touch the session's stored recap.
@@ -69,6 +90,7 @@ function withDefaults(p: Partial<Proposal>): Proposal {
     entity_updates: p.entity_updates ?? [],
     relations: p.relations ?? [],
     party_location: p.party_location ?? "",
+    key_moments: p.key_moments ?? [],
   };
 }
 
@@ -101,6 +123,8 @@ thread_links
 
 ${ENTITY_RULES}
 
+${MOMENT_RULES}
+
 Use only what the recap says; do not invent facts. Lists of unanswered questions in the recap are strong signals for threads.`;
 
 const ENRICH_SYSTEM = `You maintain the records of the characters, places, items and factions in a tabletop RPG campaign, so the game master's assistant never contradicts established facts (a dead NPC acting, someone appearing where they can't be).
@@ -111,6 +135,8 @@ new_entities
 - Places, characters, items or factions that the notes name and that matter, but which are not yet entities (e.g. a district or building used as a location). type "pc" for player characters, "npc" for everyone else. aliases: other names used, otherwise []. description: one short line.
 
 ${ENTITY_RULES}
+
+${MOMENT_RULES}
 
 Use only what the recaps say; do not invent facts.`;
 
@@ -176,7 +202,8 @@ export type ProposalItem =
   | { n: number; kind: "link"; item: Proposal["thread_links"][number] }
   | { n: number; kind: "entity_update"; item: EntityUpdate }
   | { n: number; kind: "relation"; item: RelationChange }
-  | { n: number; kind: "party"; item: string };
+  | { n: number; kind: "party"; item: string }
+  | { n: number; kind: "moment"; item: MomentSuggestion };
 
 export function numberItems(raw: Partial<Proposal>): ProposalItem[] {
   const p = withDefaults(raw);
@@ -189,6 +216,7 @@ export function numberItems(raw: Partial<Proposal>): ProposalItem[] {
     ...p.entity_updates.map((item) => ({ n: ++n, kind: "entity_update" as const, item })),
     ...p.relations.map((item) => ({ n: ++n, kind: "relation" as const, item })),
     ...(p.party_location.trim() ? [{ n: ++n, kind: "party" as const, item: p.party_location }] : []),
+    ...p.key_moments.map((item) => ({ n: ++n, kind: "moment" as const, item })),
   ];
 }
 
@@ -201,6 +229,8 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
   const warnings: string[] = [];
   const counts = { entities: 0, threads: 0, updates: 0, links: 0 };
   let sessionId: number | null = null;
+  let threadByRef = new Map<string, number>();
+  const created: { id: number; name: string }[] = [];
 
   await db.transaction(async (tx) => {
     // Session row: reuse if this session was already recorded, otherwise create it.
@@ -222,6 +252,7 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
     for (const { item } of items.filter((i) => i.kind === "entity") as Extract<ProposalItem, { kind: "entity" }>[]) {
       if (entityByName.has(norm(item.name))) continue;
       const [e] = await tx.insert(schema.entities).values({ campaignId, ...item }).returning();
+      created.push({ id: e.id, name: e.name });
       for (const name of [e.name, ...e.aliases]) entityByName.set(norm(name), e.id);
       counts.entities++;
     }
@@ -229,7 +260,7 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
     // Resolve "T12" / "N3" references to real thread ids.
     const existingThreads = await tx.select().from(schema.threads).where(eq(schema.threads.campaignId, campaignId));
     const threadIds = new Set(existingThreads.map((t) => t.id));
-    const threadByRef = new Map<string, number>();
+    threadByRef = new Map<string, number>();
     const resolve = (ref: string) => {
       const m = ref.trim().match(/^T(\d+)$/i);
       if (m && threadIds.has(Number(m[1]))) return Number(m[1]);
@@ -293,6 +324,10 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
     }
   });
 
+  await logChanges(
+    created.map((e) => ({ campaignId, sessionId, subject: e.name, entityId: e.id, kind: "created" as const, source: "extracted" as const })),
+  );
+
   // Entity details go through the provenance rules (never overwriting the DM), outside the
   // transaction because those writes use their own queries.
   const of = <K extends ProposalItem["kind"]>(k: K) => items.filter((i) => i.kind === k).map((i) => i.item as Extract<ProposalItem, { kind: K }>["item"]);
@@ -303,5 +338,24 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
   });
   warnings.push(...entityResult.warnings);
 
-  return { counts, warnings, entityResult };
+  // Suggested key moments: saved as ☆ suggestions for the DM to star or dismiss.
+  const ents = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
+  const sess = await db.select().from(schema.sessions).where(eq(schema.sessions.campaignId, campaignId));
+  const known = new Set((await db.select({ id: schema.threads.id }).from(schema.threads).where(eq(schema.threads.campaignId, campaignId))).map((t) => t.id));
+  let moments = 0;
+  for (const m of of("moment")) {
+    const entityIds = m.entities.map((n) => ents.find((e) => [e.name, ...e.aliases].some((a) => a.toLowerCase() === n.trim().toLowerCase()))?.id).filter((id): id is number => id != null);
+    const threadIds = m.threads
+      .map((ref) => {
+        const t = ref.trim().match(/^T(\d+)$/i);
+        return t && known.has(Number(t[1])) ? Number(t[1]) : threadByRef.get(ref.trim().toUpperCase());
+      })
+      .filter((id): id is number => id != null);
+    // A recap is one session; only a backfill spans several.
+    const sid = file.kind === "enrich" ? (sess.find((x) => x.number === m.session)?.id ?? sessionId) : sessionId;
+    await addMoment(campaignId, { title: m.title, description: m.description, tone: m.tone, callback: m.callback, entityIds, threadIds, sessionId: sid }, "extracted", "suggested");
+    moments++;
+  }
+
+  return { counts, warnings, entityResult, moments };
 }

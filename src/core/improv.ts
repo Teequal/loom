@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { callLlm, type LlmResult } from "./llm";
 import { findMentions, loadThreadContexts, retrieveThreads, type ThreadContext } from "./retrieval";
+import { listMoments, momentLine } from "./moments";
 import { buildScene, type Scene } from "./scene";
 import { capabilitiesOf, checkBeat, checkOnFail, checkPossession, holdersOf, makeTagger, type CheckContext, type Possession, type ScaffoldBeat, type Tagger } from "./scaffold";
 
@@ -18,6 +19,7 @@ export interface ScaffoldOption {
   hand_off: { to: string; kind: "question" | "roll"; mechanic: string; text: string };
   on_fail: { target: string; effect: string };
   why: string;
+  callback?: string; // "M12" if it calls back a key moment, else "none"
 }
 
 export interface ImprovOption {
@@ -26,6 +28,7 @@ export interface ImprovOption {
   label: string;
   option: string; // readable text rendered from the scaffold
   why: string;
+  callback: { id: number; title: string } | null;
   scaffold: ScaffoldOption; // kept for the flavour pass
 }
 
@@ -53,7 +56,8 @@ Each option is a scaffold:
   PCs never act in any other kind, and never act inside another beat's sentence.
 - hand_off: how the players get involved. to is a PC or "table". kind "question" asks the player what their character does; kind "roll" names the roll. mechanic is a rule from RULES IN PLAY if this roll is one, else "none"; a rule's roll can only go to someone it applies to right now (listed after "now"), or to "table" if it applies to everyone. text is one short sentence for the GM, e.g. "Ask {Salaena}'s player whether she reaches for him." or "{Khayiulad} makes a madness roll."
 - on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. This is the only place a PC may act against their player's will. Otherwise target "none" and effect "".
-- label: 2-5 words. why: under 15 words, why this fits now; don't repeat the thread title or use thread numbers.`;
+- label: 2-5 words. why: under 15 words, why this fits now; don't repeat the thread title or use thread numbers.
+- callback: if the option echoes or pays off one of the KEY MOMENTS listed, its id ("M12"); otherwise "none". Use one only when it genuinely fits.`;
 
 // Moments where the players themselves reach someone at a distance; that NPC may then act from afar.
 const REMOTE_CONTACT =
@@ -63,7 +67,7 @@ const WHOLE_PARTY = /\b(?:the party|everyone|the group|they all|we)\b/i;
 
 const nonEmpty = (xs: string[], fallback: string): [string, ...string[]] => (xs.length ? (xs as [string, ...string[]]) : [fallback]);
 
-function optionsSchema(lists: { threads: string[]; actors: string[]; handOff: string[]; pcs: string[]; mechanics: string[] }) {
+function optionsSchema(lists: { threads: string[]; actors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[] }) {
   const Beat = z.object({
     kind: z.enum(["world", "npc", "walk_on", "arrival", "remote", "outcome"]),
     actor: z.enum(nonEmpty(["world", "walk-on", ...lists.actors], "world")),
@@ -86,6 +90,7 @@ function optionsSchema(lists: { threads: string[]; actors: string[]; handOff: st
         }),
         on_fail: z.object({ target: z.enum(nonEmpty(["none", ...lists.pcs], "none")), effect: z.string() }),
         why: z.string(),
+        callback: z.enum(nonEmpty(["none", ...lists.moments], "none")),
       }),
     ),
   });
@@ -132,7 +137,7 @@ export function renderOption(o: ScaffoldOption, tagger: Tagger) {
 // "loses her grip…" → "Salaena loses her grip…"; drops a repeated "On a failure," prefix.
 export function renderOnFail(target: string, effect: string, tagger: Tagger) {
   const text = tagger.render(tagger.tag(effect)).trim().replace(/^on a fail(?:ure|ed roll)?[,:]?\s*/i, "");
-  const startsWithVerb = /^[a-z]/.test(text) && !/^(?:his|her|their|its|the|a|an|for|as|while|when|with)\b/.test(text);
+  const startsWithVerb = /^[a-z]/.test(text) && !/^(?:he|she|they|it|his|her|their|its|the|a|an|for|as|while|when|with)\b/.test(text);
   return sentence(capitalise(startsWithVerb ? `${target} ${text}` : text));
 }
 
@@ -278,8 +283,17 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   const lists = buildLists(scene, moment, mentioned);
   const typeOf = new Map(scene.entities.map((e) => [e.name, e.type]));
 
+  // Key moments involving who and what is in play: what a callback could draw on (up to 3).
+  const inPlay = new Set([...mentioned, ...threads.slice(0, 4).flatMap((t) => t.entities)]);
+  const callbacks = (await listMoments(campaignId, ["key"]))
+    .map((m) => ({ m, overlap: m.entities.filter((e) => inPlay.has(e)).length + (m.threads.some((t) => threads.some((x) => x.id === t.id)) ? 1 : 0) }))
+    .filter((x) => x.overlap > 0)
+    .sort((a, b) => b.overlap - a.overlap || b.m.id - a.m.id)
+    .slice(0, 3)
+    .map((x) => x.m);
+
   const titleOf = new Map(threads.map((t) => [t.id, t.title]));
-  const OptionsSchema = optionsSchema({ threads: threads.map((t) => `T${t.id}`), actors: lists.actors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics });
+  const OptionsSchema = optionsSchema({ threads: threads.map((t) => `T${t.id}`), actors: lists.actors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`) });
   const prompt = `${scene.text}
 
 WHO MAY ACT
@@ -288,7 +302,7 @@ WHO MAY ACT
 ${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 OPEN THREADS
 ${threads.map((t) => threadBlock(t, titleOf, typeOf)).join("\n\n")}
-
+${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callbacks.map(momentLine).join("\n")}\n` : ""}
 WHAT JUST HAPPENED AT THE TABLE
 ${moment}`;
 
@@ -340,6 +354,10 @@ IMPORTANT: this moment runs into the table's safety line(s): ${scene.safetyLines
     label: o.label,
     option: renderOption(o, lists.tagger),
     why: lists.tagger.render(lists.tagger.tag(o.why)),
+    callback: (() => {
+      const m = callbacks.find((x) => `M${x.id}` === o.callback);
+      return m ? { id: m.id, title: m.title } : null;
+    })(),
     scaffold: o,
   }));
 

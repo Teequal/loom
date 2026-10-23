@@ -252,7 +252,13 @@ Jacob approved the model on 24 Oct 2026: layers L0 Rules › L1 Identity › L2 
   - **At generation** (`checkPossession` in `scaffold.ts`): an item can only be used, carried "in someone's hand/pack", or called "X's item" by whoever holds it (holding a piece counts for its set, and the set for its pieces). Hand-overs in a beat ("snatches", "tosses … to") count from then on, including for item rules: a hand-over to Iresia makes her Figurine madness roll valid.
   - **Moment overrides:** if the moment puts an item with a PC, the moment wins for that call, and the GM gets a note with the command to update the records. The prompt lists who holds what.
   - **Tests:** 7/7 write-law cases on the fixture; 13/13 crafted possession cases; the earlier 25/25 still pass. Live: "Iresia grabs the monk figurine" gives a records note and a valid madness roll for Iresia; "Khayiulad sells the monk figurine" does the same for Khayiulad.
-- [ ] Step 3: L4 change log and key moments; callbacks in suggest
+- [x] **Step 3: L4 history, key moments and callbacks** (migration `drizzle/0003`).
+  - **Change log** (`state_changes`, `src/core/history.ts`): every write through `entities.ts` is recorded automatically, with before/after, source and session. That covers entity fields, relationships added/removed/changed (including replaced holders), campaign settings, thread fields, and entities created by hand or by recaps. `entity history "<name>"` shows the timeline.
+  - **Key moments** (`key_moments`, `src/core/moments.ts`): title, description, tone, callback idea, entities, threads, session; status key ★ / suggested ☆ / dismissed.
+    - `moment list | add | from-improv <n> | star | dismiss`. `from-improv` flags an option you used: the CLI's star button.
+    - Recaps and `enrich` suggest 0–3 moments per session, as ☆ items in the approve flow.
+  - **Callbacks:** `suggest` has a CALLBACKS section built from ★ moments (validated ids). Each improv option can name a ★ moment it calls back (an id chosen from up to 3 relevant moments), shown as ⟲.
+  - **Duradan:** `enrich` suggested 6 moments (Gary's death, Salaena's shield, the stick horse, Salaena kicking Darius, the duplicates reveal, Dahlia's window entrance). **All are ☆, waiting for Jacob to star.** A test with two temporary stars produced strong callbacks (the stick horse half-visible in the Knight figurine's light; "Salaena's kick, but worse"); both were reverted afterwards.
 - [ ] Step 4: Player layer and spotlight-aware ranking
 - [ ] Step 5: Context assembly by graph distance, with per-feature budgets
 - [ ] Step 6: Embeddings as entry points

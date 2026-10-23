@@ -3,6 +3,7 @@ import { z } from "zod";
 import { db, schema } from "./db/client";
 import { callLlm } from "./llm";
 import { loadThreadContexts, type ThreadContext } from "./retrieval";
+import { listMoments, momentLine } from "./moments";
 import { buildScene } from "./scene";
 
 // Between-session prep: collisions (open threads that pay each other off), something for each
@@ -15,6 +16,7 @@ const SuggestionsSchema = z.object({
   ),
   per_player: z.array(z.object({ pc: z.string(), thread_ids: z.array(z.number()), idea: z.string() })),
   neglected: z.array(z.object({ thread_id: z.number(), idea: z.string() })),
+  callbacks: z.array(z.object({ moment_id: z.number(), thread_ids: z.array(z.number()), idea: z.string() })),
 });
 export type Suggestions = z.infer<typeof SuggestionsSchema>;
 
@@ -29,6 +31,7 @@ Produce three things:
    The best collisions resolve or transform every thread involved and make the players need each other. thread_ids lists every thread used (at least two). title: 3-6 words. idea: 2-3 sentences the GM can prepare from. why: one line.
 2. per_player: one idea for each player character, built on the threads attached to them, so every player gets a moment next session. pc is the character's exact name.
 3. neglected (up to 3): threads marked as quiet; suggest a small way to bring each back into play.
+4. callbacks (2-3, only if KEY MOMENTS are listed): bring a key moment back. Someone remembers it, a consequence finally lands, or the moment echoes in a new form. moment_id is its number (M12 → 12); thread_ids the threads it ties into. Callbacks land best when they connect to where the story is now.
 
 Rules:
 - Use only the facts listed. You may propose hidden connections (that is the point), but never contradict what the threads say.
@@ -66,10 +69,14 @@ export async function suggest(campaignId: number, model?: string) {
     storyConditions: new Map(pcs.map((p) => [p.name, threads.filter((t) => t.kind === "condition" && t.entities.includes(p.name)).map((t) => t.title)])),
   });
 
+  // Key moments the DM flagged: what callbacks draw on (most recent first, capped).
+  const moments = (await listMoments(campaignId, ["key"])).slice(-15);
+
   const prompt = `${scene.text}
 
 OPEN THREADS (latest session: ${latestSession})
-${threads.map((t) => threadLine(t, typeOf, latestSession)).join("\n\n")}`;
+${threads.map((t) => threadLine(t, typeOf, latestSession)).join("\n\n")}
+${moments.length ? `\nKEY MOMENTS (flagged by the GM)\n${moments.map(momentLine).join("\n")}` : ""}`;
 
   const res = await callLlm({ feature: "suggest", system: SYSTEM, prompt, schema: SuggestionsSchema, maxTokens: 16000, effort: "medium", model });
 
@@ -83,10 +90,13 @@ ${threads.map((t) => threadLine(t, typeOf, latestSession)).join("\n\n")}`;
       .map((p) => ({ ...p, thread_ids: known(p.thread_ids) }))
       .filter((p) => pcNames.has(p.pc.toLowerCase())),
     neglected: res.data.neglected.filter((n) => titleOf.has(n.thread_id)),
+    callbacks: res.data.callbacks
+      .filter((c) => moments.some((m) => m.id === c.moment_id))
+      .map((c) => ({ ...c, thread_ids: known(c.thread_ids) })),
   };
   const dropped =
-    res.data.collisions.length + res.data.per_player.length + res.data.neglected.length -
-    (data.collisions.length + data.per_player.length + data.neglected.length);
+    res.data.collisions.length + res.data.per_player.length + res.data.neglected.length + res.data.callbacks.length -
+    (data.collisions.length + data.per_player.length + data.neglected.length + data.callbacks.length);
 
-  return { data, dropped, titleOf, llm: res };
+  return { data, dropped, titleOf, moments, llm: res };
 }

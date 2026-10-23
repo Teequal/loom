@@ -9,6 +9,7 @@ import {
   type Source,
   TraitsSchema,
 } from "./entity-fields";
+import { logChanges } from "./history";
 import { RELATION_LAWS } from "./rules";
 
 // Writes to entities, relationships and the campaign, applying the provenance rule:
@@ -135,6 +136,19 @@ export async function updateEntity(entityId: number, patch: EntityPatch, opts: W
   }
   update.traits = nextTraits;
   await db.update(schema.entities).set(update).where(eq(schema.entities.id, entityId));
+  await logChanges(
+    Object.keys(apply).map((field) => ({
+      campaignId: entity.campaignId,
+      sessionId: opts.sessionId,
+      subject: entity.name,
+      entityId: entity.id,
+      kind: "field" as const,
+      field,
+      before: current[field] ?? null,
+      after: apply[field] ?? null,
+      source: opts.source,
+    })),
+  );
   return result;
 }
 
@@ -213,22 +227,24 @@ export async function setRelation(campaignId: number, input: RelationInput, opts
     }
     for (const r of clash) {
       await db.delete(schema.entityRelations).where(eq(schema.entityRelations.id, r.id));
-      notes.push(`replaces: ${nameOf(r.fromEntityId)} ${verb(input.type)} ${nameOf(r.toEntityId)}`);
+      const subject = `${nameOf(r.fromEntityId)} ${verb(input.type)} ${nameOf(r.toEntityId)}`;
+      await logChanges([{ campaignId, sessionId: opts.sessionId, subject, entityId: r.fromEntityId, kind: "relation-removed", field: input.type, before: { note: r.note }, after: null, source: opts.source }]);
+      notes.push(`replaces: ${subject}`);
     }
   }
 
-  const result = await upsertRelation(campaignId, input, opts);
+  const result = await upsertRelation(campaignId, input, opts, `${from.name} ${verb(input.type)} ${to.name}`);
   result.notes = [...notes, ...(result.notes ?? [])];
 
   // Two-way relationships are recorded both ways.
   if (law.symmetric && result.written.length) {
-    const back = await upsertRelation(campaignId, { ...input, fromEntityId: input.toEntityId, toEntityId: input.fromEntityId }, opts);
+    const back = await upsertRelation(campaignId, { ...input, fromEntityId: input.toEntityId, toEntityId: input.fromEntityId }, opts, `${to.name} ${verb(input.type)} ${from.name}`);
     if (back.written.length) result.notes.push(`also recorded: ${to.name} ${verb(input.type)} ${from.name}`);
   }
   return result;
 }
 
-async function upsertRelation(campaignId: number, input: RelationInput, opts: WriteOptions): Promise<WriteResult> {
+async function upsertRelation(campaignId: number, input: RelationInput, opts: WriteOptions, subject: string): Promise<WriteResult> {
   const strength = Math.max(-3, Math.min(3, Math.round(input.strength ?? 0)));
   const [existing] = await db
     .select()
@@ -254,6 +270,7 @@ async function upsertRelation(campaignId: number, input: RelationInput, opts: Wr
       sinceSessionId: opts.sessionId ?? null,
       source: opts.source,
     });
+    await logChanges([{ campaignId, sessionId: opts.sessionId, subject, entityId: input.fromEntityId, kind: "relation-added", field: input.type, before: null, after: { note: input.note ?? "", strength }, source: opts.source }]);
     return { written: [label], proposed: [] };
   }
 
@@ -263,14 +280,18 @@ async function upsertRelation(campaignId: number, input: RelationInput, opts: Wr
     return { written: [], proposed: [{ field: label, current: { note: existing.note, strength: existing.strength }, proposed: next }] };
   }
   await db.update(schema.entityRelations).set({ ...next, source: opts.source }).where(eq(schema.entityRelations.id, existing.id));
+  await logChanges([{ campaignId, sessionId: opts.sessionId, subject, entityId: input.fromEntityId, kind: "relation-changed", field: input.type, before: { note: existing.note, strength: existing.strength }, after: next, source: opts.source }]);
   return { written: [label], proposed: [] };
 }
 
 // Removes a relationship; a two-way one is removed in both directions.
-export async function removeRelation(relationId: number) {
+export async function removeRelation(relationId: number, source: "dm" | "extracted" = "dm") {
   const [rel] = await db.select().from(schema.entityRelations).where(eq(schema.entityRelations.id, relationId));
   if (!rel) return;
   await db.delete(schema.entityRelations).where(eq(schema.entityRelations.id, relationId));
+  const ents = await db.select({ id: schema.entities.id, name: schema.entities.name }).from(schema.entities).where(inArray(schema.entities.id, [rel.fromEntityId, rel.toEntityId]));
+  const n = (id: number) => ents.find((e) => e.id === id)?.name ?? `#${id}`;
+  await logChanges([{ campaignId: rel.campaignId, subject: `${n(rel.fromEntityId)} ${verb(rel.type)} ${n(rel.toEntityId)}`, entityId: rel.fromEntityId, kind: "relation-removed", field: rel.type, before: { note: rel.note }, after: null, source }]);
   if (RELATION_LAWS[rel.type]?.symmetric) {
     await db
       .delete(schema.entityRelations)
@@ -300,7 +321,11 @@ export async function updateCampaign(campaignId: number, patch: CampaignPatch, o
     if (!loc || loc.campaignId !== campaignId || loc.type !== "location") throw new Error(`Entity ${patch.partyLocationId} isn't a location in this campaign`);
   }
   const { apply, nextMeta, result } = planWrites({ ...campaign }, campaign.fieldMeta, { ...patch }, opts);
-  if (result.written.length) await db.update(schema.campaigns).set({ ...apply, fieldMeta: nextMeta }).where(eq(schema.campaigns.id, campaignId));
+  if (result.written.length) {
+    await db.update(schema.campaigns).set({ ...apply, fieldMeta: nextMeta }).where(eq(schema.campaigns.id, campaignId));
+    const current = campaign as Record<string, unknown>;
+    await logChanges(Object.keys(apply).map((field) => ({ campaignId, sessionId: opts.sessionId, subject: "campaign", kind: "field" as const, field, before: current[field] ?? null, after: apply[field] ?? null, source: opts.source })));
+  }
   return result;
 }
 
@@ -316,6 +341,8 @@ export async function updateThread(threadId: number, patch: ThreadPatch, opts: W
   const { apply, nextMeta, result } = planWrites({ ...thread }, thread.fieldMeta, { ...patch }, opts);
   if (result.written.length) {
     await db.update(schema.threads).set({ ...apply, fieldMeta: nextMeta }).where(eq(schema.threads.id, threadId));
+    const current = thread as Record<string, unknown>;
+    await logChanges(Object.keys(apply).map((field) => ({ campaignId: thread.campaignId, sessionId: opts.sessionId, subject: thread.title, kind: "field" as const, field, before: current[field] ?? null, after: apply[field] ?? null, source: opts.source })));
     await db.insert(schema.threadEvents).values({
       threadId,
       sessionId: opts.sessionId ?? null,

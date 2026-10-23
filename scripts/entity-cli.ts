@@ -3,6 +3,7 @@
 import { and, asc, eq } from "drizzle-orm";
 import { db, schema } from "@/core/db/client";
 import { findEntity, loadEntityCard } from "@/core/entity-card";
+import { historyOf, logChanges } from "@/core/history";
 import {
   ENTITY_STATUSES,
   type EntityTraits,
@@ -166,6 +167,7 @@ async function showEntity(campaignId: number, query: string) {
 
 const ENTITY_USAGE = `entity list [--type npc]
 entity show "<name>"
+entity history "<name>"            what changed, when, and on whose word
 entity new "<name>" <${ENTITY_TYPES.join("|")}> [field=value …]
 entity set "<name>" field=value [field=value …] [--secret field,field]
   Location fields take a location's name: last-known=, actual=, parent=
@@ -201,6 +203,16 @@ export async function entityCommand(campaignId: number, args: string[]) {
     case "show":
       if (!pos[0]) return console.log(ENTITY_USAGE);
       return showEntity(campaignId, pos[0]);
+    case "history": {
+      if (!pos[0]) return console.log(ENTITY_USAGE);
+      const e = await findEntity(campaignId, pos[0]);
+      const lines = await historyOf(campaignId, e);
+      if (!lines.length) return console.log(`Nothing recorded about ${e.name} yet.`);
+      console.log(`\n${e.name}: history`);
+      for (const l of lines) console.log(`  ${l.session != null ? `s${l.session}`.padEnd(4) : "    "} ${l.text}${l.source === "dm" ? " ✎" : " ⚙"}`);
+      console.log("\n✎ entered by you · ⚙ extracted · s = the session it happened in (or the latest one when entered)");
+      return;
+    }
     case "new": {
       const [name, type] = pos;
       if (!name || !(ENTITY_TYPES as readonly string[]).includes(type)) return console.log(ENTITY_USAGE);
@@ -208,6 +220,7 @@ export async function entityCommand(campaignId: number, args: string[]) {
         .insert(schema.entities)
         .values({ campaignId, name, type: type as (typeof ENTITY_TYPES)[number], fieldMeta: { name: { source: "dm", at: new Date().toISOString() } } })
         .returning();
+      await logChanges([{ campaignId, subject: e.name, entityId: e.id, kind: "created", source: "dm" }]);
       console.log(`Created ${e.name} (${e.type}).`);
       if (kv.length) report(await updateEntity(e.id, await buildPatch(campaignId, kv), { ...DM, secret }));
       return;

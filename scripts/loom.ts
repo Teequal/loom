@@ -21,6 +21,7 @@ import { seedFixture } from "@/core/seed";
 import { suggest } from "@/core/suggest";
 import { listThreads } from "@/core/threads";
 import { campaignCommand, entityCommand, relateCommand, threadCommand } from "./entity-cli";
+import { momentCommand } from "./moments-cli";
 import { ruleCommand } from "./rules-cli";
 
 const USAGE = `Usage: npm run loom -- <command>   (add --campaign <id> to any command; default: most recent)
@@ -41,6 +42,9 @@ Campaign data
   campaign show | campaign set party=<location> tone=… date=… safety=…
   campaign toggle [<name> <option>]   5e variants that change the story (resting, death, madness…)
   rule list | rule draft "<in your words>" | rule add "<name>" … | rule remove "<name>"
+  moment list | moment add "<title>" … | moment from-improv <n> | moment star|dismiss <id>
+                             Key moments: the history callbacks draw on
+  entity history "<name>"    What changed about it, when, and on whose word
                              House rules and effects: what fires when, and who it applies to
 
 Engine
@@ -126,9 +130,15 @@ async function printProposal(file: ProposalFile) {
       const r = i.item;
       const s = r.strength ? ` (${r.strength > 0 ? "+" : ""}${r.strength})` : "";
       console.log(`${n} ${r.from} ${r.type.replace(/_/g, " ")} ${r.to}${s}${r.note ? `: ${r.note}` : ""}`);
-    } else {
+    } else if (i.kind === "party") {
       heading("PARTY LOCATION");
       console.log(`${n} The party is at ${i.item}`);
+    } else {
+      heading("KEY MOMENTS (saved as suggestions to star)");
+      const m = i.item;
+      console.log(`${n} ☆ s${m.session} · ${m.tone}  ${m.title}`);
+      console.log(`        ${m.description}`);
+      if (m.callback) console.log(`        callback: ${m.callback}`);
     }
   }
 }
@@ -145,10 +155,10 @@ async function reviewAndApply(file: ProposalFile, path: string) {
   if (answer === "" || answer.toLowerCase() === "n") return console.log("Nothing applied.");
 
   const skip = new Set(answer.toLowerCase() === "a" ? [] : (answer.match(/\d+/g) ?? []).map(Number));
-  const { counts, warnings, entityResult: er } = await applyProposal(file, skip);
+  const { counts, warnings, entityResult: er, moments } = await applyProposal(file, skip);
   console.log(
     `\nApplied: ${counts.entities} new entities, ${counts.threads} new threads, ${counts.updates} thread updates, ${counts.links} links, ` +
-      `${er.updated} entities' details, ${er.relations} relationships${er.party ? ", party location" : ""}.`,
+      `${er.updated} entities' details, ${er.relations} relationships${er.party ? ", party location" : ""}, ${moments} suggested key moments (moment list).`,
   );
   for (const w of warnings) console.log(`  ! ${w}`);
   if (er.conflicts.length) {
@@ -181,12 +191,14 @@ async function main() {
     case "relate":
     case "unrelate":
     case "campaign":
-    case "rule": {
+    case "rule":
+    case "moment": {
       const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
       if (!campaignId) return console.log('No campaigns yet. Try: npm run loom -- new-campaign "My campaign"');
       if (command === "entity") await entityCommand(campaignId, args);
       else if (command === "campaign") await campaignCommand(campaignId, args);
       else if (command === "rule") await ruleCommand(campaignId, args);
+      else if (command === "moment") await momentCommand(campaignId, args);
       else await relateCommand(campaignId, args, command === "unrelate");
       break;
     }
@@ -242,6 +254,7 @@ async function main() {
       r.options.forEach((o, i) => {
         const ties = [o.thread_id, ...o.also_ties_to].map((id) => r.titleOf.get(id)).join(" + ");
         console.log(`${i + 1}. ${o.label.toUpperCase()}   ⟵ ${ties}`);
+        if (o.callback) console.log(`   ⟲ calls back: ${o.callback.title} (M${o.callback.id})`);
         console.log(`   ${o.option}`);
         console.log(`   why: ${o.why}\n`);
       });
@@ -254,9 +267,9 @@ async function main() {
       mkdirSync("data", { recursive: true });
       writeFileSync(
         "data/last-improv.json",
-        JSON.stringify({ campaignId, moment, options: r.options.map((o) => ({ label: o.label, threads: [o.thread_id, ...o.also_ties_to].map((id) => r.titleOf.get(id)), scaffold: o.scaffold })) }, null, 2),
+        JSON.stringify({ campaignId, moment, options: r.options.map((o) => ({ label: o.label, text: o.option, threadIds: [o.thread_id, ...o.also_ties_to], threads: [o.thread_id, ...o.also_ties_to].map((id) => r.titleOf.get(id)), scaffold: o.scaffold })) }, null, 2),
       );
-      if (r.options.length) console.log(`Read-aloud version of one: npm run loom -- flavor <1-${r.options.length}>`);
+      if (r.options.length) console.log(`Read-aloud version of one: npm run loom -- flavor <1-${r.options.length}> · used one? npm run loom -- moment from-improv <n>`);
       break;
     }
     case "flavor": {
@@ -276,7 +289,7 @@ async function main() {
     case "suggest": {
       const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
       console.log("Looking for payoffs between sessions…");
-      const { data, dropped, titleOf, llm } = await suggest(campaignId, flag(args, "model"));
+      const { data, dropped, titleOf, moments, llm } = await suggest(campaignId, flag(args, "model"));
       const names = (ids: number[]) => ids.map((id) => titleOf.get(id)).join(" + ");
 
       console.log("\nCOLLISIONS: threads that pay each other off");
@@ -285,6 +298,13 @@ async function main() {
       });
       console.log("\nFOR EACH PLAYER");
       for (const p of data.per_player) console.log(`\n• ${p.pc}${p.thread_ids.length ? `  ⟵ ${names(p.thread_ids)}` : ""}\n   ${p.idea}`);
+      if (data.callbacks.length) {
+        console.log("\nCALLBACKS: bring a key moment back");
+        for (const c of data.callbacks) {
+          const m = moments.find((x) => x.id === c.moment_id)!;
+          console.log(`\n⟲ ${m.title} (session ${m.session ?? "?"})${c.thread_ids.length ? `  ⟵ ${names(c.thread_ids)}` : ""}\n   ${c.idea}`);
+        }
+      }
       if (data.neglected.length) {
         console.log("\nQUIET THREADS");
         for (const n of data.neglected) console.log(`\n• ${titleOf.get(n.thread_id)}\n   ${n.idea}`);

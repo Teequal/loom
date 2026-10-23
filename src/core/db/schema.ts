@@ -111,6 +111,42 @@ export const effects = sqliteTable("effects", {
   createdAt: createdAt(),
 });
 
+// L4 history (docs/loom-model.md §5). Every state change, recorded automatically: who held what
+// when, where people were, what changed and on whose word. Invisible day to day; it answers
+// "as of session 3" and lets Loom notice contradictions.
+export const stateChanges = sqliteTable("state_changes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+  sessionId: integer("session_id").references(() => sessions.id), // the session it happened in, or the latest one at the time
+  subject: text("subject").notNull(), // "Monk figurine", "Salaena holds Monk figurine", "campaign"
+  entityId: integer("entity_id").references(() => entities.id, { onDelete: "set null" }),
+  kind: text("kind", { enum: ["field", "relation-added", "relation-removed", "relation-changed", "created"] }).notNull(),
+  field: text("field").notNull().default(""),
+  before: text("before", { mode: "json" }).$type<unknown>(),
+  after: text("after", { mode: "json" }).$type<unknown>(),
+  source: text("source", { enum: ["dm", "extracted"] }).notNull(),
+  createdAt: createdAt(),
+});
+
+export const MOMENT_TONES = ["comedic", "heroic", "tragic", "eerie", "tense", "triumphant", "tender", "other"] as const;
+
+// Key moments: the curated history callbacks draw on. The DM flags them (or accepts ones Loom
+// suggests from recaps), so callbacks reference what mattered rather than trivia.
+export const keyMoments = sqliteTable("key_moments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+  sessionId: integer("session_id").references(() => sessions.id),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  tone: text("tone", { enum: MOMENT_TONES }).notNull().default("other"),
+  callback: text("callback").notNull().default(""), // how it could come back
+  entityIds: text("entity_ids", { mode: "json" }).$type<number[]>().notNull().default([]),
+  threadIds: text("thread_ids", { mode: "json" }).$type<number[]>().notNull().default([]),
+  status: text("status", { enum: ["key", "suggested", "dismissed"] }).notNull().default("key"),
+  source: text("source", { enum: ["dm", "extracted"] }).notNull(),
+  createdAt: createdAt(),
+});
+
 // The core unit: anything with unspent narrative payoff.
 // Player states are threads of kind "condition" linked to a PC entity.
 export const threads = sqliteTable("threads", {
