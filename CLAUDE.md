@@ -175,7 +175,12 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - **Potion fixture:** found a near-match for the real cure swap ("matched-pair potions; neither can be cured without the other"). The prompt hints at the general pattern (one PC's affliction may hold the key to another's), not the answer.
   - **Duradan:** strong hidden connections, e.g. Khayiulad's stolen Ka'Anshar book may be the Codex the Whisperer wants, and the Lodestone may anchor the party's madness at a risk. Collisions tend to stack 4–5 threads; 2–3 is probably tighter.
 - [x] Step 7: Real-campaign test (Darkness in Duradan, sessions 1–5). **Verdict: pass, with speed as the weak criterion.** See [docs/spike-verdict.md](docs/spike-verdict.md) for the evidence and the fix list before showing other DMs.
-- [ ] Step 8 (optional): One-box local web page
+- [x] Step 8: One-box local web page (24 Oct). `npm run dev`, then http://localhost:3000.
+  - **Page** (`src/app/improv-box.tsx`): one box (Enter to ask), Quick (Haiku) / Best (Opus) toggle, campaign picker. Cards appear as each option is written, with thread chips, the "why" line, a ⟲ callback chip and a Copy button for pasting into Discord. Notes about records that disagree go below the cards. Light and dark, works at phone width. Campaign and model choice are remembered per browser.
+  - **Streaming:** `callLlm` takes `onText` (the Anthropic stream's text snapshots). `improv` pulls each finished option object out of the JSON as it's written (`completedOptions`), checks it, and calls `onOption` straight away, up to 3. With safety lines set, options wait for the safety check. If the answer goes wrong partway, options that arrived whole still count.
+  - **API:** `POST /api/improv` streams newline-delimited JSON (`option` … `done` or `error`); `GET /api/campaigns`. Migrations run once per server process (`src/server/db.ts`).
+  - **Measured (Haiku):** about 0.5 s of setup, about 1.4 s to the model's first token, then about 1.3 s per option. **The first option shows at ~3 s**, down from 6–7 s for the full set.
+  - The desktop app's preview runner can't read the Desktop folder (macOS permission), so run the dev server from a terminal; `.claude/launch.json` attaches the preview to port 3000.
 
 ## Entity model build (docs/entity-model.md)
 

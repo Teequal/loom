@@ -54,3 +54,6 @@ next-env.d.ts
 
 # scenarios built from real campaigns stay private
 /scenarios/private/
+
+# agent worktrees
+/.claude/worktrees/

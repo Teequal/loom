@@ -32,8 +32,15 @@ export const anthropicProvider: LlmProvider = {
       ...(fallback ? { betas: ["server-side-fallback-2026-07-01"], fallbacks: "default" as const } : {}),
     };
     // Large responses must stream (the SDK refuses long non-streaming requests); same result either way.
-    const response =
-      params.max_tokens > 16000 ? await client.beta.messages.stream(params).finalMessage() : await client.beta.messages.parse(params);
+    // A caller that wants the answer as it's written gets each new snapshot of the text.
+    let response;
+    if (req.onText || params.max_tokens > 16000) {
+      const stream = client.beta.messages.stream(params);
+      if (req.onText) stream.on("text", (_delta, snapshot) => req.onText!(snapshot));
+      response = await stream.finalMessage();
+    } else {
+      response = await client.beta.messages.parse(params);
+    }
 
     if (response.stop_reason === "refusal") throw new Error("Model declined the request");
     if (response.stop_reason === "max_tokens") throw new Error(`Response cut off at max_tokens (${req.maxTokens ?? 4000})`);

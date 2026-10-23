@@ -11,6 +11,7 @@ export interface LlmRequest<T> {
   effort?: "low" | "medium" | "high";
   model?: string; // overrides the feature's default model; short names like "opus" work
   fast?: boolean; // skip the model's hidden reasoning where the model allows it (lower latency)
+  onText?: (snapshot: string) => void; // streams the answer as it's written (the JSON so far)
 }
 
 export interface ProviderResponse<T> {

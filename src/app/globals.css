@@ -1,26 +1,63 @@
 @import "tailwindcss";
 
+/* Loom's palette: warm paper and ink, with a brass "thread" accent for ties back to the story. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f7f4ee;
+  --surface: #fffdf9;
+  --foreground: #1f1b16;
+  --muted: #6f665a;
+  --line: #e4ddd1;
+  --thread: #a8651e;
+  --thread-soft: #f3e6d4;
+  --danger: #a23b2a;
 }
 
 @theme inline {
   --color-background: var(--background);
+  --color-surface: var(--surface);
   --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-thread: var(--thread);
+  --color-thread-soft: var(--thread-soft);
+  --color-danger: var(--danger);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #14120f;
+    --surface: #1d1a16;
+    --foreground: #ece6dc;
+    --muted: #9c9284;
+    --line: #2f2a24;
+    --thread: #e0a25a;
+    --thread-soft: #33261a;
+    --danger: #e0806e;
   }
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise {
+  animation: rise 220ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rise {
+    animation: none;
+  }
 }

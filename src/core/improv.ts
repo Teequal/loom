@@ -373,6 +373,32 @@ export interface ImprovOptions {
   focused?: boolean; // a tighter scene and fewer threads (cheapest); the default is wide
   threads?: number; // send exactly this many threads (plus any tied to what the moment names)
   embeddings?: string; // "local" | "voyage" | "off"; default from LOOM_EMBEDDINGS (local)
+  // Called with each option the moment it's written and has passed the checks (up to 3), so a
+  // page can show the first one in ~2 s instead of waiting for all of them. With safety lines set,
+  // options are held until the safety check has seen them.
+  onOption?: (o: ImprovOption) => void;
+}
+
+// The complete objects so far in the "options" array of a JSON answer that's still being written.
+export function completedOptions(text: string): string[] {
+  const at = text.indexOf("[", text.indexOf('"options"'));
+  if (at < 0) return [];
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  for (let i = at + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === "{") {
+      if (depth++ === 0) start = i;
+    } else if (ch === "}" && --depth === 0) out.push(text.slice(start, i + 1));
+    else if (ch === "]" && depth === 0) break;
+  }
+  return out;
 }
 
 // mode "ranked" selects threads adaptively; "all" sends every open thread (baseline for comparison).
@@ -470,33 +496,73 @@ ${sceneBlock}${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callback
 WHAT JUST HAPPENED AT THE TABLE
 ${moment}`;
 
-  // Ask once; if fewer than two options survive the checks, ask once more.
+  const idOf = (ref: string) => Number(ref.replace(/^T/, ""));
+  const toOption = (o: ScaffoldOption): ImprovOption => ({
+    thread_id: idOf(o.thread),
+    also_ties_to: [...new Set(o.also_ties_to.map(idOf))].filter((id) => titleOf.has(id) && id !== idOf(o.thread)),
+    label: o.label,
+    option: renderOption(o, lists.tagger),
+    why: lists.tagger.render(lists.tagger.tag(o.why)),
+    callback: (() => {
+      const m = callbacks.find((x) => `M${x.id}` === o.callback?.trim());
+      return m ? { id: m.id, title: m.title } : null;
+    })(),
+    scaffold: o,
+  });
+
+  // Ask once; if fewer than two options survive the checks, ask once more. Each option is checked
+  // as soon as it's complete in the stream, and shown straight away when it passes (no safety lines).
   const calls: LlmResult<unknown>[] = [];
   const accepted: ScaffoldOption[] = [];
+  const shown: ScaffoldOption[] = [];
   const rejected: { label: string; reason: string }[] = [];
+  const OptionSchema = OptionsSchema.shape.options.element;
+  const showEarly = opts.onOption && !lines.length;
   for (let attempt = 0; attempt < 2 && accepted.length < 2; attempt++) {
-    // A malformed answer (e.g. a name outside the allowed list) counts as a failed attempt.
+    let seen = 0;
+    const take = (raw: unknown) => {
+      const parsed = OptionSchema.safeParse(raw);
+      if (!parsed.success) {
+        rejected.push({ label: (raw as { label?: string })?.label ?? "an option", reason: "unusable answer (a value outside the allowed lists)" });
+        return;
+      }
+      const o = parsed.data as ScaffoldOption;
+      normaliseHandOff(o, lists.check);
+      const reason = checkOption(o, lists.check);
+      if (reason) return rejected.push({ label: o.label, reason });
+      accepted.push(o);
+      if (showEarly && shown.length < 3) {
+        shown.push(o);
+        opts.onOption!(toOption(o));
+      }
+    };
+    const onText = (snapshot: string) => {
+      const done = completedOptions(snapshot);
+      for (; seen < done.length; seen++) {
+        try {
+          take(JSON.parse(done[seen]));
+        } catch {
+          // not valid JSON yet; the final answer settles it
+        }
+      }
+    };
+    // A malformed answer (e.g. a name outside the allowed list) counts as a failed attempt, but any
+    // options that streamed in whole before it went wrong still count.
     let res: LlmResult<z.infer<typeof OptionsSchema>>;
     try {
-      res = await callLlm({ feature: "improv", system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
+      res = await callLlm({ feature: "improv", system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true, onText });
     } catch (err) {
       rejected.push({ label: `attempt ${attempt + 1}`, reason: `unusable answer (${err instanceof Error ? err.message.slice(0, 60) : "error"}…)` });
       continue;
     }
     calls.push(res);
-    for (const o of res.data.options as ScaffoldOption[]) {
-      normaliseHandOff(o, lists.check);
-      const reason = checkOption(o, lists.check);
-      if (reason) rejected.push({ label: o.label, reason });
-      else accepted.push(o);
-    }
+    for (const o of (res.data.options as ScaffoldOption[]).slice(seen)) take(o);
   }
 
-  // Spotlight-aware ranking: options that hand off to a quiet player, in a kind of play their
-  // player enjoys, come first.
-  // Whoever the moment is about comes first; the quiet-player nudge is smaller than that.
+  // Ranking: whoever the moment is about comes first; the quiet-player nudge is smaller than that.
+  // Options already on screen keep their place.
   const score = (o: ScaffoldOption) => spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama") + (mentioned.has(o.hand_off.to) ? 0.7 : 0);
-  let kept = [...accepted].sort((a, b) => score(b) - score(a)).slice(0, 3);
+  let kept = [...shown, ...accepted.filter((o) => !shown.includes(o)).sort((a, b) => score(b) - score(a))].slice(0, 3);
   const safety = await safetyCheck(lines, kept.map((o) => renderOption(o, lists.tagger)));
   if (safety.call) calls.push(safety.call);
   for (const i of safety.flagged) if (kept[i]) rejected.push({ label: kept[i].label, reason: "crosses a safety line" });
@@ -524,19 +590,9 @@ IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}
     kept = [...kept, ...fresh.filter((_, i) => !recheck.flagged.has(i))].slice(0, 3);
   }
 
-  const idOf = (ref: string) => Number(ref.replace(/^T/, ""));
-  const options: ImprovOption[] = kept.map((o) => ({
-    thread_id: idOf(o.thread),
-    also_ties_to: [...new Set(o.also_ties_to.map(idOf))].filter((id) => titleOf.has(id) && id !== idOf(o.thread)),
-    label: o.label,
-    option: renderOption(o, lists.tagger),
-    why: lists.tagger.render(lists.tagger.tag(o.why)),
-    callback: (() => {
-      const m = callbacks.find((x) => `M${x.id}` === o.callback);
-      return m ? { id: m.id, title: m.title } : null;
-    })(),
-    scaffold: o,
-  }));
+  const options: ImprovOption[] = kept.map(toOption);
+  // Anything not shown while streaming (a retry's options, or all of them once safety has checked).
+  if (opts.onOption) for (const [i, o] of kept.entries()) if (!shown.includes(o)) opts.onOption(options[i]);
 
   const llm = {
     model: calls[0]?.model ?? "(no answer)",
