@@ -17,6 +17,7 @@ import {
   summarise,
 } from "@/core/scenarios";
 import { seedFixture } from "@/core/seed";
+import { suggest } from "@/core/suggest";
 import { listThreads } from "@/core/threads";
 
 const USAGE = `Usage: npm run loom -- <command>
@@ -32,6 +33,9 @@ const USAGE = `Usage: npm run loom -- <command>
                              2-3 options tied to existing threads. --why shows which threads were
                              retrieved and why; --all sends every open thread instead (for comparison)
 
+  suggest [--campaign id] [--model name]
+                             Between-session prep: thread collisions, an idea per player
+                             character, and ways back into quiet threads
   scenarios <file.json> [--models sonnet,opus] [--only id1,id2] [--blind]
                              Run saved moments through the improv box on each model and write a
                              side-by-side report to data/runs/ (default model: sonnet).
@@ -39,7 +43,7 @@ const USAGE = `Usage: npm run loom -- <command>
   score <blind-report.md>    Count your ticks in a blind report per model
 
   --model takes haiku, sonnet, opus, fable or a full model id.
-  Defaults: recap = opus, improv = sonnet, everything else = haiku.
+  Defaults: recap = opus, suggest = opus, improv = sonnet, everything else = haiku.
   ping                       Make one small LLM call to check the API key and logging
   costs                      Show LLM calls, latency and cost so far`;
 
@@ -176,6 +180,26 @@ async function main() {
       console.log(
         `${l.model} · ${(l.latencyMs / 1000).toFixed(1)} s · ${l.inputTokens} in / ${l.outputTokens} out · ${usd(l.costUsd)} · ${r.threads.length} threads sent${l.attempts > 1 ? ` · ${l.attempts} attempts` : ""}`,
       );
+      break;
+    }
+    case "suggest": {
+      const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
+      console.log("Looking for payoffs between sessions…");
+      const { data, dropped, titleOf, llm } = await suggest(campaignId, flag(args, "model"));
+      const names = (ids: number[]) => ids.map((id) => titleOf.get(id)).join(" + ");
+
+      console.log("\nCOLLISIONS: threads that pay each other off");
+      data.collisions.forEach((c, i) => {
+        console.log(`\n${i + 1}. ${c.title.toUpperCase()}\n   ⟵ ${names(c.thread_ids)}\n   ${c.idea}\n   why: ${c.why}`);
+      });
+      console.log("\nFOR EACH PLAYER");
+      for (const p of data.per_player) console.log(`\n• ${p.pc}${p.thread_ids.length ? `  ⟵ ${names(p.thread_ids)}` : ""}\n   ${p.idea}`);
+      if (data.neglected.length) {
+        console.log("\nQUIET THREADS");
+        for (const n of data.neglected) console.log(`\n• ${titleOf.get(n.thread_id)}\n   ${n.idea}`);
+      }
+      if (dropped) console.log(`\n(${dropped} suggestion(s) dropped: pointed at unknown threads or characters)`);
+      console.log(`\n${llm.model} · ${(llm.latencyMs / 1000).toFixed(1)} s · ${llm.inputTokens} in / ${llm.outputTokens} out · ${usd(llm.costUsd)}`);
       break;
     }
     case "scenarios": {

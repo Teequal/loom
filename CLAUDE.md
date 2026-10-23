@@ -104,6 +104,7 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
 - **LLM: Anthropic, with a model per feature** (`FEATURE_MODELS` in `src/core/llm/index.ts`):
   - **Recaps: Opus 5.5**, chosen because Jacob wants the smartest model for the once-per-session job.
   - **Improv: Sonnet 5.5**, with Opus 5.5 available per call (`--model opus`).
+  - **Between-session suggestions: Opus 5.5.**
   - **Everything else: Haiku 5.5.**
   - Override with `--model` or `LOOM_MODEL_<FEATURE>`.
   - Sonnet and Opus calls use server-side refusal fallback.
@@ -167,6 +168,8 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
 6. Weak "everything is legal trouble" links show up (session 1 Gary→Festival, session 3 bounty→Gary). The prompt could demand a concrete connection.
 - [x] Step 4: Improv box (`improv "<moment>"`, `--why`, `--all`). Retrieval in `src/core/retrieval.ts` is in-memory scoring (entity/alias mentions, rare-word overlap, link hops, recency) rather than SQLite FTS. That's simpler at tens of threads; revisit when campaigns grow. Top 8 threads are sent to the model, and options citing threads that weren't sent are dropped. First results on Duradan: 3–6 s, ~$0.0005 per call.
 - [x] Step 5: Scenario runner (`scenarios <file> --models haiku,sonnet,opus`). Scenario files are in `scenarios/`; real-campaign ones go in `scenarios/private/` (gitignored). Each moment lists `expect` pieces of thread titles. The runner checks whether retrieval found them and whether options used them, then writes a side-by-side Markdown report with "would use" checkboxes to `data/runs/`. Results depend on the campaign's current threads, so rerun all models together when comparing.
-- [ ] Step 6: Between-session suggestions incl. thread "collisions"
+- [x] Step 6: Between-session suggestions (`suggest`, logic in `src/core/suggest.ts`, Opus by default). It returns 3 collisions (2+ threads paying each other off), one idea per PC, and ways back into threads quiet for 2+ sessions. Every open thread is sent, since prep isn't latency-sensitive: ~20–36 s, ~$0.04–0.09 per run.
+  - **Potion fixture:** found a near-match for the real cure swap ("matched-pair potions; neither can be cured without the other"). The prompt hints at the general pattern (one PC's affliction may hold the key to another's), not the answer.
+  - **Duradan:** strong hidden connections, e.g. Khayiulad's stolen Ka'Anshar book may be the Codex the Whisperer wants, and the Lodestone may anchor the party's madness at a risk. Collisions tend to stack 4–5 threads; 2–3 is probably tighter.
 - [ ] Step 7: Real-campaign test (Darkness in Duradan, sessions 1–5)
 - [ ] Step 8 (optional): One-box local web page
