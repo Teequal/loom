@@ -79,6 +79,10 @@ export const TraitsSchema = z
   })
   .partial();
 export type EntityTraits = z.infer<typeof TraitsSchema>;
+export const TRAIT_KEYS = Object.keys(TraitsSchema.shape) as (keyof EntityTraits)[];
+export const LIST_TRAITS = new Set<string>([
+  "appearance", "wants", "fears", "ideals", "bonds", "flaws", "secrets", "knowledge", "backstory_hooks", "hazards", "atmosphere",
+]);
 
 // Provenance: where each value came from. Keyed by column name ("status") or
 // trait path ("traits.race"). Manual entries win over extraction.

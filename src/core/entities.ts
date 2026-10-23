@@ -81,13 +81,15 @@ export async function updateEntity(entityId: number, patch: EntityPatch, opts: W
   if (!entity) throw new Error(`No entity with id ${entityId}`);
 
   if (patch.status != null && !(ENTITY_STATUSES[entity.type] as readonly string[]).includes(patch.status)) {
-    throw new Error(`"${patch.status}" isn't a valid status for a ${entity.type}. Use: ${ENTITY_STATUSES[entity.type].join(", ")}`);
+    throw new Error(`"${patch.status}" isn't a valid status for ${entity.name} (${entity.type.toUpperCase()}). Use: ${ENTITY_STATUSES[entity.type].join(", ")}`);
   }
   for (const f of LOCATION_FIELDS) {
     const id = patch[f];
     if (id == null) continue;
     const [loc] = await db.select().from(schema.entities).where(eq(schema.entities.id, id));
-    if (!loc || loc.campaignId !== entity.campaignId || loc.type !== "location") throw new Error(`${f}: entity ${id} isn't a location in this campaign`);
+    if (!loc || loc.campaignId !== entity.campaignId || loc.type !== "location") {
+      throw new Error(`${loc?.name ?? `Entity ${id}`} isn't a location in this campaign, so it can't be ${entity.name}'s ${f.replace("LocationId", "").replace(/([A-Z])/g, " $1").toLowerCase().trim()} location`);
+    }
   }
   const traits = patch.traits ? TraitsSchema.parse(patch.traits) : {};
 
@@ -186,6 +188,28 @@ export async function updateCampaign(campaignId: number, patch: CampaignPatch, o
   }
   const { apply, nextMeta, result } = planWrites({ ...campaign }, campaign.fieldMeta, { ...patch }, opts);
   if (result.written.length) await db.update(schema.campaigns).set({ ...apply, fieldMeta: nextMeta }).where(eq(schema.campaigns.id, campaignId));
+  return result;
+}
+
+export interface ThreadPatch {
+  deadline?: string;
+  stakes?: string;
+  secret?: boolean;
+}
+
+export async function updateThread(threadId: number, patch: ThreadPatch, opts: WriteOptions): Promise<WriteResult> {
+  const [thread] = await db.select().from(schema.threads).where(eq(schema.threads.id, threadId));
+  if (!thread) throw new Error(`No thread with id ${threadId}`);
+  const { apply, nextMeta, result } = planWrites({ ...thread }, thread.fieldMeta, { ...patch }, opts);
+  if (result.written.length) {
+    await db.update(schema.threads).set({ ...apply, fieldMeta: nextMeta }).where(eq(schema.threads.id, threadId));
+    await db.insert(schema.threadEvents).values({
+      threadId,
+      sessionId: opts.sessionId ?? null,
+      change: "edited",
+      note: `${opts.source === "dm" ? "GM" : "Extraction"} set ${result.written.join(", ")}`,
+    });
+  }
   return result;
 }
 

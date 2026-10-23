@@ -187,7 +187,13 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - **Provenance:** every value records its source in `field_meta`. All writes go through `src/core/entities.ts` (`updateEntity`, `setRelation`, `updateCampaign`), which applies the rule: DM always writes; extraction fills blanks, proposes over DM values, and never erases.
   - `isWithin` walks the location hierarchy.
   - `seed` now keeps the fixture's campaign id, so reseeding doesn't change which campaign is the default.
-- [ ] Step 2: Manual entry commands (`entity show` / `entity set`)
+- [x] Step 2: Manual entry commands (`scripts/entity-cli.ts`). Everything entered here is recorded as the DM's.
+  - `entity list | show | new | set` (location fields take names; list fields take `,` or `;`; `--secret field`; an empty value clears)
+  - `relate` / `unrelate`
+  - `campaign show | set | mechanic add/remove`
+  - `thread set <id> deadline= stakes= secret=`
+  - `entity show` marks every value ✎ (entered by you), ⚙ (extracted, with session) or 🔒 (GM-only).
+  - Shared loader in `src/core/entity-card.ts` (`findEntity`, `loadEntityCard`), to be reused for prompt cards in step 4.
 - [ ] Step 3: Extraction proposes entity and relationship changes; backfill Duradan
 - [ ] Step 4: Entity cards and party location in prompts; slip checks
 - [ ] Step 5: Embeddings and hybrid retrieval

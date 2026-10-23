@@ -19,13 +19,27 @@ import {
 import { seedFixture } from "@/core/seed";
 import { suggest } from "@/core/suggest";
 import { listThreads } from "@/core/threads";
+import { campaignCommand, entityCommand, relateCommand, threadCommand } from "./entity-cli";
 
-const USAGE = `Usage: npm run loom -- <command>
+const USAGE = `Usage: npm run loom -- <command>   (add --campaign <id> to any command; default: most recent)
 
+Campaign data
   seed                       Load the hand-written potion fixture campaign (replaces it if present)
   new-campaign "<name>"      Create an empty campaign
   campaigns                  List campaigns
-  threads [id]               List threads for a campaign (default: most recent campaign)
+  threads [id]               List threads for a campaign
+  thread set <id> deadline=… stakes=… secret=yes|no
+  entity list [--type npc]   List characters, places, items and factions
+  entity show "<name>"       Everything known about one entity
+  entity new "<name>" <type> [field=value …]
+  entity set "<name>" field=value … [--secret field]
+                             e.g. entity set Zara status=alive actual="Duradan Clocktower" --secret actual
+  relate "<from>" <type> "<to>" [note="…"] [strength=-3…3] [--secret]
+  unrelate "<from>" <type> "<to>"
+  campaign show | campaign set party=<location> tone=… date=… safety=…
+  campaign mechanic add "<name>" "<rule>" | campaign mechanic remove "<name>"
+
+Engine
   recap <file> [--session N] [--campaign id] [--model name]
                              Read a session recap and propose thread changes for you to approve
   apply <proposal.json>      Apply a (hand-edited) proposal file saved by "recap"
@@ -41,11 +55,11 @@ const USAGE = `Usage: npm run loom -- <command>
                              side-by-side report to data/runs/ (default model: sonnet).
                              --blind shuffles all models' options together with models hidden
   score <blind-report.md>    Count your ticks in a blind report per model
+  ping                       Make one small LLM call to check the API key and logging
+  costs                      Show LLM calls, latency and cost so far
 
   --model takes haiku, sonnet, opus, fable or a full model id.
-  Defaults: recap = opus, suggest = opus, improv = sonnet, everything else = haiku.
-  ping                       Make one small LLM call to check the API key and logging
-  costs                      Show LLM calls, latency and cost so far`;
+  Defaults: recap = opus, suggest = opus, improv = sonnet, everything else = haiku.`;
 
 const usd = (n: number | null) => `$${(n ?? 0).toFixed(5)}`;
 
@@ -125,6 +139,20 @@ async function main() {
       console.log(`Seeded campaign ${c.id}: ${c.name}`);
       break;
     }
+    case "entity":
+    case "relate":
+    case "unrelate":
+    case "campaign": {
+      const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
+      if (!campaignId) return console.log('No campaigns yet. Try: npm run loom -- new-campaign "My campaign"');
+      if (command === "entity") await entityCommand(campaignId, args);
+      else if (command === "campaign") await campaignCommand(campaignId, args);
+      else await relateCommand(campaignId, args, command === "unrelate");
+      break;
+    }
+    case "thread":
+      await threadCommand(args);
+      break;
     case "new-campaign": {
       if (!args[0]) return console.log('Give it a name, e.g. npm run loom -- new-campaign "Darkness in Duradan"');
       const [c] = await db.insert(schema.campaigns).values({ name: args[0] }).returning();
