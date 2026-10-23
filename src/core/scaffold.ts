@@ -39,6 +39,22 @@ const PRONOUN_START = /^\s*(?:he|she|they|it|him|her|them)\b/i;
 const FORCED_BODY =
   /\{([^{}|]+)(?:\|[^{}]*)?\}['’]s\s+(?:\w+\s+)?(?:hands?|fingers?|grip|arms?|legs?|feet|foot|body|mouth|jaw|knees?)\s+(?:\w+ly\s+)?(?:grab|seize|tighten|clench|close|open|reach|move|carry|carries|drag|pull|push|lift|raise|point|strike|swing|draw|lock|refuse|walk|step|run|speak|say|shout|turn)\w*/gi;
 
+// A PC's response to what's happening (swaying, bracing, flinching) is the player's to describe.
+// Before the hand-off, beats describe sensations and forces on a PC ("the corridor tilts around
+// {Khayiulad}"), not how they react; after a failed roll the body may move.
+const REACTION =
+  "(?:sway|brac|stagger|stead(?:y|ies|ied|ying)|clutch|flinch|recoil|stumbl|gasp|winc|trembl|reel|buckl|cower)\\w*|grip\\w*\\s+(?:\\w+\\s+){0,3}tighter|(?:snatch|jerk|yank|pull|draw)\\w*\\s+(?:his|her|their)\\s+(?:hand|arm|fingers)\\s+(?:back|away)|tighten\\w*\\s+(?:his|her|their)\\s+grip|steps?\\s+back|stepp(?:ed|ing)\\s+back|takes?\\s+a\\s+step\\s+back";
+const TAG_RE = "\\{([^{}|]+)(?:\\|[^{}]*)?\\}";
+const PC_REACTS = new RegExp(`${TAG_RE}\\s+(?:\\w+ly\\s+)?(?:${REACTION})\\b`, "gi");
+const PC_PART_REACTS = new RegExp(
+  `${TAG_RE}['’]s\\s+(?:\\w+\\s+)?(?:hands?|fingers?|grip|arms?|legs?|knees?|feet|foot|body|shoulders?|jaw)\\s+(?:\\w+ly\\s+)?(?:${REACTION}|tighten\\w*|gives?\\s+way|shak\\w+)\\b`,
+  "gi",
+);
+const PRONOUN_REACTS = new RegExp(`\\b(?:he|she|they)\\s+(?:\\w+ly\\s+)?(?:${REACTION})\\b`, "gi");
+// "one hand braced against the wall", "steadying himself", "bracing herself".
+const LIMB_POSED = /\b(?:one|a|his|her|their|both)\s+(?:hands?|arms?|palms?|feet|knees?)\s+(?:braced|pressed|clutch\w*|grip\w*|flung|thrown)\b/i;
+const REFLEXIVE_REACTS = /\b(?:stead\w*|brac\w*|catch\w*|caught|pull\w*|draw\w*)\s+(?:himself|herself|themselves|themself)\b/i;
+
 export function makeTagger(scene: Scene) {
   // Every way an entity can be named → its canonical name. Longest first, so "Professor
   // Aldric Vex" wins over "Vex".
@@ -280,6 +296,11 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
     }
   }
 
+  {
+    const r = pcReaction(b, does, actor, c);
+    if (r) return r;
+  }
+
   // Anyone else acting inside the sentence.
   for (const { entity, next } of c.tagger.actingTags(does)) {
     if (actor && entity.name === actor.name) continue; // the beat's own actor
@@ -299,6 +320,47 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
       const why = unavailable(e, c);
       if (why) return `${e.name} is ${why === "dead" ? "dead" : "not here"} but acts in a world beat`;
     }
+  }
+  return null;
+}
+
+// A PC reacting in a setup beat: named ("{Salaena} flinches"), by body part ("{Khayiulad}'s knees
+// buckle"), or by pronoun or posed limb ("…and he staggers", "one hand braced") where the nearest
+// character named before it is a PC.
+function pcReaction(b: ScaffoldBeat, does: string, actor: Entity | undefined, c: CheckContext): string | null {
+  const said = `"${c.tagger.render(does)}"`;
+  // An outcome is what the declared action physically does ("hits the cobblestones hard"); the
+  // PC's response to it ("sways on his feet and grips the table") is still the player's.
+  if (b.kind === "outcome" && actor) {
+    const own = c.tagger.render(does).replace(new RegExp(`^${actor.name}\\s*`, "i"), "");
+    if (new RegExp(`(?:^|\\band\\s+|,\\s*|\\bthen\\s+)(?:\\w+ly\\s+)?(?:${REACTION})\\b`, "i").test(own) || LIMB_POSED.test(own) || REFLEXIVE_REACTS.test(own)) {
+      return `the outcome describes how ${actor.name} reacts: ${said}`;
+    }
+  }
+  for (const re of [PC_REACTS, PC_PART_REACTS]) {
+    for (const m of does.matchAll(re)) {
+      const e = c.tagger.entityOf(m[1]);
+      if (e && isPc(e)) return `describes how ${e.name} reacts before any roll: ${said}`;
+    }
+  }
+  // Who a pronoun or posed limb refers to: the last character tagged before it, or the beat's own
+  // actor in an npc beat that names nobody first.
+  const lastBefore = (index: number) => {
+    let who: Entity | undefined = b.kind === "npc" ? actor : undefined;
+    for (const m of does.slice(0, index).matchAll(new RegExp(TAG_RE, "g"))) {
+      const e = c.tagger.entityOf(m[1]);
+      if (e && (e.type === "pc" || e.type === "npc")) who = e;
+    }
+    return who;
+  };
+  const at = [...does.matchAll(PRONOUN_REACTS)].map((m) => m.index ?? 0);
+  for (const re of [LIMB_POSED, REFLEXIVE_REACTS]) {
+    const m = does.match(re);
+    if (m) at.push(m.index ?? 0);
+  }
+  for (const i of at) {
+    const who = lastBefore(i);
+    if (who && isPc(who)) return `describes how ${who.name} reacts before any roll: ${said}`;
   }
   return null;
 }
