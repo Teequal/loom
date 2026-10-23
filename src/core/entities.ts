@@ -70,11 +70,11 @@ export interface EntityPatch {
   importance?: (typeof schema.entities.$inferSelect)["importance"];
   lastKnownLocationId?: number | null;
   actualLocationId?: number | null;
-  parentLocationId?: number | null;
+  parentId?: number | null; // the place it's inside, the set it belongs to, the kind it is
   traits?: EntityTraits;
 }
 
-const LOCATION_FIELDS = ["lastKnownLocationId", "actualLocationId", "parentLocationId"] as const;
+const LOCATION_FIELDS = ["lastKnownLocationId", "actualLocationId"] as const;
 
 export async function updateEntity(entityId: number, patch: EntityPatch, opts: WriteOptions): Promise<WriteResult> {
   const [entity] = await db.select().from(schema.entities).where(eq(schema.entities.id, entityId));
@@ -90,6 +90,14 @@ export async function updateEntity(entityId: number, patch: EntityPatch, opts: W
     if (!loc || loc.campaignId !== entity.campaignId || loc.type !== "location") {
       throw new Error(`${loc?.name ?? `Entity ${id}`} isn't a location in this campaign, so it can't be ${entity.name}'s ${f.replace("LocationId", "").replace(/([A-Z])/g, " $1").toLowerCase().trim()} location`);
     }
+  }
+  // A parent is the same kind of thing: a place inside a place, an item in a set, an NPC in a
+  // creature kind, a faction cell in a faction. No loops.
+  if (patch.parentId != null) {
+    const [parent] = await db.select().from(schema.entities).where(eq(schema.entities.id, patch.parentId));
+    if (!parent || parent.campaignId !== entity.campaignId) throw new Error(`Entity ${patch.parentId} isn't in this campaign`);
+    if (parent.type !== entity.type) throw new Error(`${entity.name} (${entity.type}) can't be part of ${parent.name} (${parent.type}); a parent is the same kind of thing`);
+    if (parent.id === entity.id || (await isWithin(parent.id, entity.id))) throw new Error(`${parent.name} is already inside ${entity.name}; that would make a loop`);
   }
   let traits: EntityTraits = {};
   if (patch.traits) {
@@ -223,14 +231,14 @@ export async function updateThread(threadId: number, patch: ThreadPatch, opts: W
   return result;
 }
 
-// Is this location (or anything inside it) where the given place is? Walks parent links,
-// so being in the Tannery counts as being in Duradan.
-export async function isWithin(locationId: number, ancestorId: number) {
-  let current: number | null = locationId;
+// Is this entity inside (or part of) the given one? Walks parent links, so being in the Tannery
+// counts as being in Duradan, and the Monk figurine is part of the figurine set.
+export async function isWithin(entityId: number, ancestorId: number) {
+  let current: number | null = entityId;
   for (let hops = 0; current != null && hops < 20; hops++) {
     if (current === ancestorId) return true;
     const [row] = await db
-      .select({ parent: schema.entities.parentLocationId })
+      .select({ parent: schema.entities.parentId })
       .from(schema.entities)
       .where(eq(schema.entities.id, current));
     current = row?.parent ?? null;

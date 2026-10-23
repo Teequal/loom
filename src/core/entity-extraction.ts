@@ -71,7 +71,7 @@ export async function entityStateText(campaignId: number) {
       e.status && `status ${e.status}`,
       e.attitude && `attitude ${e.attitude}`,
       e.lastKnownLocationId && `last seen at ${name.get(e.lastKnownLocationId)}`,
-      e.parentLocationId && `inside ${name.get(e.parentLocationId)}`,
+      e.parentId && `${e.type === "location" ? "inside" : "part of"} ${name.get(e.parentId)}`,
       ...Object.entries(e.traits)
         .filter(([k]) => !e.fieldMeta[`traits.${k}`]?.secret)
         .map(([k, v]) => `${k} ${Array.isArray(v) ? v.join("; ") : v}`),
@@ -137,7 +137,7 @@ export async function applyEntityChanges(
     if (u.attitude && (e.type === "npc" || e.type === "faction")) patch.attitude = u.attitude;
     if (u.importance) patch.importance = u.importance;
     if (e.type !== "location") patch.lastKnownLocationId = location(u.last_known_location, `${e.name}'s last known location`);
-    if (e.type === "location") patch.parentLocationId = location(u.parent_location, `${e.name}'s parent location`);
+    if (e.type === "location") patch.parentId = location(u.parent_location, `${e.name}'s parent location`);
 
     const traits: Record<string, unknown> = {};
     for (const { key, value } of u.traits) {

@@ -223,5 +223,28 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - **Flavour pass** (`src/core/flavour.ts`, `flavor <n>`, Opus by default, ~5 s, ~$0.015): rewrites the chosen option as read-aloud prose from the tagged entities' cards (voice, appearance, mechanic text). Each beat is re-checked with its original actor and falls back to the plain line if it adds a character or breaks a rule.
   - **Stress results:** crafted adversarial cases went from 4/16 to 25/25. Live: the HQ/Zara confrontation, charm-spell effects, Gary's wake and the figurine sale all came out clean.
   - **Remaining issues:** mechanics still get misapplied ("Figurine madness" roll for a crowd's hum, for Iresia); Sonnet scaffolds can take ~10 s (Haiku ~5 s); capitalised "Resistance" resolves to Resistance Headquarters rather than the faction.
-- [ ] Step 5: Embeddings and hybrid retrieval
-- [ ] Step 6: Test on known slips; blind rerun
+- Steps 5–6 (embeddings, final tests) are folded into the layered model build below.
+
+## Layered model build (docs/loom-model.md)
+
+Jacob approved the model on 24 Oct 2026: layers L0 Rules › L1 Identity › L2 State › L3 Relationships and laws › L4 Narrative › L5 Moment, plus P Players; hierarchy with inheritance; detail by graph distance.
+- Rules: 5e first, then DM toggles, then structured house rules (free text doesn't work).
+- History: an automatic change log, plus key moments the DM flags (a star in the UI) as the source for callbacks.
+- The player layer is in scope.
+
+- [x] **Step 1: L0 rules core and the figurine split** (migration `drizzle/0002`).
+  - `src/core/rules.ts`: the 15 SRD conditions as capabilities (act / move / speak / aware / sees / hears, plus narrative laws); `capabilitiesOf` combines status, health band and conditions. 11 story-relevant toggles (`campaign toggle`), stored in `campaigns.rule_toggles`.
+  - **Effects table** (structured house rules): source (entity or thread), trigger, applies-to (holder / user / everyone-except-holder / everyone-present / party / listed / source-target), check, on fail/success, escalation, duration, plain-words rule, secret. `src/core/effects.ts` works out who each effect reaches *right now*, from `holds` relationships inherited down the hierarchy, and only while the party is at a place-bound source.
+  - `rule list | add | remove | draft`. `draft` turns plain words into the structure (Sonnet), asks a clarifying question if needed, and saves on the DM's confirmation. The old `campaign mechanic` commands now point to it.
+  - **Generic hierarchy:** `entities.parent_id` for every type (the place hierarchy was copied over; `parent_location_id` is kept unused for now). A parent must be the same type; loops are rejected.
+  - **Scene:** a "RULES IN PLAY" section lists the toggles that differ from 5e and each effect with who it reaches now. Cards spell out what a condition means right now.
+  - **Scaffold checks:** an effect's roll only goes to someone it reaches now (or "table" if it's table-wide); the failure lands on whoever rolled; characters who can't act or speak don't; questions need a PC who can act; rolls need awareness (except death saves). Only effects that reach someone can be chosen.
+  - **Tagging fixes:** first-name shortcuts only for characters (no more "Resistance roll" → Resistance Headquarters); no possessive first words; auto-tags keep the original wording (`{Zara the Unbound|Zara}`); doubled articles collapse.
+  - **Duradan data:** the figurines are split into Knight (Khayiulad) and Monk (Salaena) under the set; both are linked to the figurine threads. Rules: *Figurine madness* (set, on use, user) and *Reality Microfractures* (thread #23, on exposure, everyone present, GM-only; drafted from Jacob's words). The old free-text mechanics are cleared.
+  - **Tests:** 16/16 new rule and capability cases (Iresia's figurine roll rejected; Salaena's and Khayiulad's accepted; everyone-except-holder reaches all but the holder) and 25/25 earlier cases. Live: the Bhen moment no longer misapplies Figurine madness; Salaena using the Monk figurine gets her own madness roll.
+- [ ] Step 2: L3 laws (cardinality and symmetry on write and at generation; possession and use checks)
+- [ ] Step 3: L4 change log and key moments; callbacks in suggest
+- [ ] Step 4: Player layer and spotlight-aware ranking
+- [ ] Step 5: Context assembly by graph distance, with per-feature budgets
+- [ ] Step 6: Embeddings as entry points
+- [ ] Step 7: Stress tests and a blind rerun

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { callLlm, type LlmResult } from "./llm";
 import { findMentions, loadThreadContexts, retrieveThreads, type ThreadContext } from "./retrieval";
 import { buildScene, type Scene } from "./scene";
-import { checkBeat, checkOnFail, makeTagger, pcHealth, type CheckContext, type ScaffoldBeat, type Tagger } from "./scaffold";
+import { capabilitiesOf, checkBeat, checkOnFail, makeTagger, type CheckContext, type ScaffoldBeat, type Tagger } from "./scaffold";
 
 // The improv box answers with a scaffold, not free prose. The answer format is built for each
 // request: the "who acts" slot only offers characters allowed to act right now, the thread slot
@@ -51,7 +51,7 @@ Each option is a scaffold:
   - "remote": a character who isn't here acts from afar ("sends a runner with a sealed note").
   - "outcome": the immediate physical result of what a PC just declared in this moment ("hits the cobblestones hard"). actor is that PC. No new decisions, words, thoughts or feelings.
   PCs never act in any other kind, and never act inside another beat's sentence.
-- hand_off: how the players get involved. to is a PC or "table". kind "question" asks the player what their character does; kind "roll" names the roll. mechanic is one of the GM's mechanics if this roll is one, else "none". text is one short sentence for the GM, e.g. "Ask {Salaena}'s player whether she reaches for him." or "{Khayiulad} makes a madness roll."
+- hand_off: how the players get involved. to is a PC or "table". kind "question" asks the player what their character does; kind "roll" names the roll. mechanic is a rule from RULES IN PLAY if this roll is one, else "none"; a rule's roll can only go to someone it applies to right now (listed after "now"), or to "table" if it applies to everyone. text is one short sentence for the GM, e.g. "Ask {Salaena}'s player whether she reaches for him." or "{Khayiulad} makes a madness roll."
 - on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. This is the only place a PC may act against their player's will. Otherwise target "none" and effect "".
 - label: 2-5 words. why: under 15 words, why this fits now; don't repeat the thread title or use thread numbers.`;
 
@@ -142,12 +142,31 @@ export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
     const r = checkBeat(b, c);
     if (r) return r;
   }
-  if (o.hand_off.kind === "question" && o.hand_off.to !== "table") {
-    const pc = c.tagger.entityOf(o.hand_off.to);
-    if (pc && pcHealth(pc) === "unconscious") return `asks what ${pc.name} does, but ${pc.name} is unconscious`;
+  // Who's being asked must be able to answer: a question needs someone who can act; a roll needs
+  // someone aware (except death saves).
+  const pc = o.hand_off.to !== "table" ? c.tagger.entityOf(o.hand_off.to) : undefined;
+  if (pc) {
+    const caps = capabilitiesOf(pc);
+    const why = caps.causes?.join(", ") || "incapacitated";
+    if (o.hand_off.kind === "question" && !caps.act) return `asks what ${pc.name} does, but ${pc.name} can't act (${why})`;
+    if (o.hand_off.kind === "roll" && !caps.aware && !/death sav/i.test(o.hand_off.text)) return `asks ${pc.name} for a roll, but ${pc.name} isn't aware (${why})`;
   }
+
+  // An effect's roll only goes to someone it applies to right now.
+  if (o.hand_off.mechanic !== "none") {
+    const eff = c.scene.effects.find((e) => e.effect.name === o.hand_off.mechanic);
+    if (!eff) return `uses an unknown rule "${o.hand_off.mechanic}"`;
+    if (o.hand_off.kind !== "roll") return `uses "${eff.effect.name}" without a roll`;
+    if (o.hand_off.to === "table") {
+      if (!eff.tableWide) return `calls "${eff.effect.name}" for the whole table, but it only applies to ${eff.targets.join(", ") || "nobody right now"}`;
+    } else if (!eff.targets.includes(o.hand_off.to)) {
+      return `"${eff.effect.name}" doesn't apply to ${o.hand_off.to} (applies to ${eff.effect.appliesTo.replace(/-/g, " ")}: ${eff.targets.join(", ") || "nobody right now"})`;
+    }
+  }
+
   if (o.on_fail.target !== "none") {
     if (o.hand_off.kind !== "roll") return "has a failure consequence but no roll";
+    if (o.hand_off.to !== "table" && o.on_fail.target !== o.hand_off.to) return `the failure lands on ${o.on_fail.target}, but ${o.hand_off.to} made the roll`;
     const r = checkOnFail(o.on_fail.target, o.on_fail.effect, c);
     if (r) return r;
   }
@@ -175,9 +194,10 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>)
     tagger,
     check: { scene, tagger, present, remoteOk, outcomePcs } satisfies CheckContext,
     actors: [...present, ...absentNpcs, ...scene.pcs.map((p) => p.name)],
-    handOff: scene.pcs.filter((p) => pcHealth(p) !== "unconscious").map((p) => p.name),
+    handOff: scene.pcs.filter((p) => p.status !== "dead" && capabilitiesOf(p).aware).map((p) => p.name),
     pcs: scene.pcs.map((p) => p.name),
-    mechanics: scene.mechanics.map((m) => m.name),
+    // Only effects that reach someone right now can be offered for a roll.
+    mechanics: scene.effects.filter((e) => e.targets.length > 0).map((e) => e.effect.name),
   };
 }
 

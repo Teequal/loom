@@ -13,6 +13,7 @@ import {
   TRAIT_KEYS,
 } from "@/core/entity-fields";
 import { ENTITY_TYPES } from "@/core/db/schema";
+import { TOGGLES, toggleValue, type ToggleName, togglesText } from "@/core/rules";
 import {
   type EntityPatch,
   removeRelation,
@@ -26,21 +27,21 @@ import {
 const DM = { source: "dm" as const };
 
 // Friendly names on the command line → column names in the database.
-const LOCATION_KEYS: Record<string, "lastKnownLocationId" | "actualLocationId" | "parentLocationId"> = {
+const LOCATION_KEYS: Record<string, "lastKnownLocationId" | "actualLocationId" | "parentId"> = {
   "last-known": "lastKnownLocationId",
   actual: "actualLocationId",
-  parent: "parentLocationId",
+  parent: "parentId",
 };
 const COLUMN_KEYS = ["description", "aliases", "status", "attitude", "importance"];
 
-const splitList = (v: string) =>
+export const splitList = (v: string) =>
   v
     .split(v.includes(";") ? ";" : ",")
     .map((s) => s.trim())
     .filter(Boolean);
 
 // "key=value" arguments → [key, value] pairs; everything else is left for the caller.
-function pairs(args: string[]) {
+export function pairs(args: string[]) {
   return args
     .filter((a) => /^[a-z_-]+=/i.test(a))
     .map((a) => {
@@ -48,7 +49,7 @@ function pairs(args: string[]) {
       return [a.slice(0, i).toLowerCase(), a.slice(i + 1)] as const;
     });
 }
-const positional = (args: string[]) => {
+export const positional = (args: string[]) => {
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     if (args[i].startsWith("--")) {
@@ -61,7 +62,7 @@ const positional = (args: string[]) => {
   }
   return out;
 };
-const flagValue = (args: string[], name: string) => {
+export const flagValue = (args: string[], name: string) => {
   const i = args.indexOf(`--${name}`);
   return i >= 0 ? args[i + 1] : undefined;
 };
@@ -89,7 +90,7 @@ async function buildPatch(campaignId: number, kv: (readonly [string, string])[])
     if (field.startsWith("traits.")) {
       const t = field.slice(7);
       traits[t] = value === "" ? (LIST_TRAITS.has(t) ? [] : "") : LIST_TRAITS.has(t) ? splitList(value) : value;
-    } else if (field.endsWith("LocationId")) {
+    } else if (field.endsWith("LocationId") || field === "parentId") {
       const loc = value === "" ? null : (await findEntity(campaignId, value)).id;
       (patch as Record<string, unknown>)[field] = loc;
     } else if (field === "aliases") {
@@ -137,7 +138,7 @@ async function showEntity(campaignId: number, query: string) {
   const where = [
     card.lastKnownLocation && `  last known: ${card.lastKnownLocation}${m("lastKnownLocationId")}`,
     card.actualLocation && `  actual: ${card.actualLocation}${m("actualLocationId")}`,
-    card.parentLocation && `  inside: ${card.parentLocation}${m("parentLocationId")}`,
+    card.parentLocation && `  ${e.type === "location" ? "inside" : "part of"}: ${card.parentLocation}${m("parentId")}`,
   ].filter(Boolean);
   if (where.length) console.log(`\nWhere\n${where.join("\n")}`);
 
@@ -265,8 +266,9 @@ export async function relateCommand(campaignId: number, args: string[], remove =
 
 const CAMPAIGN_USAGE = `campaign show
 campaign set [party=<location>] [tone=…] [date=…] [safety=topic;topic]
-campaign mechanic add "<name>" "<rule>"
-campaign mechanic remove "<name>"`;
+campaign toggle                      list the rule toggles and their options
+campaign toggle <name> <option>      e.g. campaign toggle madness dmg-tables
+House rules and effects: see "rule" (rule list / rule add / rule draft).`;
 
 export async function campaignCommand(campaignId: number, args: string[]) {
   const [sub, ...rest] = args;
@@ -281,9 +283,25 @@ export async function campaignCommand(campaignId: number, args: string[]) {
       console.log(`  in-game date: ${c.inGameDate || "(not set)"}`);
       console.log(`  tone: ${c.tone || "(not set)"}`);
       console.log(`  safety lines: ${c.safetyLines.length ? c.safetyLines.join("; ") : "(none)"}`);
-      console.log(`  mechanics:${c.mechanics.length ? "" : " (none)"}`);
-      for (const mech of c.mechanics) console.log(`    • ${mech.name}: ${mech.rule}`);
+      const changed = togglesText(c.ruleToggles);
+      console.log(`  rules: 5e${changed.length ? `, with ${changed.join(", ")}` : " as written"}`);
+      const n = (await db.select().from(schema.effects).where(eq(schema.effects.campaignId, campaignId))).length;
+      console.log(`  house rules and effects: ${n} (rule list)`);
       return;
+    }
+    case "toggle": {
+      const [name, value] = positional(rest);
+      if (!name) {
+        for (const [k, t] of Object.entries(TOGGLES)) {
+          console.log(`  ${k.padEnd(16)} ${toggleValue(c.ruleToggles, k as ToggleName).padEnd(20)} options: ${t.options.join(" / ")}`);
+        }
+        return;
+      }
+      if (!(name in TOGGLES)) throw new Error(`Unknown toggle "${name}". Toggles: ${Object.keys(TOGGLES).join(", ")}`);
+      const t = TOGGLES[name as ToggleName];
+      if (!value || !(t.options as readonly string[]).includes(value)) throw new Error(`${t.label}: choose one of ${t.options.join(", ")}`);
+      await db.update(schema.campaigns).set({ ruleToggles: { ...c.ruleToggles, [name]: value } }).where(eq(schema.campaigns.id, campaignId));
+      return console.log(`${t.label}: ${value}`);
     }
     case "set": {
       const kv = Object.fromEntries(pairs(rest));
@@ -298,19 +316,8 @@ export async function campaignCommand(campaignId: number, args: string[]) {
         ),
       );
     }
-    case "mechanic": {
-      const [action, name, rule] = positional(rest);
-      if (action === "add" && name && rule) {
-        const mechanics = [...c.mechanics.filter((m) => m.name.toLowerCase() !== name.toLowerCase()), { name, rule }];
-        return report(await updateCampaign(campaignId, { mechanics }, DM));
-      }
-      if (action === "remove" && name) {
-        const mechanics = c.mechanics.filter((m) => m.name.toLowerCase() !== name.toLowerCase());
-        if (mechanics.length === c.mechanics.length) return console.log(`No mechanic called "${name}".`);
-        return report(await updateCampaign(campaignId, { mechanics }, DM));
-      }
-      return console.log(CAMPAIGN_USAGE);
-    }
+    case "mechanic":
+      return console.log('Mechanics are now structured rules. Use: npm run loom -- rule draft "<the rule in your words>"');
     default:
       console.log(CAMPAIGN_USAGE);
   }

@@ -1,6 +1,8 @@
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
-import type { CampaignMechanic, EntityTraits } from "./entity-fields";
+import { type EffectInPlay, loadEffectsInPlay } from "./effects";
+import type { EntityTraits } from "./entity-fields";
+import { capabilitiesOf, togglesText } from "./rules";
 
 // The scene: where the party is, who's here, the party roster and compact cards for the
 // entities in play. Built from structured data so the model can't contradict continuity,
@@ -15,7 +17,7 @@ export interface Scene {
   partyLocation: Entity | null;
   pcs: Entity[];
   entities: Entity[];
-  mechanics: CampaignMechanic[];
+  effects: EffectInPlay[];
   safetyLines: string[];
   /** Resolves a name as the model wrote it ("Zara", "the alchemist") to an entity. */
   resolve: (name: string) => Entity | undefined;
@@ -54,7 +56,7 @@ export async function buildScene(
     let cur: number | null = place;
     for (let hops = 0; cur != null && hops < 20; hops++) {
       if (cur === container) return true;
-      cur = byId.get(cur)?.parentLocationId ?? null;
+      cur = byId.get(cur)?.parentId ?? null;
     }
     return false;
   };
@@ -65,7 +67,7 @@ export async function buildScene(
       const e = byId.get(cur);
       if (!e) break;
       names.push(e.name);
-      cur = e.parentLocationId;
+      cur = e.parentId;
     }
     return names.join(" › ");
   };
@@ -114,9 +116,14 @@ export async function buildScene(
   if (dead.length) lines.push(`- Dead (can't act): ${dead.join(", ")}`);
   if (campaign?.tone) lines.push(`- Tone: ${campaign.tone}`);
   if (campaign?.safetyLines.length) lines.push(`- Safety lines (never include): ${campaign.safetyLines.join("; ")}`);
-  if (campaign?.mechanics.length) {
-    lines.push("- The GM's mechanics (use them where they fit):");
-    for (const m of campaign.mechanics) lines.push(`  - ${m.name}: ${m.rule}`);
+
+  // The rules layer: toggles that differ from standard 5e, and every effect with who it reaches now.
+  const effects = await loadEffectsInPlay(campaignId, entities, party?.id ?? null);
+  const toggles = togglesText(campaign?.ruleToggles ?? {});
+  if (toggles.length || effects.length) {
+    lines.push("", "RULES IN PLAY (5e unless noted)");
+    for (const t of toggles) lines.push(`- ${t}`);
+    for (const e of effects) lines.push(`- ${e.text}`);
   }
 
   lines.push("", "THE PARTY (player characters, controlled by the players)");
@@ -135,7 +142,7 @@ export async function buildScene(
     partyLocation: party,
     pcs,
     entities,
-    mechanics: campaign?.mechanics ?? [],
+    effects,
     safetyLines: campaign?.safetyLines ?? [],
     resolve,
     presence,
@@ -172,6 +179,12 @@ function card(e: Entity, ctx: { nameOf: (id: number | null) => string | null; pr
   };
   list("health", "Health");
   list("conditions", "Conditions");
+  // What the 5e conditions mean right now, spelled out so they're not ignored.
+  const caps = capabilitiesOf(e);
+  const cant = (["act", "move", "speak", "aware"] as const).filter((k) => !caps[k]).map((k) => (k === "aware" ? "perceive" : k));
+  if (e.status !== "dead" && (cant.length || caps.laws.length)) {
+    parts.push(`Right now: ${[cant.length && `can't ${cant.join(", ")}`, ...caps.laws].filter(Boolean).join("; ")}.`);
+  }
   list("abilities", "Abilities");
   list("languages", "Languages");
   list("gear", "Gear");

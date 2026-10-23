@@ -42,7 +42,7 @@ export async function loadEntityCard(entityId: number): Promise<EntityCard> {
   const [entity] = await db.select().from(schema.entities).where(eq(schema.entities.id, entityId));
   if (!entity) throw new Error(`No entity with id ${entityId}`);
 
-  const locIds = [entity.lastKnownLocationId, entity.actualLocationId, entity.parentLocationId].filter((x): x is number => x != null);
+  const locIds = [entity.lastKnownLocationId, entity.actualLocationId, entity.parentId].filter((x): x is number => x != null);
   const locs = locIds.length
     ? await db.select({ id: schema.entities.id, name: schema.entities.name }).from(schema.entities).where(inArray(schema.entities.id, locIds))
     : [];
@@ -67,7 +67,7 @@ export async function loadEntityCard(entityId: number): Promise<EntityCard> {
     entity,
     lastKnownLocation: locName(entity.lastKnownLocationId),
     actualLocation: locName(entity.actualLocationId),
-    parentLocation: locName(entity.parentLocationId),
+    parentLocation: locName(entity.parentId),
     relations: rels.map((r) => {
       const out = r.fromEntityId === entityId;
       const otherId = out ? r.toEntityId : r.fromEntityId;

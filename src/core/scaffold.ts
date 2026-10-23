@@ -1,4 +1,5 @@
 import type { EntityTraits } from "./entity-fields";
+import { capabilitiesOf } from "./rules";
 import type { Scene } from "./scene";
 
 // Tags and checks shared by the improv scaffold and the flavour pass.
@@ -48,8 +49,12 @@ export function makeTagger(scene: Scene) {
   const proper = (s: string) => /^[A-Z]/.test(s);
   for (const e of scene.entities) {
     for (const n of [e.name, ...e.aliases]) if (n.length >= 3 && proper(n)) forms.push([n, e]);
+    // First-name shortcuts ("Zara", "Vex") only for characters; places and items need their full
+    // name or an alias, so "Resistance roll" or "Vex's presence" aren't mistaken for places.
     const first = e.name.split(/[\s,]+/)[0];
-    if (first.length >= 3 && proper(first)) firstWords.set(first, [...(firstWords.get(first) ?? []), e]);
+    if ((e.type === "npc" || e.type === "pc") && first.length >= 3 && proper(first) && !/['’]s$/.test(first)) {
+      firstWords.set(first, [...(firstWords.get(first) ?? []), e]);
+    }
   }
   for (const [w, es] of firstWords) if (es.length === 1 && !forms.some(([f]) => f === w)) forms.push([w, es[0]]);
   const allNames = new Map<string, Entity>();
@@ -66,7 +71,7 @@ export function makeTagger(scene: Scene) {
   }
   for (const [title, es] of titles) if (es.length === 1) forms.push([title, es[0]]);
   forms.sort((a, b) => b[0].length - a[0].length);
-  const mechanics = new Map(scene.mechanics.map((m) => [m.name.toLowerCase(), m.name]));
+  const mechanics = new Map(scene.effects.map((m) => [m.effect.name.toLowerCase(), m.effect.name]));
 
   const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const titleForms = forms.filter(([f]) => f.startsWith("the "));
@@ -87,8 +92,13 @@ export function makeTagger(scene: Scene) {
           const name = e ? e.name : (mechanics.get(rawName.toLowerCase()) ?? rawName);
           return shown ? `{${name}|${shown}}` : `{${name}}`;
         }
-        const named = nameRe ? p.replace(nameRe, (m) => `{${lookup.get(m.toLowerCase())?.name ?? m}}`) : p;
-        return titleRe ? named.replace(titleRe, (m) => `{${lookup.get(m.toLowerCase())?.name ?? m}}`) : named;
+        // Keep the wording as written ("Zara") and record the full name for checking.
+        const wrap = (m: string) => {
+          const name = lookup.get(m.toLowerCase())?.name ?? m;
+          return name === m ? `{${name}}` : `{${name}|${m}}`;
+        };
+        const named = nameRe ? p.replace(nameRe, wrap) : p;
+        return titleRe ? named.replace(titleRe, wrap) : named;
       })
       .join("");
   };
@@ -111,10 +121,12 @@ export function makeTagger(scene: Scene) {
   };
 
   const render = (tagged: string) =>
-    tagged.replace(TAG, (_, inner: string) => {
-      const [name, shown] = inner.split("|").map((s) => s.trim());
-      return shown || name;
-    });
+    tagged
+      .replace(TAG, (_, inner: string) => {
+        const [name, shown] = inner.split("|").map((s) => s.trim());
+        return shown || name;
+      })
+      .replace(/\b(the|a|an)\s+(?:the|a|an)\s+/gi, "$1 "); // "The {X|the monk figurine}" → "The monk figurine"
   const tagsIn = (tagged: string) => [...tagged.matchAll(TAG)].map((m) => m[1].split("|")[0].trim());
   return { tag, render, actingTags, tagsIn, entityOf };
 }
@@ -153,6 +165,10 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
       if (!actor || isPc(actor)) return `a player character (${b.actor}) is used as an acting NPC`;
       if (actor.status === "dead") return `${actor.name} is dead but acts`;
       if (!c.present.has(actor.name)) return `${actor.name} isn't here; they can only arrive or reach out from afar`;
+      {
+        const r = capabilityProblem(actor, c.tagger.render(does));
+        if (r) return r;
+      }
       break;
     case "arrival":
     case "remote":
@@ -162,6 +178,10 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
       }
       if (!actor || isPc(actor)) return `a player character (${b.actor}) is used as an arriving NPC`;
       if (actor.status === "dead") return `${actor.name} is dead but arrives`;
+      {
+        const r = b.kind === "arrival" ? capabilityProblem(actor, c.tagger.render(does)) : null;
+        if (r) return r;
+      }
       break;
     case "outcome":
       if (!actor || !isPc(actor)) return `an outcome beat must be about a player character's declared action (${b.actor})`;
@@ -185,6 +205,7 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
   for (const { entity, next } of c.tagger.actingTags(does)) {
     if (actor && entity.name === actor.name) continue; // the beat's own actor
     if (isPc(entity)) return `${entity.name} acts mid-sentence ("${entity.name} ${next}…")`;
+    if (!capabilitiesOf(entity).act && entity.status !== "dead") return `${entity.name} can't act right now (${capabilitiesOf(entity).causes?.join(", ") || "incapacitated"}) but does ("${entity.name} ${next}…")`;
     const why = unavailable(entity, c);
     if (why === "dead") return `${entity.name} is dead but acts ("${entity.name} ${next}…")`;
     if (why === "absent" && b.kind !== "arrival" && b.kind !== "remote") return `${entity.name} isn't here but acts ("${entity.name} ${next}…")`;
@@ -220,4 +241,16 @@ export function checkOnFail(target: string, effect: string, c: CheckContext): st
   return null;
 }
 
-export const pcHealth = (e: Entity) => (e.traits as EntityTraits).health;
+const SPEECH = /\b(?:says?|said|whispers?|shouts?|asks?|tells?|mutters?|calls?|answers?|replies|warns?|murmurs?|laughs?|sings?|speaks?)\b/i;
+
+// What a character can't do right now (5e conditions, health, status) against what the beat
+// has them do.
+export function capabilityProblem(e: Entity, text: string): string | null {
+  const caps = capabilitiesOf(e);
+  const why = caps.causes?.join(", ") || "incapacitated";
+  if (!caps.act) return `${e.name} can't act right now (${why})`;
+  if (!caps.speak && SPEECH.test(text)) return `${e.name} can't speak right now (${why})`;
+  return null;
+}
+
+export { capabilitiesOf };

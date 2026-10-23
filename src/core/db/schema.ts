@@ -8,6 +8,7 @@ import {
   IMPORTANCE,
   RELATION_TYPES,
 } from "../entity-fields";
+import { APPLIES_TO, type Toggles, TRIGGERS } from "../rules";
 
 export const THREAD_KINDS = ["hook", "condition", "promise", "mystery", "grudge", "item", "other"] as const;
 export const THREAD_STATUSES = ["open", "progressing", "resolved"] as const;
@@ -26,7 +27,9 @@ export const campaigns = sqliteTable("campaigns", {
   partyLocationId: integer("party_location_id").references((): AnySQLiteColumn => entities.id, { onDelete: "set null" }),
   inGameDate: text("in_game_date").notNull().default(""),
   tone: text("tone").notNull().default(""), // comedic / heroic / grim / horror …
-  mechanics: text("mechanics", { mode: "json" }).$type<CampaignMechanic[]>().notNull().default([]), // house rules, hidden rolls
+  // Superseded by the effects table (structured house rules); kept until old data is migrated.
+  mechanics: text("mechanics", { mode: "json" }).$type<CampaignMechanic[]>().notNull().default([]),
+  ruleToggles: text("rule_toggles", { mode: "json" }).$type<Toggles>().notNull().default({}),
   safetyLines: text("safety_lines", { mode: "json" }).$type<string[]>().notNull().default([]), // topics the table avoids
   fieldMeta: fieldMeta(),
   createdAt: createdAt(),
@@ -55,7 +58,11 @@ export const entities = sqliteTable("entities", {
   importance: text("importance", { enum: IMPORTANCE }),
   lastKnownLocationId: integer("last_known_location_id").references((): AnySQLiteColumn => entities.id, { onDelete: "set null" }),
   actualLocationId: integer("actual_location_id").references((): AnySQLiteColumn => entities.id, { onDelete: "set null" }),
+  // Superseded by parentId (one hierarchy for every type); kept until a later cleanup drops it.
   parentLocationId: integer("parent_location_id").references((): AnySQLiteColumn => entities.id, { onDelete: "set null" }),
+  // Hierarchy for every type: a place inside a place, an item in a set, a member of a creature
+  // kind, a cell of a faction. Children inherit effects from their parents.
+  parentId: integer("parent_id").references((): AnySQLiteColumn => entities.id, { onDelete: "set null" }),
   // Tier 2/3 (story fuel and flavour), validated by TraitsSchema.
   traits: text("traits", { mode: "json" }).$type<EntityTraits>().notNull().default({}),
   fieldMeta: fieldMeta(),
@@ -80,6 +87,29 @@ export const entityRelations = sqliteTable(
   },
   (t) => [uniqueIndex("entity_relations_unique").on(t.fromEntityId, t.toEntityId, t.type)],
 );
+
+// Structured house rules and effects (docs/loom-model.md §3c). An effect belongs to a source
+// (an item, a place, a creature kind, a thread) or to the whole campaign, and says when it fires
+// and who it applies to, so code can tell who may be asked for its roll.
+export const effects = sqliteTable("effects", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  sourceEntityId: integer("source_entity_id").references(() => entities.id, { onDelete: "cascade" }),
+  sourceThreadId: integer("source_thread_id").references(() => threads.id, { onDelete: "cascade" }),
+  trigger: text("trigger", { enum: TRIGGERS }).notNull(),
+  appliesTo: text("applies_to", { enum: APPLIES_TO }).notNull(),
+  appliesToList: text("applies_to_list", { mode: "json" }).$type<string[]>().notNull().default([]), // names, for "listed"
+  check: text("check").notNull().default(""), // the roll: "madness roll", "Wisdom save DC 13"
+  onFail: text("on_fail").notNull().default(""),
+  onSuccess: text("on_success").notNull().default(""),
+  escalation: text("escalation").notNull().default(""), // "harder to part with after each use"
+  duration: text("duration").notNull().default(""),
+  rule: text("rule").notNull().default(""), // the rule in plain words, as the DM would say it
+  secret: integer("secret", { mode: "boolean" }).notNull().default(false),
+  source: text("source", { enum: ["dm", "extracted"] }).notNull(),
+  createdAt: createdAt(),
+});
 
 // The core unit: anything with unspent narrative payoff.
 // Player states are threads of kind "condition" linked to a PC entity.

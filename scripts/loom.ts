@@ -21,6 +21,7 @@ import { seedFixture } from "@/core/seed";
 import { suggest } from "@/core/suggest";
 import { listThreads } from "@/core/threads";
 import { campaignCommand, entityCommand, relateCommand, threadCommand } from "./entity-cli";
+import { ruleCommand } from "./rules-cli";
 
 const USAGE = `Usage: npm run loom -- <command>   (add --campaign <id> to any command; default: most recent)
 
@@ -38,7 +39,9 @@ Campaign data
   relate "<from>" <type> "<to>" [note="…"] [strength=-3…3] [--secret]
   unrelate "<from>" <type> "<to>"
   campaign show | campaign set party=<location> tone=… date=… safety=…
-  campaign mechanic add "<name>" "<rule>" | campaign mechanic remove "<name>"
+  campaign toggle [<name> <option>]   5e variants that change the story (resting, death, madness…)
+  rule list | rule draft "<in your words>" | rule add "<name>" … | rule remove "<name>"
+                             House rules and effects: what fires when, and who it applies to
 
 Engine
   recap <file> [--session N] [--campaign id] [--model name]
@@ -177,11 +180,13 @@ async function main() {
     case "entity":
     case "relate":
     case "unrelate":
-    case "campaign": {
+    case "campaign":
+    case "rule": {
       const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
       if (!campaignId) return console.log('No campaigns yet. Try: npm run loom -- new-campaign "My campaign"');
       if (command === "entity") await entityCommand(campaignId, args);
       else if (command === "campaign") await campaignCommand(campaignId, args);
+      else if (command === "rule") await ruleCommand(campaignId, args);
       else await relateCommand(campaignId, args, command === "unrelate");
       break;
     }

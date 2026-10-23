@@ -54,7 +54,8 @@ export async function flavour(input: FlavourInput, model?: string) {
   const t = lists.tagger;
 
   const plainBeats = scaffold.setup.map((b) => renderBeat(b, t));
-  const mechanic = scene.mechanics.find((m) => m.name === scaffold.hand_off.mechanic);
+  const effect = scene.effects.find((e) => e.effect.name === scaffold.hand_off.mechanic);
+  const mechanic = effect ? { name: effect.effect.name, rule: effect.text } : undefined;
   const prompt = `${scene.text}
 
 WHAT JUST HAPPENED AT THE TABLE
