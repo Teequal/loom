@@ -247,12 +247,16 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
       break;
     case "arrival":
     case "remote":
-      if (b.actor === "walk-on") {
-        if (!b.walk_on.trim()) return "an arriving extra has no description";
-        break; // an unnamed runner or messenger arriving is fine
+      if (b.actor === "walk-on" || b.actor === "world") {
+        if (b.actor === "walk-on" && !b.walk_on.trim()) return "an arriving extra has no description";
+        break; // an unnamed runner, messenger or group ("the toll-men arrive") is fine
       }
       if (!actor || isPc(actor)) return `a player character (${b.actor}) is used as an arriving NPC`;
       if (actor.status === "dead") return `${actor.name} is dead but arrives`;
+      // A captive only reaches out or turns up by getting free, or by getting word out.
+      if (actor.status === "captured" && !/\b(?:escap|freed|break\w* free|broke free|broken free|smuggl|brib|slips? (?:a|the) (?:note|message)|through (?:the )?bars|guard (?:passes|carries))/i.test(c.tagger.render(does))) {
+        return `${actor.name} is captured, so can't ${b.kind === "remote" ? "reach out" : "arrive"} without escaping or getting word out`;
+      }
       {
         const r = b.kind === "arrival" ? capabilityProblem(actor, c.tagger.render(does)) : null;
         if (r) return r;

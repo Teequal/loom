@@ -4,6 +4,7 @@ import { db, schema } from "./db/client";
 import { callLlm } from "./llm";
 import { loadThreadContexts, type ThreadContext } from "./retrieval";
 import { listMoments, momentLine } from "./moments";
+import { tableSeats, tableText } from "./players";
 import { buildScene } from "./scene";
 
 // Between-session prep: collisions (open threads that pay each other off), something for each
@@ -29,7 +30,7 @@ Produce three things:
    - items or mysteries whose purpose is unknown, set against conditions or debts,
    - NPC promises, grudges and bounties that could arrive at the same moment.
    The best collisions resolve or transform every thread involved and make the players need each other. thread_ids lists every thread used (at least two). title: 3-6 words. idea: 2-3 sentences the GM can prepare from. why: one line.
-2. per_player: one idea for each player character, built on the threads attached to them, so every player gets a moment next session. pc is the character's exact name.
+2. per_player: one idea for each player character, built on the threads attached to them, so every player gets a moment next session. pc is the character's exact name. THE TABLE says who has been quiet and what their players enjoy: give the quietest characters the strongest hooks, lean toward what their players enjoy, and never mention players.
 3. neglected (up to 3): threads marked as quiet; suggest a small way to bring each back into play.
 4. callbacks (2-3, only if KEY MOMENTS are listed): bring a key moment back. Someone remembers it, a consequence finally lands, or the moment echoes in a new form. moment_id is its number (M12 → 12); thread_ids the threads it ties into. Callbacks land best when they connect to where the story is now.
 
@@ -72,8 +73,11 @@ export async function suggest(campaignId: number, model?: string) {
   // Key moments the DM flagged: what callbacks draw on (most recent first, capped).
   const moments = (await listMoments(campaignId, ["key"])).slice(-15);
 
-  const prompt = `${scene.text}
+  const seats = await tableSeats(campaignId);
+  const table = tableText(seats);
 
+  const prompt = `${scene.text}
+${table ? `\n${table}\n` : ""}
 OPEN THREADS (latest session: ${latestSession})
 ${threads.map((t) => threadLine(t, typeOf, latestSession)).join("\n\n")}
 ${moments.length ? `\nKEY MOMENTS (flagged by the GM)\n${moments.map(momentLine).join("\n")}` : ""}`;
@@ -88,7 +92,9 @@ ${moments.length ? `\nKEY MOMENTS (flagged by the GM)\n${moments.map(momentLine)
     collisions: res.data.collisions.map((c) => ({ ...c, thread_ids: known(c.thread_ids) })).filter((c) => c.thread_ids.length >= 2),
     per_player: res.data.per_player
       .map((p) => ({ ...p, thread_ids: known(p.thread_ids) }))
-      .filter((p) => pcNames.has(p.pc.toLowerCase())),
+      .filter((p) => pcNames.has(p.pc.toLowerCase()))
+      // Quietest first: the spotlight goes where it's been missing.
+      .sort((a, b) => (seats.find((x) => x.pc.name === b.pc)?.quietFor ?? 0) - (seats.find((x) => x.pc.name === a.pc)?.quietFor ?? 0)),
     neglected: res.data.neglected.filter((n) => titleOf.has(n.thread_id)),
     callbacks: res.data.callbacks
       .filter((c) => moments.some((m) => m.id === c.moment_id))
@@ -98,5 +104,5 @@ ${moments.length ? `\nKEY MOMENTS (flagged by the GM)\n${moments.map(momentLine)
     res.data.collisions.length + res.data.per_player.length + res.data.neglected.length + res.data.callbacks.length -
     (data.collisions.length + data.per_player.length + data.neglected.length + data.callbacks.length);
 
-  return { data, dropped, titleOf, moments, llm: res };
+  return { data, dropped, titleOf, moments, seats, llm: res };
 }

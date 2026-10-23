@@ -22,6 +22,7 @@ import { suggest } from "@/core/suggest";
 import { listThreads } from "@/core/threads";
 import { campaignCommand, entityCommand, relateCommand, threadCommand } from "./entity-cli";
 import { momentCommand } from "./moments-cli";
+import { playerCommand } from "./players-cli";
 import { ruleCommand } from "./rules-cli";
 
 const USAGE = `Usage: npm run loom -- <command>   (add --campaign <id> to any command; default: most recent)
@@ -45,6 +46,8 @@ Campaign data
   moment list | moment add "<title>" … | moment from-improv <n> | moment star|dismiss <id>
                              Key moments: the history callbacks draw on
   entity history "<name>"    What changed about it, when, and on whose word
+  player list | player add "<handle>" plays="<PC>" enjoys="mystery 3, comedy 2" lines="…"
+                             The real people at the table (DM-only): steers who gets the spotlight
                              House rules and effects: what fires when, and who it applies to
 
 Engine
@@ -192,13 +195,15 @@ async function main() {
     case "unrelate":
     case "campaign":
     case "rule":
-    case "moment": {
+    case "moment":
+    case "player": {
       const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
       if (!campaignId) return console.log('No campaigns yet. Try: npm run loom -- new-campaign "My campaign"');
       if (command === "entity") await entityCommand(campaignId, args);
       else if (command === "campaign") await campaignCommand(campaignId, args);
       else if (command === "rule") await ruleCommand(campaignId, args);
       else if (command === "moment") await momentCommand(campaignId, args);
+      else if (command === "player") await playerCommand(campaignId, args);
       else await relateCommand(campaignId, args, command === "unrelate");
       break;
     }
@@ -255,6 +260,8 @@ async function main() {
         const ties = [o.thread_id, ...o.also_ties_to].map((id) => r.titleOf.get(id)).join(" + ");
         console.log(`${i + 1}. ${o.label.toUpperCase()}   ⟵ ${ties}`);
         if (o.callback) console.log(`   ⟲ calls back: ${o.callback.title} (M${o.callback.id})`);
+        const quiet = r.quiet.get(o.scaffold.hand_off.to) ?? 0;
+        if (quiet >= 2) console.log(`   ◎ spotlight for ${o.scaffold.hand_off.to} (quiet for ${quiet} sessions)`);
         console.log(`   ${o.option}`);
         console.log(`   why: ${o.why}\n`);
       });
@@ -289,7 +296,7 @@ async function main() {
     case "suggest": {
       const campaignId = Number(flag(args, "campaign") ?? (await latestCampaignId()));
       console.log("Looking for payoffs between sessions…");
-      const { data, dropped, titleOf, moments, llm } = await suggest(campaignId, flag(args, "model"));
+      const { data, dropped, titleOf, moments, seats, llm } = await suggest(campaignId, flag(args, "model"));
       const names = (ids: number[]) => ids.map((id) => titleOf.get(id)).join(" + ");
 
       console.log("\nCOLLISIONS: threads that pay each other off");
@@ -297,7 +304,10 @@ async function main() {
         console.log(`\n${i + 1}. ${c.title.toUpperCase()}\n   ⟵ ${names(c.thread_ids)}\n   ${c.idea}\n   why: ${c.why}`);
       });
       console.log("\nFOR EACH PLAYER");
-      for (const p of data.per_player) console.log(`\n• ${p.pc}${p.thread_ids.length ? `  ⟵ ${names(p.thread_ids)}` : ""}\n   ${p.idea}`);
+      for (const p of data.per_player) {
+        const quiet = seats.find((x) => x.pc.name === p.pc)?.quietFor ?? 0;
+        console.log(`\n• ${p.pc}${quiet >= 2 ? ` ◎ quiet for ${quiet} sessions` : ""}${p.thread_ids.length ? `  ⟵ ${names(p.thread_ids)}` : ""}\n   ${p.idea}`);
+      }
       if (data.callbacks.length) {
         console.log("\nCALLBACKS: bring a key moment back");
         for (const c of data.callbacks) {

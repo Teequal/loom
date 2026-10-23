@@ -35,6 +35,21 @@ export const campaigns = sqliteTable("campaigns", {
   createdAt: createdAt(),
 });
 
+// P, the player layer (docs/loom-model.md §6): the real people at the table. DM-only: never named
+// in suggestions, only used to decide which suggestions rank first.
+export const PILLARS = ["combat", "social", "exploration", "mystery", "comedy", "drama"] as const;
+export type Pillar = (typeof PILLARS)[number];
+
+export const players = sqliteTable("players", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+  handle: text("handle").notNull(), // first name or nickname; no surnames needed
+  enjoys: text("enjoys", { mode: "json" }).$type<Partial<Record<Pillar, number>>>().notNull().default({}), // 0-3 per pillar
+  personalLines: text("personal_lines", { mode: "json" }).$type<string[]>().notNull().default([]),
+  tableNotes: text("table_notes").notNull().default(""), // real-world sensitivities the DM wants respected
+  createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
+});
+
 export const sessions = sqliteTable("sessions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
@@ -63,6 +78,7 @@ export const entities = sqliteTable("entities", {
   // Hierarchy for every type: a place inside a place, an item in a set, a member of a creature
   // kind, a cell of a faction. Children inherit effects from their parents.
   parentId: integer("parent_id").references((): AnySQLiteColumn => entities.id, { onDelete: "set null" }),
+  playerId: integer("player_id").references(() => players.id, { onDelete: "set null" }), // PCs: who plays them
   // Tier 2/3 (story fuel and flavour), validated by TraitsSchema.
   traits: text("traits", { mode: "json" }).$type<EntityTraits>().notNull().default({}),
   fieldMeta: fieldMeta(),

@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { callLlm, type LlmResult } from "./llm";
 import { findMentions, loadThreadContexts, retrieveThreads, type ThreadContext } from "./retrieval";
+import { PILLARS, type Pillar } from "./db/schema";
 import { listMoments, momentLine } from "./moments";
+import { personalLines, spotlightScore, tableSeats, tableText } from "./players";
 import { buildScene, type Scene } from "./scene";
 import { capabilitiesOf, checkBeat, checkOnFail, checkPossession, holdersOf, makeTagger, type CheckContext, type Possession, type ScaffoldBeat, type Tagger } from "./scaffold";
 
@@ -20,6 +22,7 @@ export interface ScaffoldOption {
   on_fail: { target: string; effect: string };
   why: string;
   callback?: string; // "M12" if it calls back a key moment, else "none"
+  pillar?: Pillar; // what kind of play it offers: combat, social, exploration, mystery, comedy, drama
 }
 
 export interface ImprovOption {
@@ -57,7 +60,9 @@ Each option is a scaffold:
 - hand_off: how the players get involved. to is a PC or "table". kind "question" asks the player what their character does; kind "roll" names the roll. mechanic is a rule from RULES IN PLAY if this roll is one, else "none"; a rule's roll can only go to someone it applies to right now (listed after "now"), or to "table" if it applies to everyone. text is one short sentence for the GM, e.g. "Ask {Salaena}'s player whether she reaches for him." or "{Khayiulad} makes a madness roll."
 - on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. This is the only place a PC may act against their player's will. Otherwise target "none" and effect "".
 - label: 2-5 words. why: under 15 words, why this fits now; don't repeat the thread title or use thread numbers.
-- callback: if the option echoes or pays off one of the KEY MOMENTS listed, its id ("M12"); otherwise "none". Use one only when it genuinely fits.`;
+- callback: if the option echoes or pays off one of the KEY MOMENTS listed, its id ("M12"); otherwise "none". Use one only when it genuinely fits.
+- pillar: the kind of play the option mostly offers: combat, social, exploration, mystery, comedy or drama.
+- THE TABLE says who has been quiet: when it fits the moment, give a quiet player the hand-off, and lean toward what their player enjoys. Never mention players.`;
 
 // Moments where the players themselves reach someone at a distance; that NPC may then act from afar.
 const REMOTE_CONTACT =
@@ -91,6 +96,7 @@ function optionsSchema(lists: { threads: string[]; actors: string[]; handOff: st
         on_fail: z.object({ target: z.enum(nonEmpty(["none", ...lists.pcs], "none")), effect: z.string() }),
         why: z.string(),
         callback: z.enum(nonEmpty(["none", ...lists.moments], "none")),
+        pillar: z.enum(PILLARS),
       }),
     ),
   });
@@ -141,8 +147,19 @@ export function renderOnFail(target: string, effect: string, tagger: Tagger) {
   return sentence(capitalise(startsWithVerb ? `${target} ${text}` : text));
 }
 
+// The table notes (who's been quiet, what players enjoy) steer ranking; they must never show.
+const TABLE_TALK = /\b(?:spotlight|quiet (?:soul|one|player|lately|this session)|hasn'?t had (?:a|the|their) (?:moment|turn)|(?:their|the) player enjoys|player'?s? (?:preference|taste)s?)\b/i;
+
+// A hand-off to "the table" whose text names exactly one PC is really to that PC.
+export function normaliseHandOff(o: ScaffoldOption, c: CheckContext) {
+  if (o.hand_off.to !== "table") return;
+  const named = [...new Set(c.tagger.tagsIn(c.tagger.tag(o.hand_off.text)).filter((n) => c.tagger.entityOf(n)?.type === "pc"))];
+  if (named.length === 1) o.hand_off.to = named[0];
+}
+
 export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
   if (!o.setup.length) return "has no setup";
+  if ([o.hand_off.text, o.why, o.on_fail.effect, ...o.setup.map((b) => b.does)].some((t) => TABLE_TALK.test(t))) return "mentions the table notes";
   for (const b of o.setup) {
     const r = checkBeat(b, c);
     if (r) return r;
@@ -283,6 +300,19 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   const lists = buildLists(scene, moment, mentioned);
   const typeOf = new Map(scene.entities.map((e) => [e.name, e.type]));
 
+  // The player layer: who has been quiet and what their players enjoy (ranking only).
+  const seats = await tableSeats(campaignId);
+  const quietest = seats
+    .filter((x) => x.quietFor >= 2 && x.pc.status !== "dead" && capabilitiesOf(x.pc).act)
+    .sort((a, b) => b.quietFor - a.quietFor)[0];
+  const tableBlock = [
+    tableText(seats),
+    quietest && `Spotlight: if the moment allows, make at least one option hand off to ${quietest.pc.name}.`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const lines = [...scene.safetyLines, ...(await personalLines(campaignId))];
+
   // Key moments involving who and what is in play: what a callback could draw on (up to 3).
   const inPlay = new Set([...mentioned, ...threads.slice(0, 4).flatMap((t) => t.entities)]);
   const callbacks = (await listMoments(campaignId, ["key"]))
@@ -302,7 +332,7 @@ WHO MAY ACT
 ${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 OPEN THREADS
 ${threads.map((t) => threadBlock(t, titleOf, typeOf)).join("\n\n")}
-${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callbacks.map(momentLine).join("\n")}\n` : ""}
+${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callbacks.map(momentLine).join("\n")}\n` : ""}${tableBlock ? `\n${tableBlock}\n` : ""}
 WHAT JUST HAPPENED AT THE TABLE
 ${moment}`;
 
@@ -314,14 +344,18 @@ ${moment}`;
     const res = await callLlm({ feature: "improv", system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
     calls.push(res);
     for (const o of res.data.options as ScaffoldOption[]) {
+      normaliseHandOff(o, lists.check);
       const reason = checkOption(o, lists.check);
       if (reason) rejected.push({ label: o.label, reason });
       else accepted.push(o);
     }
   }
 
-  let kept = accepted.slice(0, 3);
-  const safety = await safetyCheck(scene.safetyLines, kept.map((o) => renderOption(o, lists.tagger)));
+  // Spotlight-aware ranking: options that hand off to a quiet player, in a kind of play their
+  // player enjoys, come first.
+  const score = (o: ScaffoldOption) => spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama");
+  let kept = [...accepted].sort((a, b) => score(b) - score(a)).slice(0, 3);
+  const safety = await safetyCheck(lines, kept.map((o) => renderOption(o, lists.tagger)));
   if (safety.call) calls.push(safety.call);
   for (const i of safety.flagged) if (kept[i]) rejected.push({ label: kept[i].label, reason: "crosses a safety line" });
   kept = kept.filter((_, i) => !safety.flagged.has(i));
@@ -330,18 +364,19 @@ ${moment}`;
   // away, rather than leaving the GM with nothing.
   let safetyNote: string | null = null;
   if (safety.flagged.size && kept.length < 2) {
-    safetyNote = `This moment touches your safety line${scene.safetyLines.length > 1 ? "s" : ""} (${scene.safetyLines.join("; ")}), so these options steer away from it.`;
+    safetyNote = `This moment touches a safety line (${lines.join("; ")}), so these options steer away from it.`;
     const steer = `${prompt}
 
-IMPORTANT: this moment runs into the table's safety line(s): ${scene.safetyLines.join("; ")}. Every option must steer away from it: keep it off-screen, redirect the danger elsewhere (often onto the party or the villain's plans), or resolve it without depicting or threatening it.`;
+IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}. Every option must steer away from it: keep it off-screen, redirect the danger elsewhere (often onto the party or the villain's plans), or resolve it without depicting or threatening it.`;
     const res = await callLlm({ feature: "improv", system: SYSTEM, prompt: steer, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
     calls.push(res);
     const fresh = (res.data.options as ScaffoldOption[]).filter((o) => {
+      normaliseHandOff(o, lists.check);
       const reason = checkOption(o, lists.check);
       if (reason) rejected.push({ label: o.label, reason });
       return !reason;
     });
-    const recheck = await safetyCheck(scene.safetyLines, fresh.map((o) => renderOption(o, lists.tagger)));
+    const recheck = await safetyCheck(lines, fresh.map((o) => renderOption(o, lists.tagger)));
     if (recheck.call) calls.push(recheck.call);
     for (const i of recheck.flagged) rejected.push({ label: fresh[i].label, reason: "crosses a safety line" });
     kept = [...kept, ...fresh.filter((_, i) => !recheck.flagged.has(i))].slice(0, 3);
@@ -369,5 +404,5 @@ IMPORTANT: this moment runs into the table's safety line(s): ${scene.safetyLines
     costUsd: calls.reduce((s, c) => s + c.costUsd, 0),
     attempts: calls.filter((c) => c.model !== "safety" && c !== safety.call).length,
   };
-  return { options, dropped: rejected.length, rejected, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes };
+  return { options, dropped: rejected.length, rejected, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes, quiet: new Map(seats.map((x) => [x.pc.name, x.quietFor])) };
 }

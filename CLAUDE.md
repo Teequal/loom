@@ -259,7 +259,16 @@ Jacob approved the model on 24 Oct 2026: layers L0 Rules › L1 Identity › L2 
     - Recaps and `enrich` suggest 0–3 moments per session, as ☆ items in the approve flow.
   - **Callbacks:** `suggest` has a CALLBACKS section built from ★ moments (validated ids). Each improv option can name a ★ moment it calls back (an id chosen from up to 3 relevant moments), shown as ⟲.
   - **Duradan:** `enrich` suggested 6 moments (Gary's death, Salaena's shield, the stick horse, Salaena kicking Darius, the duplicates reveal, Dahlia's window entrance). **All are ☆, waiting for Jacob to star.** A test with two temporary stars produced strong callbacks (the stick horse half-visible in the Knight figurine's light; "Salaena's kick, but worse"); both were reverted afterwards.
-- [ ] Step 4: Player layer and spotlight-aware ranking
+- [x] **Step 4: Player layer and spotlight** (migration `drizzle/0004`).
+  - `players` table: handle, enjoys (combat / social / exploration / mystery / comedy / drama, 0–3), personal lines, table notes. PCs link to their player through `entities.player_id`. DM-only: players are never named in prompts or output.
+  - `player list | add | set | remove`.
+  - **Spotlight** (`src/core/players.ts` `tableSeats`): a PC's last moment of their own comes from key moments (★ or ☆) involving them, plus threads about at most two PCs that moved that session. That gives "quiet for N sessions".
+  - **Improv:** each option states its pillar. Options are ranked by what the hand-off player enjoys plus a boost for quiet players (`spotlightScore`). The prompt gets THE TABLE block, and when someone is quiet for 2+ sessions, asks for at least one option handing off to them. Output marks these with ◎.
+    - A hand-off to "table" whose text names one PC counts as that PC.
+    - Options that leak table notes ("a quiet soul", "spotlight") are rejected.
+  - **Suggest:** per-player ideas are ordered quietest first and marked ◎; players' personal lines join the safety check (tested: "spiders" steered a web-filled cellar).
+  - **Duradan:** Iresia has been quiet since session 1, which matches the notes. Suggest now leads with her, and the open camp moment led with her hand-off. **Jacob still needs to add the real players** (`player add`).
+  - Also closed: a captured NPC can only reach out or arrive by escaping or getting word out (bribing a guard, smuggling a note).
 - [ ] Step 5: Context assembly by graph distance, with per-feature budgets
 - [ ] Step 6: Embeddings as entry points
 - [ ] Step 7: Stress tests and a blind rerun
