@@ -92,6 +92,43 @@ export function togglesText(t: Toggles) {
     .map((k) => `${TOGGLES[k].label}: ${t[k]}`);
 }
 
+// ---------- L3 laws on relationships (docs/loom-model.md §4) ----------
+
+type EntityType = "pc" | "npc" | "location" | "item" | "faction" | "other";
+
+export interface RelationLaw {
+  to?: EntityType[]; // what the relationship can point at
+  from?: EntityType[]; // what can hold the relationship
+  // "one-per-target": the target has at most one of these (an item has one holder, a faction one
+  //   leader), unless the target is marked shared.
+  // "one-per-source": the source has at most one (you live in one place, stand in one place).
+  cardinality?: "one-per-target" | "one-per-source";
+  symmetric?: boolean; // A ally B means B ally A
+}
+
+const CHARACTERS: EntityType[] = ["pc", "npc"];
+const ACTORS: EntityType[] = ["pc", "npc", "faction"];
+
+export const RELATION_LAWS: Partial<Record<string, RelationLaw>> = {
+  holds: { from: CHARACTERS, to: ["item"], cardinality: "one-per-target" },
+  made: { to: ["item", "location"] },
+  wants: {},
+  lives_at: { from: CHARACTERS, to: ["location"], cardinality: "one-per-source" },
+  located_at: { from: ["pc", "npc", "item", "faction"], to: ["location"], cardinality: "one-per-source" },
+  controls: { from: ACTORS, to: ["location", "item", "faction"] },
+  leads: { from: CHARACTERS, to: ["faction"], cardinality: "one-per-target" },
+  member_of: { from: CHARACTERS, to: ["faction"] },
+  serves: { from: CHARACTERS },
+  family: { from: CHARACTERS, to: CHARACTERS, symmetric: true },
+  romance: { from: CHARACTERS, to: CHARACTERS, symmetric: true },
+  ally: { from: ACTORS, to: ACTORS, symmetric: true },
+  enemy: { from: ACTORS, to: ACTORS, symmetric: true },
+  rivals: { from: ACTORS, to: ACTORS, symmetric: true },
+  hunts: { from: ACTORS },
+  owes: { from: ACTORS, to: ACTORS },
+  promised: { from: ACTORS },
+};
+
 // ---------- House rules and effects ----------
 
 export const TRIGGERS = ["on-use", "on-exposure", "on-touch", "on-rest", "on-condition", "per-session", "on-event", "always"] as const;

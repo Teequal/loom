@@ -2,7 +2,7 @@ import { z } from "zod";
 import { callLlm, type LlmResult } from "./llm";
 import { findMentions, loadThreadContexts, retrieveThreads, type ThreadContext } from "./retrieval";
 import { buildScene, type Scene } from "./scene";
-import { capabilitiesOf, checkBeat, checkOnFail, makeTagger, type CheckContext, type ScaffoldBeat, type Tagger } from "./scaffold";
+import { capabilitiesOf, checkBeat, checkOnFail, checkPossession, holdersOf, makeTagger, type CheckContext, type Possession, type ScaffoldBeat, type Tagger } from "./scaffold";
 
 // The improv box answers with a scaffold, not free prose. The answer format is built for each
 // request: the "who acts" slot only offers characters allowed to act right now, the thread slot
@@ -142,6 +142,9 @@ export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
     const r = checkBeat(b, c);
     if (r) return r;
   }
+  // Items are used or held only by whoever has them; hand-overs in the beats count from then on.
+  const poss = checkPossession(o.setup, c);
+  if (poss.problem) return poss.problem;
   // Who's being asked must be able to answer: a question needs someone who can act; a roll needs
   // someone aware (except death saves).
   const pc = o.hand_off.to !== "table" ? c.tagger.entityOf(o.hand_off.to) : undefined;
@@ -159,7 +162,7 @@ export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
     if (o.hand_off.kind !== "roll") return `uses "${eff.effect.name}" without a roll`;
     if (o.hand_off.to === "table") {
       if (!eff.tableWide) return `calls "${eff.effect.name}" for the whole table, but it only applies to ${eff.targets.join(", ") || "nobody right now"}`;
-    } else if (!eff.targets.includes(o.hand_off.to)) {
+    } else if (!eff.targets.includes(o.hand_off.to) && !gainsSource(eff, o.hand_off.to, poss.gained, c)) {
       return `"${eff.effect.name}" doesn't apply to ${o.hand_off.to} (applies to ${eff.effect.appliesTo.replace(/-/g, " ")}: ${eff.targets.join(", ") || "nobody right now"})`;
     }
   }
@@ -171,6 +174,24 @@ export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
     if (r) return r;
   }
   return null;
+}
+
+function isInside(item: string, container: string, parentOf: Map<string, string>) {
+  for (let cur = parentOf.get(item), hops = 0; cur && hops < 10; cur = parentOf.get(cur), hops++) if (cur === container) return true;
+  return false;
+}
+
+// A holder- or user-bound rule also reaches someone who gains its item in this option (a beat
+// hands it over), or whom the moment itself puts with it.
+function gainsSource(eff: Scene["effects"][number], who: string, gained: Map<string, Set<string>>, c: CheckContext) {
+  if (!["holder", "user"].includes(eff.effect.appliesTo) || eff.sourceName == null) return false;
+  const inSource = (item: string) => {
+    for (let cur: string | undefined = item, hops = 0; cur && hops < 10; cur = c.possession.parentOf.get(cur), hops++) if (cur === eff.sourceName) return true;
+    return false;
+  };
+  for (const [item, people] of gained) if (people.has(who) && inSource(item)) return true;
+  for (const [item, people] of c.possession.holders) if (people.has(who) && inSource(item)) return true;
+  return false;
 }
 
 // The lists that shape the answer format, and the context the checks use.
@@ -190,9 +211,37 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>)
   const absentNpcs = scene.entities.filter((e) => e.type === "npc" && alive(e) && !present.has(e.name)).map((e) => e.name);
   const outcomePcs = new Set(WHOLE_PARTY.test(moment) ? scene.pcs.map((p) => p.name) : scene.pcs.filter((p) => mentioned.has(p.name)).map((p) => p.name));
 
+  // Possession: who holds what, from the records. If the moment itself puts an item with a PC
+  // ("Khayiulad sells the monk figurine"), the moment wins for this call, and the GM is told the
+  // records disagree.
+  const byId = new Map(scene.entities.map((e) => [e.id, e]));
+  const holders = new Map<string, Set<string>>();
+  for (const h of scene.holds) holders.set(h.item, new Set([...(holders.get(h.item) ?? []), h.holder]));
+  const parentOf = new Map<string, string>();
+  for (const e of scene.entities) if (e.type === "item" && e.parentId != null && byId.get(e.parentId)) parentOf.set(e.name, byId.get(e.parentId)!.name);
+  const possession: Possession = { holders, parentOf };
+  const notes: string[] = [];
+  const momentPcs = scene.pcs.filter((p) => mentioned.has(p.name));
+  // The most specific item named: "the monk figurine" means the Monk figurine, not its whole set.
+  const named = scene.entities.filter((e) => e.type === "item" && mentioned.has(e.name));
+  const momentItems = named.filter((item) => !named.some((other) => other !== item && isInside(other.name, item.name, parentOf)));
+  if (momentPcs.length) {
+    for (const item of momentItems) {
+      const recorded = holdersOf(item.name, possession);
+      const withItem = momentPcs.filter((p) => recorded.size && !recorded.has(p.name));
+      if (!withItem.length) continue;
+      holders.set(item.name, new Set([...(holders.get(item.name) ?? []), ...withItem.map((p) => p.name)]));
+      const who = [...recorded];
+      notes.push(
+        `Your records say ${who.join(" and ")} ${who.length > 1 ? "hold" : "holds"} ${item.name}; this moment has ${withItem.map((p) => p.name).join(" and ")} with it. Update with: relate "${withItem[0].name}" holds "${item.name}"`,
+      );
+    }
+  }
+
   return {
     tagger,
-    check: { scene, tagger, present, remoteOk, outcomePcs } satisfies CheckContext,
+    notes,
+    check: { scene, tagger, present, remoteOk, outcomePcs, possession } satisfies CheckContext,
     actors: [...present, ...absentNpcs, ...scene.pcs.map((p) => p.name)],
     handOff: scene.pcs.filter((p) => p.status !== "dead" && capabilitiesOf(p).aware).map((p) => p.name),
     pcs: scene.pcs.map((p) => p.name),
@@ -236,7 +285,7 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
 WHO MAY ACT
 - Here now (kind "npc"): ${[...lists.check.present].filter((n) => typeOf.get(n) === "npc").join(", ") || "nobody named; use walk-ons"}
 - Not here (only kind "arrival" or "remote"): ${lists.actors.filter((n) => typeOf.get(n) === "npc" && !lists.check.present.has(n)).join(", ") || "nobody"}
-${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}
+${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 OPEN THREADS
 ${threads.map((t) => threadBlock(t, titleOf, typeOf)).join("\n\n")}
 
@@ -302,5 +351,5 @@ IMPORTANT: this moment runs into the table's safety line(s): ${scene.safetyLines
     costUsd: calls.reduce((s, c) => s + c.costUsd, 0),
     attempts: calls.filter((c) => c.model !== "safety" && c !== safety.call).length,
   };
-  return { options, dropped: rejected.length, rejected, threads, titleOf, llm, moment, campaignId, safetyNote };
+  return { options, dropped: rejected.length, rejected, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes };
 }

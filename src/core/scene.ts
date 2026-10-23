@@ -17,6 +17,7 @@ export interface Scene {
   partyLocation: Entity | null;
   pcs: Entity[];
   entities: Entity[];
+  holds: { holder: string; item: string }[];
   effects: EffectInPlay[];
   safetyLines: string[];
   /** Resolves a name as the model wrote it ("Zara", "the alchemist") to an entity. */
@@ -142,6 +143,10 @@ export async function buildScene(
     partyLocation: party,
     pcs,
     entities,
+    holds: relations
+      .filter((r) => r.type === "holds")
+      .map((r) => ({ holder: nameOf(r.fromEntityId) ?? "", item: nameOf(r.toEntityId) ?? "" }))
+      .filter((h) => h.holder && h.item),
     effects,
     safetyLines: campaign?.safetyLines ?? [],
     resolve,

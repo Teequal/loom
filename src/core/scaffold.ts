@@ -139,6 +139,81 @@ export interface CheckContext {
   present: Set<string>; // NPCs, factions and items that may act directly
   remoteOk: Set<string>; // absent NPCs the moment itself put in contact
   outcomePcs: Set<string>; // PCs whose declared action this moment is about
+  possession: Possession;
+}
+
+// ---------- Possession (L3: one holder per item, inherited through sets) ----------
+
+export interface Possession {
+  holders: Map<string, Set<string>>; // item → who may handle it now (records + the moment)
+  parentOf: Map<string, string>; // item → its set
+}
+
+// Who holds an item, counting the set it belongs to and the pieces inside it: holding a piece
+// lets you handle "the figurines"; holding the whole set lets you use any piece.
+export function holdersOf(item: string, p: Possession, extra?: Map<string, Set<string>>) {
+  const out = new Set<string>();
+  const add = (name: string) => {
+    for (const h of p.holders.get(name) ?? []) out.add(h);
+    for (const h of extra?.get(name) ?? []) out.add(h);
+  };
+  add(item);
+  for (let cur = p.parentOf.get(item), hops = 0; cur && hops < 10; cur = p.parentOf.get(cur), hops++) add(cur);
+  for (const [child] of p.parentOf) {
+    let cur: string | undefined = child;
+    for (let hops = 0; cur && hops < 10; cur = p.parentOf.get(cur), hops++) if (p.parentOf.get(cur) === item || cur === item) add(child);
+  }
+  return out;
+}
+
+const ITEM_TAG = String.raw`(?:the\s+|a\s+|an\s+|his\s+|her\s+|their\s+)?\{([^{}|]+)(?:\|[^{}]*)?\}`;
+const CHAR_TAG = String.raw`\{([^{}|]+)(?:\|[^{}]*)?\}`;
+const GIVE = new RegExp(String.raw`\b(?:gives?|hands?|passes|pass|tosses|toss|throws?|slides?|returns?|offers?)\s+(?:back\s+)?${ITEM_TAG}\s+(?:back\s+)?to\s+${CHAR_TAG}`, "gi");
+const TAKE = new RegExp(String.raw`\b(?:steals?|snatch(?:es)?|grabs?|takes?|seizes?|pockets?|swipes?|lifts?|picks?\s+up|catch(?:es)?)\s+${ITEM_TAG}`, "gi");
+const USE = new RegExp(String.raw`\b(?:uses?|activates?|wields?|brandish(?:es)?|drinks?|invokes?|channels?|attunes?\s+to)\s+${ITEM_TAG}`, "gi");
+const IN_HAND = new RegExp(String.raw`${ITEM_TAG}[^.]{0,60}?\b(?:in|from|against|on|inside|within)\s+${CHAR_TAG}['’]s\s+(?:\w+\s+)?(?:hands?|palm|pack|pocket|grip|coat|bag|belt|pouch|satchel|fingers|lap|robes?|cloak)`, "gi");
+const POSSESSIVE = new RegExp(String.raw`${CHAR_TAG}['’]s\s+(?:\w+\s+)?\{([^{}|]+)(?:\|[^{}]*)?\}`, "gi");
+
+// Checks one option's beats in order for items used or held by someone who doesn't have them.
+// Hand-overs inside the option count from then on; returns who gained what, for rule checks.
+export function checkPossession(beats: ScaffoldBeat[], c: CheckContext): { problem: string | null; gained: Map<string, Set<string>> } {
+  const gained = new Map<string, Set<string>>();
+  const isItem = (n: string) => c.tagger.entityOf(n)?.type === "item";
+  const give = (item: string, to: string) => gained.set(item, new Set([...(gained.get(item) ?? []), to]));
+  const holds = (who: string, item: string) => {
+    const h = holdersOf(item, c.possession, gained);
+    return h.size === 0 || h.has(who); // nobody recorded as holding it: can't judge
+  };
+  const recorded = (item: string) => [...holdersOf(item, c.possession, gained)].join(", ") || "nobody";
+
+  for (const b of beats) {
+    const text = c.tagger.tag(b.does);
+    const actor = b.kind === "npc" || b.kind === "arrival" || b.kind === "outcome" ? (c.tagger.entityOf(b.actor)?.name ?? b.actor) : null;
+
+    for (const m of text.matchAll(GIVE)) {
+      const [item, to] = [m[1].trim(), m[2].trim()];
+      if (!isItem(item)) continue;
+      if (actor && !holds(actor, item)) return { problem: `${actor} hands over ${item}, which ${recorded(item)} holds`, gained };
+      give(item, c.tagger.entityOf(to)?.name ?? to);
+    }
+    for (const m of text.matchAll(TAKE)) {
+      const item = m[1].trim();
+      if (isItem(item) && actor) give(item, actor);
+    }
+    for (const m of text.matchAll(USE)) {
+      const item = m[1].trim();
+      if (isItem(item) && actor && !holds(actor, item)) return { problem: `${actor} uses ${item}, but ${recorded(item)} holds it`, gained };
+    }
+    for (const m of text.matchAll(IN_HAND)) {
+      const [item, who] = [m[1].trim(), c.tagger.entityOf(m[2].trim())?.name ?? m[2].trim()];
+      if (isItem(item) && !holds(who, item)) return { problem: `${item} is in ${who}'s hands, but ${recorded(item).replace(/, (?=[^,]*$)/, " and ")} ${recorded(item).includes(",") ? "hold" : "holds"} it`, gained };
+    }
+    for (const m of text.matchAll(POSSESSIVE)) {
+      const [who, item] = [c.tagger.entityOf(m[1].trim())?.name ?? m[1].trim(), m[2].trim()];
+      if (isItem(item) && c.tagger.entityOf(who) && !holds(who, item)) return { problem: `"${who}'s ${item}", but ${recorded(item)} holds it`, gained };
+    }
+  }
+  return { problem: null, gained };
 }
 
 const isPc = (e: Entity) => e.type === "pc";
@@ -159,7 +234,7 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
       break;
     case "walk_on":
       if (!b.walk_on.trim()) return "a walk-on beat has no description of the extra";
-      if (c.tagger.tagsIn(c.tagger.tag(b.walk_on)).some((n) => c.tagger.entityOf(n))) return `a walk-on is really a known character: "${b.walk_on}"`;
+      if (c.tagger.tagsIn(c.tagger.tag(b.walk_on)).some((n) => { const t = c.tagger.entityOf(n)?.type; return t === "npc" || t === "pc"; })) return `a walk-on is really a known character: "${b.walk_on}"`;
       break;
     case "npc":
       if (!actor || isPc(actor)) return `a player character (${b.actor}) is used as an acting NPC`;

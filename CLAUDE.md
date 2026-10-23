@@ -242,7 +242,16 @@ Jacob approved the model on 24 Oct 2026: layers L0 Rules › L1 Identity › L2 
   - **Tagging fixes:** first-name shortcuts only for characters (no more "Resistance roll" → Resistance Headquarters); no possessive first words; auto-tags keep the original wording (`{Zara the Unbound|Zara}`); doubled articles collapse.
   - **Duradan data:** the figurines are split into Knight (Khayiulad) and Monk (Salaena) under the set; both are linked to the figurine threads. Rules: *Figurine madness* (set, on use, user) and *Reality Microfractures* (thread #23, on exposure, everyone present, GM-only; drafted from Jacob's words). The old free-text mechanics are cleared.
   - **Tests:** 16/16 new rule and capability cases (Iresia's figurine roll rejected; Salaena's and Khayiulad's accepted; everyone-except-holder reaches all but the holder) and 25/25 earlier cases. Live: the Bhen moment no longer misapplies Figurine madness; Salaena using the Monk figurine gets her own madness roll.
-- [ ] Step 2: L3 laws (cardinality and symmetry on write and at generation; possession and use checks)
+- [x] **Step 2: L3 relationship laws**
+  - `RELATION_LAWS` in `src/core/rules.ts` says, per type, what it can connect, its cardinality and whether it's two-way:
+    - `holds`: one holder per item, unless the item has `possession=shared`.
+    - `lives_at` / `located_at`: one place.
+    - `leads`: one leader.
+    - `family`, `romance`, `ally`, `enemy`, `rivals`: two-way.
+  - **On write** (`setRelation`): wrong types are rejected; a new holder, home or leader replaces the old one (reported as "replaces: …"); two-way links are recorded and removed both ways; you can't hold a set while someone holds a piece of it, or the reverse. Extraction never overrides the DM's holder; it proposes instead.
+  - **At generation** (`checkPossession` in `scaffold.ts`): an item can only be used, carried "in someone's hand/pack", or called "X's item" by whoever holds it (holding a piece counts for its set, and the set for its pieces). Hand-overs in a beat ("snatches", "tosses … to") count from then on, including for item rules: a hand-over to Iresia makes her Figurine madness roll valid.
+  - **Moment overrides:** if the moment puts an item with a PC, the moment wins for that call, and the GM gets a note with the command to update the records. The prompt lists who holds what.
+  - **Tests:** 7/7 write-law cases on the fixture; 13/13 crafted possession cases; the earlier 25/25 still pass. Live: "Iresia grabs the monk figurine" gives a records note and a valid madness roll for Iresia; "Khayiulad sells the monk figurine" does the same for Khayiulad.
 - [ ] Step 3: L4 change log and key moments; callbacks in suggest
 - [ ] Step 4: Player layer and spotlight-aware ranking
 - [ ] Step 5: Context assembly by graph distance, with per-feature budgets

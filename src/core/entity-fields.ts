@@ -87,6 +87,7 @@ export const TraitsSchema = z
     true_properties: z.string(),
     cost: z.string(), // side effects or price of use, e.g. a madness roll per use
     rarity: z.string(),
+    possession: z.enum(["single", "shared"]), // items: one holder at a time (default) or several
     // factions
     faction_goal: z.string(),
     plan: z.string(), // current plan between sessions

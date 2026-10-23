@@ -238,6 +238,7 @@ async function main() {
       }
       console.log("");
       if (r.safetyNote) console.log(`⚠ ${r.safetyNote}\n`);
+      for (const n of r.notes) console.log(`ℹ ${n}\n`);
       r.options.forEach((o, i) => {
         const ties = [o.thread_id, ...o.also_ties_to].map((id) => r.titleOf.get(id)).join(" + ");
         console.log(`${i + 1}. ${o.label.toUpperCase()}   ⟵ ${ties}`);

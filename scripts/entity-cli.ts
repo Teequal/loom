@@ -262,6 +262,7 @@ export async function relateCommand(campaignId: number, args: string[], remove =
     DM,
   );
   console.log(r.written.length ? `Saved: ${from.name} ${type.replace(/_/g, " ")} ${to.name}` : "Nothing changed.");
+  for (const n of r.notes ?? []) console.log(`  ${n}`);
 }
 
 const CAMPAIGN_USAGE = `campaign show

@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import {
   ENTITY_STATUSES,
@@ -9,6 +9,7 @@ import {
   type Source,
   TraitsSchema,
 } from "./entity-fields";
+import { RELATION_LAWS } from "./rules";
 
 // Writes to entities, relationships and the campaign, applying the provenance rule:
 // the DM can always write; extraction writes only where the DM hasn't, and otherwise
@@ -29,6 +30,7 @@ export interface Proposal {
 export interface WriteResult {
   written: string[];
   proposed: Proposal[];
+  notes?: string[]; // knock-on changes, e.g. the previous holder replaced
 }
 
 const isBlank = (v: unknown) => v === null || v === undefined || v === "" || (Array.isArray(v) && v.length === 0);
@@ -145,9 +147,88 @@ export interface RelationInput {
   secret?: boolean;
 }
 
-// Adds or updates the relationship identified by (from, to, type).
+const verb = (t: string) => t.replace(/_/g, " ");
+
+// Adds or updates the relationship identified by (from, to, type), obeying its law
+// (rules.ts RELATION_LAWS): what it can connect, how many are allowed, and whether it runs both
+// ways. The DM's writes move things (a new holder replaces the old one); extraction proposes
+// instead of overriding the DM.
 export async function setRelation(campaignId: number, input: RelationInput, opts: WriteOptions): Promise<WriteResult> {
   if (input.fromEntityId === input.toEntityId) throw new Error("A relationship needs two different entities");
+  const all = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
+  const from = all.find((e) => e.id === input.fromEntityId);
+  const to = all.find((e) => e.id === input.toEntityId);
+  if (!from || !to) throw new Error("Both entities must be in this campaign");
+  const law = RELATION_LAWS[input.type] ?? {};
+  if (law.from && !law.from.includes(from.type)) throw new Error(`${from.name} (${from.type}) can't be the one who ${verb(input.type)} something`);
+  if (law.to && !law.to.includes(to.type)) throw new Error(`"${verb(input.type)}" can't point at ${to.name} (${to.type}); it needs ${law.to.join(" or ")}`);
+
+  const notes: string[] = [];
+  const related = async (where: ReturnType<typeof and>) => db.select().from(schema.entityRelations).where(where);
+
+  // Possession across a set: you can't hold the set while someone else holds a piece of it, or
+  // a piece while someone else holds the whole set.
+  if (input.type === "holds") {
+    const byId = new Map(all.map((e) => [e.id, e]));
+    const ancestors: number[] = [];
+    for (let cur = to.parentId, hops = 0; cur != null && hops < 20; cur = byId.get(cur)?.parentId ?? null, hops++) ancestors.push(cur);
+    const descendants = new Set<number>();
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const e of all) {
+        if (e.parentId != null && (e.parentId === to.id || descendants.has(e.parentId)) && !descendants.has(e.id)) {
+          descendants.add(e.id);
+          grew = true;
+        }
+      }
+    }
+    const family = [...ancestors, ...descendants];
+    if (family.length) {
+      const others = (await related(and(eq(schema.entityRelations.type, "holds"), inArray(schema.entityRelations.toEntityId, family)))).filter(
+        (r) => r.fromEntityId !== from.id,
+      );
+      if (others.length) {
+        const r = others[0];
+        const msg = `${byId.get(r.fromEntityId)?.name} holds ${byId.get(r.toEntityId)?.name}, which is ${ancestors.includes(r.toEntityId) ? "the set" : "part of"} ${to.name}${ancestors.includes(r.toEntityId) ? " belongs to" : ""}; hand that over first`;
+        if (opts.source === "extracted") return { written: [], proposed: [{ field: `${from.name} holds ${to.name}`, current: msg, proposed: "new holder" }] };
+        throw new Error(msg);
+      }
+    }
+  }
+
+  // Cardinality: the old holder, leader or location gives way to the new one.
+  const shared = (to.traits as EntityTraits).possession === "shared";
+  const clash =
+    law.cardinality === "one-per-target" && !shared
+      ? (await related(and(eq(schema.entityRelations.type, input.type), eq(schema.entityRelations.toEntityId, to.id)))).filter((r) => r.fromEntityId !== from.id)
+      : law.cardinality === "one-per-source"
+        ? (await related(and(eq(schema.entityRelations.type, input.type), eq(schema.entityRelations.fromEntityId, from.id)))).filter((r) => r.toEntityId !== to.id)
+        : [];
+  if (clash.length) {
+    const nameOf = (id: number) => all.find((e) => e.id === id)?.name ?? `#${id}`;
+    if (opts.source === "extracted" && clash.some((r) => r.source === "dm")) {
+      const r = clash.find((x) => x.source === "dm")!;
+      return { written: [], proposed: [{ field: `${from.name} ${verb(input.type)} ${to.name}`, current: `${nameOf(r.fromEntityId)} ${verb(input.type)} ${nameOf(r.toEntityId)}`, proposed: `${from.name} ${verb(input.type)} ${to.name}` }] };
+    }
+    for (const r of clash) {
+      await db.delete(schema.entityRelations).where(eq(schema.entityRelations.id, r.id));
+      notes.push(`replaces: ${nameOf(r.fromEntityId)} ${verb(input.type)} ${nameOf(r.toEntityId)}`);
+    }
+  }
+
+  const result = await upsertRelation(campaignId, input, opts);
+  result.notes = [...notes, ...(result.notes ?? [])];
+
+  // Two-way relationships are recorded both ways.
+  if (law.symmetric && result.written.length) {
+    const back = await upsertRelation(campaignId, { ...input, fromEntityId: input.toEntityId, toEntityId: input.fromEntityId }, opts);
+    if (back.written.length) result.notes.push(`also recorded: ${to.name} ${verb(input.type)} ${from.name}`);
+  }
+  return result;
+}
+
+async function upsertRelation(campaignId: number, input: RelationInput, opts: WriteOptions): Promise<WriteResult> {
   const strength = Math.max(-3, Math.min(3, Math.round(input.strength ?? 0)));
   const [existing] = await db
     .select()
@@ -185,8 +266,22 @@ export async function setRelation(campaignId: number, input: RelationInput, opts
   return { written: [label], proposed: [] };
 }
 
+// Removes a relationship; a two-way one is removed in both directions.
 export async function removeRelation(relationId: number) {
+  const [rel] = await db.select().from(schema.entityRelations).where(eq(schema.entityRelations.id, relationId));
+  if (!rel) return;
   await db.delete(schema.entityRelations).where(eq(schema.entityRelations.id, relationId));
+  if (RELATION_LAWS[rel.type]?.symmetric) {
+    await db
+      .delete(schema.entityRelations)
+      .where(
+        and(
+          eq(schema.entityRelations.fromEntityId, rel.toEntityId),
+          eq(schema.entityRelations.toEntityId, rel.fromEntityId),
+          eq(schema.entityRelations.type, rel.type),
+        ),
+      );
+  }
 }
 
 export interface CampaignPatch {
