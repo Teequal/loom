@@ -303,7 +303,9 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
   const present = new Set(
     scene.entities
       .filter((e) => (e.type === "npc" || e.type === "faction" || e.type === "item") && alive(e) && free(e))
-      .filter((e) => e.type !== "npc" || scene.presence(e) !== "elsewhere" || mentioned.has(e.name))
+      // NPCs act directly only when they're travelling with the party or the moment brings them in;
+      // anyone else (unknown whereabouts, or recorded nearby) has to arrive first.
+      .filter((e) => e.type !== "npc" || scene.presence(e) === "with-party" || mentioned.has(e.name))
       .map((e) => e.name),
   );
   const remoteOk = new Set(REMOTE_CONTACT.test(moment) ? scene.entities.filter((e) => e.type === "npc" && mentioned.has(e.name) && alive(e)).map((e) => e.name) : []);
@@ -488,7 +490,7 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
 
 WHO MAY ACT
 - Here now (kind "npc"): ${[...lists.check.present].filter((n) => typeOf.get(n) === "npc").join(", ") || "nobody named; use walk-ons"}
-- Not here (only kind "arrival" or "remote"): ${lists.actors.filter((n) => typeOf.get(n) === "npc" && !lists.check.present.has(n)).join(", ") || "nobody"}
+- Not here (only kind "arrival" or "remote"): ${lists.actors.filter((n) => typeOf.get(n) === "npc" && !lists.check.present.has(n)).join(", ") || "nobody"}. Bring one in only when it pays off their thread, at most one per option; otherwise use walk-ons.
 ${lists.stated.length ? `- As of this moment: ${lists.stated.join("; ")}\n` : ""}${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 OPEN THREADS
 ${threads.map((t) => (t.detail === "full" ? threadBlock(t, titleOf, typeOf) : `T${t.id} [${t.kind}] ${t.title}: ${t.summary}`)).join("\n")}

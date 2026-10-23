@@ -23,6 +23,7 @@ import {
   updateEntity,
   updateThread,
   type WriteResult,
+  mergeEntities,
 } from "@/core/entities";
 
 const DM = { source: "dm" as const };
@@ -172,7 +173,8 @@ entity new "<name>" <${ENTITY_TYPES.join("|")}> [field=value …]
 entity set "<name>" field=value [field=value …] [--secret field,field]
   Location fields take a location's name: last-known=, actual=, parent=
   List fields take a comma- or semicolon-separated list: ${[...LIST_TRAITS].join(", ")}
-  An empty value clears a field: voice=`;
+  An empty value clears a field: voice=
+entity merge "<duplicate>" "<real one>"   two records are the same character; the duplicate's names become aliases`;
 
 export async function entityCommand(campaignId: number, args: string[]) {
   const [sub, ...rest] = args;
@@ -233,6 +235,16 @@ export async function entityCommand(campaignId: number, args: string[]) {
         throw new Error(`Status for ${e.name} (${e.type.toUpperCase()}) is one of: ${ENTITY_STATUSES[e.type].join(", ")}`);
       }
       return report(await updateEntity(e.id, patch, { ...DM, secret }));
+    }
+    case "merge": {
+      if (!pos[0] || !pos[1]) return console.log(ENTITY_USAGE);
+      const from = await findEntity(campaignId, pos[0]);
+      const into = await findEntity(campaignId, pos[1]);
+      const r = await mergeEntities(campaignId, from.id, into.id);
+      console.log(`Merged ${r.from.name} into ${r.into.name}: ${r.moved.threads} thread link(s), ${r.moved.relations} relationship(s), ${r.moved.moments} moment(s) moved; "${r.from.name}" is now an alias.`);
+      if (r.keptDescription) console.log(`  ${r.into.name} kept their own description. The duplicate's was: "${r.keptDescription}"`);
+      console.log("  Refresh meaning search with: npm run loom -- embed");
+      return;
     }
     default:
       console.log(ENTITY_USAGE);

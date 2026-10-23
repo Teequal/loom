@@ -103,10 +103,16 @@ export function makeTagger(scene: Scene) {
       .map((p) => {
         if (/^\{[^{}]+\}$/.test(p)) {
           // {Name} or {Name|how it reads}: the name is what's checked, the text is what's shown.
-          const [rawName, shown] = p.slice(1, -1).split("|").map((s) => s.trim());
+          let [rawName, shown] = p.slice(1, -1).split("|").map((s) => s.trim());
+          // A possessive written inside the tag ("{Professor Aldric Vex|Vex's} apartment") moves
+          // outside it, where every check reads it as "belongs to", not as the character acting.
+          let possessive = "";
+          const own = /['’]s$/;
+          if (shown && own.test(shown)) [shown, possessive] = [shown.slice(0, -2), shown.slice(-2)];
+          else if (!shown && own.test(rawName) && !(lookup.get(rawName.toLowerCase()) ?? scene.resolve(rawName))) [rawName, possessive] = [rawName.slice(0, -2), rawName.slice(-2)];
           const e = lookup.get(rawName.toLowerCase()) ?? scene.resolve(rawName);
           const name = e ? e.name : (mechanics.get(rawName.toLowerCase()) ?? rawName);
-          return shown ? `{${name}|${shown}}` : `{${name}}`;
+          return (shown ? `{${name}|${shown}}` : `{${name}}`) + possessive;
         }
         // Keep the wording as written ("Zara") and record the full name for checking.
         const wrap = (m: string) => {

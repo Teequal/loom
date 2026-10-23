@@ -11,7 +11,9 @@ import { capabilitiesOf, RELATION_LAWS, togglesText } from "./rules";
 
 type Entity = typeof schema.entities.$inferSelect;
 type Relation = typeof schema.entityRelations.$inferSelect;
-export type Presence = "here" | "elsewhere" | "unknown";
+// "with-party": a companion travelling with the party (at their place, and allied with a PC);
+// "nearby": recorded at the party's place, but not with them (can turn up; doesn't stand there).
+export type Presence = "with-party" | "nearby" | "elsewhere" | "unknown";
 
 export interface Scene {
   text: string; // prompt block
@@ -83,12 +85,23 @@ export async function buildScene(
 
   const party = campaign?.partyLocationId ? (byId.get(campaign.partyLocationId) ?? null) : null;
   const locationOf = (e: Entity) => e.actualLocationId ?? e.lastKnownLocationId;
+  // A companion has a tie of loyalty to a PC; anyone else recorded at the party's place is only
+  // nearby. Locations go stale between sessions, so being recorded there isn't standing there.
+  const pcIds = new Set(entities.filter((e) => e.type === "pc").map((e) => e.id));
+  const COMPANION_TIES = new Set(["ally", "serves", "family", "romance", "loves", "trusts"]);
+  const companions = new Set(
+    relations
+      .filter((r) => COMPANION_TIES.has(r.type) && (pcIds.has(r.fromEntityId) || pcIds.has(r.toEntityId)))
+      .flatMap((r) => [r.fromEntityId, r.toEntityId])
+      .filter((id) => !pcIds.has(id)),
+  );
   const presence = (e: Entity): Presence => {
     const loc = locationOf(e);
     if (!party || loc == null) return "unknown";
-    // Here if they're somewhere inside the party's location, or the party is inside theirs
-    // (an NPC known only to be "in Duradan" could be at the clocktower).
-    return within(loc, party.id) || within(party.id, loc) ? "here" : "elsewhere";
+    // At the party's place if they're somewhere inside it, or the party is inside theirs (an NPC
+    // known only to be "in Duradan" could be at the clocktower).
+    if (!(within(loc, party.id) || within(party.id, loc))) return "elsewhere";
+    return companions.has(e.id) ? "with-party" : "nearby";
   };
   const whereabouts = (e: Entity) => {
     const loc = nameOf(locationOf(e));
@@ -117,7 +130,7 @@ export async function buildScene(
   const rank = (e: Entity) =>
     (opts.mentioned.has(e.name) ? 100 : 0) +
     (threadNames.has(e.name) ? 10 : 0) +
-    (e.type === "npc" && presence(e) === "here" ? 5 : 0) +
+    (e.type === "npc" ? { "with-party": 5, nearby: 2, elsewhere: 0, unknown: 0 }[presence(e)] : 0) +
     (e.importance === "major" ? 2 : e.importance === "minor" ? 1 : 0);
   // With distances, detail follows closeness: full cards nearest the moment, briefs one step
   // out, names two steps out, nothing beyond. Without, the older ranking applies.
@@ -151,13 +164,18 @@ export async function buildScene(
     for (const e of cardEntities) levels.set(e.id, "full");
   }
 
-  const here = entities.filter((e) => e.type === "npc" && e.status !== "dead" && presence(e) === "here").map((e) => e.name);
+  const npcsWhere = (p: Presence) => entities.filter((e) => e.type === "npc" && e.status !== "dead" && presence(e) === p).map((e) => e.name);
+  const withParty = npcsWhere("with-party");
+  const around = npcsWhere("nearby");
   const dead = entities.filter((e) => e.type === "npc" && e.status === "dead").map((e) => e.name);
 
   const lines: string[] = [];
   lines.push("THE SCENE");
   lines.push(party ? `- The party is at: ${chain(party.id)}` : "- The party's location is not recorded.");
-  if (party) lines.push(`- NPCs known to be here: ${here.length ? here.join(", ") : "none recorded"}`);
+  if (party) {
+    lines.push(`- With the party: ${withParty.length ? withParty.join(", ") : "no NPCs"}`);
+    if (around.length) lines.push(`- Recorded somewhere around here, not with the party (they can turn up): ${around.join(", ")}`);
+  }
   if (dead.length) lines.push(`- Dead (can't act): ${dead.join(", ")}`);
   if (campaign?.tone) lines.push(`- Tone: ${campaign.tone}`);
   if (campaign?.safetyLines.length) lines.push(`- Safety lines (never include): ${campaign.safetyLines.join("; ")}`);
@@ -224,11 +242,12 @@ function card(e: Entity, ctx: { nameOf: (id: number | null) => string | null; pr
   const parts: string[] = [];
   if (e.description) parts.push(e.description);
   if (e.status === "dead") parts.push("Dead: can be remembered or found, never acts.");
-  else if (ctx.presence === "here") parts.push("Here now.");
+  else if (ctx.presence === "with-party") parts.push("With the party.");
+  else if (ctx.presence === "nearby") parts.push("Somewhere around here, not with the party.");
   const lastKnown = ctx.nameOf(e.lastKnownLocationId);
   const actual = ctx.nameOf(e.actualLocationId);
   if (actual && actual !== lastKnown) parts.push(`Actually at ${actual}${secret("actualLocationId")}.`);
-  if (lastKnown && ctx.presence !== "here") parts.push(`Last seen at ${lastKnown}.`);
+  if (lastKnown && ctx.presence !== "with-party") parts.push(`Last seen at ${lastKnown}.`);
 
   const list = (k: keyof EntityTraits, title: string) => {
     const v = t[k];

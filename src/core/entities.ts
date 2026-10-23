@@ -369,3 +369,51 @@ export async function isWithin(entityId: number, ancestorId: number) {
   }
   return false;
 }
+
+// Two records turned out to be one character ("the mysterious guard" was Vex'ahlia all along).
+// The duplicate's name and aliases become aliases, its threads, relationships, moments and rules
+// move over, and the duplicate is deleted. Not undoable: the duplicate's row is gone.
+export async function mergeEntities(campaignId: number, fromId: number, intoId: number) {
+  if (fromId === intoId) throw new Error("That's the same record.");
+  const [from] = await db.select().from(schema.entities).where(and(eq(schema.entities.id, fromId), eq(schema.entities.campaignId, campaignId)));
+  const [into] = await db.select().from(schema.entities).where(and(eq(schema.entities.id, intoId), eq(schema.entities.campaignId, campaignId)));
+  if (!from || !into) throw new Error("Both records must be in this campaign.");
+  if (from.type !== into.type) throw new Error(`${from.name} is ${from.type === "pc" ? "a PC" : `a ${from.type}`} and ${into.name} is ${into.type === "pc" ? "a PC" : `a ${into.type}`}; only records of the same type can merge.`);
+
+  const moved = { threads: 0, relations: 0, moments: 0 };
+  // Threads: move links, dropping any the survivor already has.
+  const has = new Set((await db.select().from(schema.threadEntities).where(eq(schema.threadEntities.entityId, intoId))).map((r) => r.threadId));
+  for (const r of await db.select().from(schema.threadEntities).where(eq(schema.threadEntities.entityId, fromId))) {
+    if (has.has(r.threadId)) continue;
+    await db.insert(schema.threadEntities).values({ ...r, entityId: intoId });
+    moved.threads++;
+  }
+  // Relationships: repoint both ends, skipping self-links and ones the survivor already has.
+  const existing = await db.select().from(schema.entityRelations).where(eq(schema.entityRelations.campaignId, campaignId));
+  const key = (a: number, b: number, t: string) => `${a}:${b}:${t}`;
+  const seen = new Set(existing.filter((r) => r.fromEntityId !== fromId && r.toEntityId !== fromId).map((r) => key(r.fromEntityId, r.toEntityId, r.type)));
+  for (const r of existing.filter((r) => r.fromEntityId === fromId || r.toEntityId === fromId)) {
+    const a = r.fromEntityId === fromId ? intoId : r.fromEntityId;
+    const b = r.toEntityId === fromId ? intoId : r.toEntityId;
+    if (a === b || seen.has(key(a, b, r.type))) continue;
+    seen.add(key(a, b, r.type));
+    await db.update(schema.entityRelations).set({ fromEntityId: a, toEntityId: b }).where(eq(schema.entityRelations.id, r.id));
+    moved.relations++;
+  }
+  for (const m of await db.select().from(schema.keyMoments).where(eq(schema.keyMoments.campaignId, campaignId))) {
+    if (!m.entityIds.includes(fromId)) continue;
+    await db.update(schema.keyMoments).set({ entityIds: [...new Set(m.entityIds.map((id) => (id === fromId ? intoId : id)))] }).where(eq(schema.keyMoments.id, m.id));
+    moved.moments++;
+  }
+  await db.update(schema.effects).set({ sourceEntityId: intoId }).where(eq(schema.effects.sourceEntityId, fromId));
+  for (const col of ["parentId", "lastKnownLocationId", "actualLocationId"] as const) {
+    await db.update(schema.entities).set({ [col]: intoId }).where(eq(schema.entities[col], fromId));
+  }
+
+  // The survivor learns the duplicate's names, and its description if it had none.
+  const aliases = [...new Set([...into.aliases, from.name, ...from.aliases])].filter((a) => a !== into.name);
+  const result = await updateEntity(intoId, { aliases, ...(!into.description && from.description ? { description: from.description } : {}) }, { source: "dm" });
+  await db.delete(schema.entities).where(eq(schema.entities.id, fromId));
+  await logChanges([{ campaignId, subject: into.name, entityId: intoId, kind: "field", field: "merged", before: from.name, after: into.name, source: "dm" }]);
+  return { from, into, moved, notes: result.notes ?? [], keptDescription: from.description && into.description ? from.description : null };
+}
