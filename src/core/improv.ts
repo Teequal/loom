@@ -39,7 +39,7 @@ export interface ImprovOption {
   scaffold: ScaffoldOption; // kept for the flavour pass
 }
 
-const SYSTEM = `You are Loom, a game master's assistant used live at the table. The players just did something unexpected. Offer 3 short, playable options that tie the moment back to threads already in the campaign, instead of inventing new material.
+const SYSTEM = `You are Loom, a game master's assistant used live at the table. The players just did something unexpected. Offer 4 short, playable options that tie the moment back to threads already in the campaign, instead of inventing new material.
 
 Rules:
 - Every option builds on one of the listed threads (thread). Prefer options that pay off, complicate or collide existing threads. also_ties_to lists other threads the option genuinely uses; one strong tie beats three loose ones.
@@ -62,11 +62,57 @@ Each option is a scaffold:
   - "outcome": the immediate physical result of what a PC just declared in this moment ("hits the cobblestones hard"). actor is that PC. No new decisions, words, thoughts or feelings.
   PCs never act in any other kind, and never act inside another beat's sentence.
 - hand_off: how the players get involved. to is a PC or "table". kind "question" asks the player what their character does; kind "roll" names the roll. mechanic is a rule from RULES IN PLAY if this roll is one, else "none"; a rule's roll can only go to someone it applies to right now (listed after "now"), or to "table" if it applies to everyone. text is one short sentence for the GM, e.g. "Ask {Salaena}'s player whether she reaches for him." or "{Khayiulad} makes a madness roll."
-- on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. This is the only place a PC may act against their player's will. Otherwise target "none" and effect "".
+- on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. For a roll by the table, the effect says who it hits ("whoever fails…"), never "he" or "she". This is the only place a PC may act against their player's will. Otherwise target "none" and effect "".
 - label: 2-5 words. why: under 15 words, why this fits now; don't repeat the thread title or use thread numbers.
 - callback: if the option echoes or pays off one of the KEY MOMENTS listed, its id ("M12"); otherwise "none". Use one only when it genuinely fits.
 - pillar: the kind of play the option mostly offers: combat, social, exploration, mystery, comedy or drama.
-- THE TABLE says who has been quiet: when it fits the moment, give a quiet player the hand-off, and lean toward what their player enjoys. Never mention players.`;
+- THE TABLE says who has been quiet. Hand-offs mostly go to whoever the moment is about; at most one option goes to a quiet player instead, and only when it fits. Never mention players.`;
+
+// Conditions the moment itself states ("Iresia, at 0 HP and unconscious…"). The moment wins for
+// this call, like possession, and the GM is told the records disagree.
+const MOMENT_CONDITIONS: [RegExp, string][] = [
+  [/\b(?:unconscious|knocked out|out cold|passed out|at 0 hp|at 0 hit points|at zero hit points|dropped to 0)\b/i, "unconscious"],
+  [/\bparaly[sz]ed\b/i, "paralyzed"],
+  [/\bstunned\b/i, "stunned"],
+  [/\bpetrified\b|\bturned to stone\b/i, "petrified"],
+  [/\brestrained\b|\btied up\b|\bbound\b/i, "restrained"],
+  [/\bblinded\b/i, "blinded"],
+  [/\bdeafened\b/i, "deafened"],
+  [/\bcharmed\b/i, "charmed"],
+  [/\bfrightened\b/i, "frightened"],
+];
+
+function momentConditions(scene: Scene, moment: string, mentioned: Set<string>) {
+  const notes: string[] = [];
+  const stated: string[] = [];
+  const pcs = scene.pcs.filter((p) => mentioned.has(p.name));
+  if (!pcs.length) return { notes, stated };
+  for (const clause of moment.split(/[.;!?]+/)) {
+    // The condition belongs to the PC named last before it in the same sentence (or the only one named).
+    for (const [re, condition] of MOMENT_CONDITIONS) {
+      const m = clause.match(re);
+      if (!m) continue;
+      const before = clause.slice(0, m.index).toLowerCase();
+      const pc =
+        pcs.length === 1
+          ? pcs[0]
+          : pcs
+              .map((p) => ({ p, at: before.lastIndexOf(p.name.split(" ")[0].toLowerCase()) }))
+              .filter((x) => x.at >= 0)
+              .sort((a, b) => b.at - a.at)[0]?.p;
+      if (!pc) continue;
+      const t = pc.traits as { health?: string; conditions?: string[] };
+      const has = condition === "unconscious" ? t.health === "unconscious" || t.conditions?.includes("unconscious") : t.conditions?.includes(condition);
+      if (has) continue;
+      const traits = condition === "unconscious" ? { ...t, health: "unconscious" } : { ...t, conditions: [...(t.conditions ?? []), condition] };
+      for (const e of [pc, ...scene.entities.filter((x) => x.id === pc.id)]) e.traits = traits as typeof e.traits;
+      const field = condition === "unconscious" ? "health=unconscious" : `conditions="${traits.conditions!.join(", ")}"`;
+      notes.push(`This moment has ${pc.name} ${condition}; your records don't. Update with: entity set "${pc.name}" ${field}`);
+      stated.push(`${pc.name} is ${condition} (${condition === "unconscious" ? "can't act, speak or notice anything; death saves only" : "per the 5e condition"})`);
+    }
+  }
+  return { notes, stated };
+}
 
 // Moments where the players themselves reach someone at a distance; that NPC may then act from afar.
 const REMOTE_CONTACT =
@@ -127,9 +173,11 @@ const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 // One beat as readable text: the actor's name is put in front by code, so the subject is
 // always the actor the scaffold named.
 export function renderBeat(b: ScaffoldBeat, tagger: Tagger) {
-  const does = tagger.render(tagger.tag(b.does)).trim();
+  const tagged = tagger.tag(b.does).trim();
+  // "Uses the tables as cover" after a name reads "Vex'ahlia uses…"; names (tagged) keep their capital.
+  const does = tagger.render(b.kind === "world" || tagged.startsWith("{") ? tagged : tagged.replace(/^([A-Z])(?=[a-z])/, (c) => c.toLowerCase())).trim();
   if (b.kind === "world") return sentence(capitalise(does));
-  const subject = b.kind === "walk_on" ? capitalise(tagger.render(b.walk_on).trim()) : b.actor;
+  const subject = b.kind === "walk_on" ? capitalise(tagger.render(b.walk_on).trim() || "someone") : b.actor;
   const startsWithSubject = does.toLowerCase().startsWith(subject.toLowerCase()) || does.toLowerCase().startsWith(subject.split(/[\s,]+/)[0].toLowerCase());
   return sentence(startsWithSubject ? capitalise(does) : `${subject} ${does}`);
 }
@@ -196,6 +244,7 @@ export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
   if (o.on_fail.target !== "none") {
     if (o.hand_off.kind !== "roll") return "has a failure consequence but no roll";
     if (o.hand_off.to !== "table" && o.on_fail.target !== o.hand_off.to) return `the failure lands on ${o.on_fail.target}, but ${o.hand_off.to} made the roll`;
+    if (o.hand_off.to === "table" && /\b(?:he|she|him|her|his|hers|himself|herself)\b/i.test(o.on_fail.effect)) return "the whole table rolls, but the failure says he or she";
     const r = checkOnFail(o.on_fail.target, o.on_fail.effect, c);
     if (r) return r;
   }
@@ -235,6 +284,7 @@ function meaningSummary(m: MeaningSearch | undefined, entities: Scene["entities"
 // `reach`: entity ids close enough to the moment to be offered as actors (see graph.ts). Without
 // it, every entity is offered.
 export function buildLists(scene: Scene, moment: string, mentioned: Set<string>, reach?: Map<number, number>) {
+  const { notes, stated } = momentConditions(scene, moment, mentioned);
   const tagger = makeTagger(scene);
   const alive = (e: Scene["entities"][number]) => e.status !== "dead";
   const free = (e: Scene["entities"][number]) => e.status !== "captured" && e.status !== "missing";
@@ -259,7 +309,6 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
   const parentOf = new Map<string, string>();
   for (const e of scene.entities) if (e.type === "item" && e.parentId != null && byId.get(e.parentId)) parentOf.set(e.name, byId.get(e.parentId)!.name);
   const possession: Possession = { holders, parentOf };
-  const notes: string[] = [];
   const momentPcs = scene.pcs.filter((p) => mentioned.has(p.name));
   // The most specific item named: "the monk figurine" means the Monk figurine, not its whole set.
   const named = scene.entities.filter((e) => e.type === "item" && mentioned.has(e.name));
@@ -280,6 +329,7 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
   return {
     tagger,
     notes,
+    stated,
     check: { scene, tagger, present, remoteOk, outcomePcs, possession } satisfies CheckContext,
     // Actors on offer: those within reach of the moment (and anyone it names), plus the PCs. A
     // shorter list is cheaper to send and more reliable for the model to choose from.
@@ -289,7 +339,9 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
         return !reach || mentioned.has(n) || (e != null && reach.has(e.id));
       })
       .concat(scene.pcs.map((p) => p.name)),
-    handOff: scene.pcs.filter((p) => p.status !== "dead" && capabilitiesOf(p).aware).map((p) => p.name),
+    // Every living PC stays on the list: a name the model insists on (an unconscious PC) then fails
+    // one option's check instead of making the whole answer unparseable.
+    handOff: scene.pcs.filter((p) => p.status !== "dead").map((p) => p.name),
     pcs: scene.pcs.map((p) => p.name),
     // Only effects that reach someone right now can be offered for a roll.
     mechanics: scene.effects.filter((e) => e.targets.length > 0).map((e) => e.effect.name),
@@ -366,7 +418,7 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
     .sort((a, b) => b.quietFor - a.quietFor)[0];
   const tableBlock = [
     tableText(seats),
-    quietest && `Spotlight: if the moment allows, make at least one option hand off to ${quietest.pc.name}.`,
+    quietest && `Spotlight: if the moment allows, make exactly one option hand off to ${quietest.pc.name}; the others go to whoever the moment is about.`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -401,7 +453,7 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
 WHO MAY ACT
 - Here now (kind "npc"): ${[...lists.check.present].filter((n) => typeOf.get(n) === "npc").join(", ") || "nobody named; use walk-ons"}
 - Not here (only kind "arrival" or "remote"): ${lists.actors.filter((n) => typeOf.get(n) === "npc" && !lists.check.present.has(n)).join(", ") || "nobody"}
-${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
+${lists.stated.length ? `- As of this moment: ${lists.stated.join("; ")}\n` : ""}${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 OPEN THREADS
 ${threads.map((t) => (t.detail === "full" ? threadBlock(t, titleOf, typeOf) : `T${t.id} [${t.kind}] ${t.title}: ${t.summary}`)).join("\n")}
 ${sceneBlock}${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callbacks.map(momentLine).join("\n")}\n` : ""}${tableBlock ? `\n${tableBlock}\n` : ""}
@@ -432,7 +484,8 @@ ${moment}`;
 
   // Spotlight-aware ranking: options that hand off to a quiet player, in a kind of play their
   // player enjoys, come first.
-  const score = (o: ScaffoldOption) => spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama");
+  // Whoever the moment is about comes first; the quiet-player nudge is smaller than that.
+  const score = (o: ScaffoldOption) => spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama") + (mentioned.has(o.hand_off.to) ? 0.7 : 0);
   let kept = [...accepted].sort((a, b) => score(b) - score(a)).slice(0, 3);
   const safety = await safetyCheck(lines, kept.map((o) => renderOption(o, lists.tagger)));
   if (safety.call) calls.push(safety.call);

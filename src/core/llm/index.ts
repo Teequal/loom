@@ -24,7 +24,7 @@ const ALIASES: Record<string, string> = {
 // strongest model; improv runs live, so it balances quality against speed and cost.
 const FEATURE_MODELS: Record<string, string> = {
   recap: "claude-opus-5-5",
-  improv: "claude-sonnet-5-5",
+  improv: "claude-haiku-5-5", // blind run 3: ties Opus at ~1/40th the cost; Opus is the upgrade tier
   suggest: "claude-opus-5-5", // between-session prep: quality over speed
   enrich: "claude-opus-5-5", // one-off backfill of entity details from stored recaps
   flavor: "claude-opus-5-5", // read-aloud polish of the one option the GM picked

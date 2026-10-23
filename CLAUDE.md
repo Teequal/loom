@@ -106,7 +106,7 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
 - **Thread history** lives in `thread_events` (new / progressed / resolved / edited, per session).
 - **LLM: Anthropic, with a model per feature** (`FEATURE_MODELS` in `src/core/llm/index.ts`):
   - **Recaps: Opus 5.5**, chosen because Jacob wants the smartest model for the once-per-session job.
-  - **Improv: Sonnet 5.5**, with Opus 5.5 available per call (`--model opus`).
+  - **Improv: Haiku 5.5** (since blind run 3, 24 Oct), with Opus 5.5 as the upgrade tier (`--model opus`).
   - **Between-session suggestions: Opus 5.5.**
   - **Everything else: Haiku 5.5.**
   - Override with `--model` or `LOOM_MODEL_<FEATURE>`.
@@ -148,7 +148,7 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - The prompt now labels every name PC/NPC and includes a party roster with each PC's conditions.
   - Haiku runs improv with thinking off (`fast`). With it on, structured output took 8–13 s; off, it takes 5–7 s.
   - Known gaps: possessive phrasings ("Khayiulad's fingers tighten…") slip past the check. NPCs sometimes get dropped into scenes they couldn't be in (Zara at the Woods ritual site). Labels can still narrate PC feelings.
-- **Product idea (Phase 2, needs accounts and billing):** improv on Sonnet by default, with Opus as an upgrade tier and a free trial or allowance of Opus calls.
+- **Product idea (Phase 2, needs accounts and billing):** improv on Haiku by default, with Opus as an upgrade tier and a free trial or allowance of Opus calls (Jacob, 24 Oct; Sonnet came last in all three blind runs).
 - **Recap changes are proposed, not applied.** The DM approves each one.
 - **Improv options must cite a real thread id** from the retrieved set; the code rejects any that don't.
 - **Retrieval starts cheap:** entity/alias mention matching, graph hops and SQLite full-text search. Embeddings only if the test scenarios show they're needed.
@@ -328,4 +328,30 @@ Jacob approved the model on 24 Oct 2026: layers L0 Rules › L1 Identity › L2 
 
     The extra ~0.7 s end to end is loading the embedding model in each CLI process; in a long-running web server it loads once.
   - Still to do: the Voyage comparison once a key exists.
-- [ ] Step 7: Stress tests and a blind rerun
+- [x] **Step 7: Stress tests and blind run 3** (24 Oct).
+  - **Crafted checks:** 41/41 across agency, rules and conditions, possession, relationship laws and undo, and meaning search (`scenarios/private/checks.ts`, no LLM calls).
+  - **Live cross-layer moments (Haiku):**
+    - Conditions stated in the moment aren't applied ("Iresia, at 0 HP and unconscious…" still asked her player what she does).
+    - The spotlight is too strong: quiet Iresia gets most hand-offs, even in Khayiulad's own figurine scene.
+    - Retries cost ~6 s (11–12 s total).
+    - Failure text for table-wide rolls uses a bare "she/him".
+    - Capitalised verbs after names ("Vex'ahlia Uses").
+    - Vex'ahlia's records contradict each other: she "fled by invisibility" but is `located_at` the outpost as "defeated there", so she turns up in most scenes.
+  - **Blind run 3 (wide context, scaffold, embeddings off):**
+
+    | Model | Options ticked | Rate | Moments with at least one usable option | Avg latency | Cost (10 moments) |
+    |---|---|---|---|---|---|
+    | Haiku | 14/29 | 48% | 8/10 | 5.3 s | $0.013 |
+    | Opus | 14/29 | 48% | 9/10 | 10.2 s | $0.52 |
+    | Sonnet | 10/23 | 43% | 8/10 | 10.2 s | $0.32 |
+
+    Haiku caught up with Opus (run 2: 11 vs 13), at ~1/40th of the cost and half the latency. Sonnet is last for the third run and had 17 options dropped by the checks.
+  - **Fixes after run 3** (Jacob: Haiku → Opus tiers, plus all fixes):
+    - Improv default is Haiku.
+    - **Spotlight:** exposure is recency-weighted (each session of theirs fades by half per session since). The quiet nudge is at most 0.6, below one point of what a player enjoys. A hand-off to a PC the moment names gets +0.7. The prompt asks for *exactly one* option for the quietest PC.
+    - **Fewer retries:** the model writes 4 options and the best 3 are kept; it retries only if fewer than 2 survive. Every living PC stays in the hand-off list, so one bad name fails one option, not the whole answer (that had caused two unparseable attempts).
+    - **Conditions stated in the moment** ("at 0 HP and unconscious", paralyzed, restrained…) apply for that call, are stated in the prompt, and come with a records note (`momentConditions` in `improv.ts`).
+    - Table-wide rolls can't have he/she in the failure text. Verbs after a name are lowercased. An empty walk-on reads "Someone".
+    - Vex'ahlia's description now covers session 5 (defeated at the outpost); the notes' spelling "Vex'halia" is an alias. A `knight-again` scenario tests repeated figurine use.
+    - **Measured:** 46/46 crafted checks. Live on Haiku: 5.9–7.0 s with no retries in 7 moments; the quiet PC gets one option per moment, and the moment's own PC comes first. Repeated Knight use gives a madness roll, but not yet "it won't let go".
+    - **Still open:** body slips in world beats ("Khayiulad sways…, one hand braced against the wall"); the escalation of a rule with use isn't tracked.

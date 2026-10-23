@@ -15,6 +15,7 @@ export interface Seat {
   lastSpotlight: number | null; // last session they had a moment of their own
   quietFor: number; // sessions since then
   recentMoments: number; // moments in the last two sessions
+  exposure: number; // recency-weighted spotlight: 1 for this session, 0.5 for the one before, …
   landed: string[]; // starred moments involving them: what has worked
 }
 
@@ -56,6 +57,7 @@ export async function tableSeats(campaignId: number): Promise<Seat[]> {
       player: players.find((p) => p.id === pc.playerId) ?? null,
       lastSpotlight: last,
       quietFor: last == null ? latest : latest - last,
+      exposure: [...new Set(spotlightSessions)].reduce((sum, n) => sum + 0.5 ** (latest - n), 0),
       recentMoments: moments.filter((m) => m.entityIds.includes(pc.id) && m.sessionId != null && (numberOf.get(m.sessionId) ?? 0) >= latest - 1).length,
       landed: moments.filter((m) => m.status === "key" && m.entityIds.includes(pc.id)).map((m) => m.title),
     };
@@ -91,7 +93,9 @@ export function spotlightScore(seats: Seat[], target: string, pillar: Pillar) {
   if (target === "table") return seats.length ? seats.reduce((sum, s) => sum + enjoy(s), 0) / seats.length : 1;
   const seat = seats.find((s) => s.pc.name === target);
   if (!seat) return 1;
-  return enjoy(seat) + Math.min(seat.quietFor, 3) * 0.75;
+  // Recent spotlight counts more than old: each past session of theirs fades by half per session
+  // since. The nudge for low exposure stays under one point of what a player enjoys.
+  return enjoy(seat) + 0.3 * (1 - Math.min(seat.exposure, 1)) + Math.min(seat.quietFor, 3) * 0.1;
 }
 
 export function parseEnjoys(raw: string): Partial<Record<Pillar, number>> {
