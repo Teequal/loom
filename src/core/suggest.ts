@@ -86,9 +86,9 @@ export async function suggest(campaignId: number, model?: string) {
 ${table ? `\n${table}\n` : ""}
 OPEN THREADS (latest session: ${latestSession})
 ${threads.map((t) => threadLine(t, typeOf, latestSession)).join("\n\n")}
-${moments.length ? `\nKEY MOMENTS (flagged by the GM)\n${moments.map(momentLine).join("\n")}` : ""}`;
+${moments.length ? `\nKEY MOMENTS (flagged by the GM)\n${moments.map(momentLine).join("\n")}` : ""}${camp?.direction.trim() ? `\n\nWHERE THE GM WANTS THE STORY TO GO (steer the ideas toward this)\n${camp.direction.trim()}` : ""}`;
 
-  const res = await callLlm({ feature: "suggest", system: SYSTEM, prompt, schema: SuggestionsSchema, maxTokens: 16000, effort: "medium", model });
+  const res = await callLlm({ feature: "suggest", campaignId, system: SYSTEM, prompt, schema: SuggestionsSchema, maxTokens: 16000, effort: "medium", model });
 
   // Keep only suggestions that point at real threads; a collision needs two different ones.
   const titleOf = new Map(threads.map((t) => [t.id, t.title]));

@@ -24,7 +24,9 @@ const ALIASES: Record<string, string> = {
 // strongest model; improv runs live, so it balances quality against speed and cost.
 const FEATURE_MODELS: Record<string, string> = {
   recap: "claude-opus-5-5",
-  improv: "claude-haiku-5-5", // blind run 3: ties Opus at ~1/40th the cost; Opus is the upgrade tier
+  improv: "claude-haiku-5-5", // blind run 3: ties Opus at ~1/40th the cost; Sonnet and Opus are the higher tiers
+  live: "claude-sonnet-5-5", // extracting each choice at the table: auto-applied, so better than Haiku; runs in the background
+  develop: "claude-opus-5-5", // turning a chosen option into a scene plan: not live, quality first
   suggest: "claude-opus-5-5", // between-session prep: quality over speed
   enrich: "claude-opus-5-5", // one-off backfill of entity details from stored recaps
   flavor: "claude-opus-5-5", // read-aloud polish of the one option the GM picked
@@ -63,6 +65,7 @@ export async function callLlm<T>(req: LlmRequest<T>): Promise<LlmResult<T>> {
     const latencyMs = Math.round(performance.now() - started);
     const costUsd = costOf(res.model, res.inputTokens, res.outputTokens);
     await db.insert(schema.llmCalls).values({
+      campaignId: req.campaignId ?? null,
       feature: req.feature,
       model: res.model,
       latencyMs,
@@ -74,6 +77,7 @@ export async function callLlm<T>(req: LlmRequest<T>): Promise<LlmResult<T>> {
     return { ...res, latencyMs, costUsd };
   } catch (err) {
     await db.insert(schema.llmCalls).values({
+      campaignId: req.campaignId ?? null,
       feature: req.feature,
       model,
       latencyMs: Math.round(performance.now() - started),

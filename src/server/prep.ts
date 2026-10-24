@@ -3,6 +3,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { db, schema } from "@/core/db/client";
 import { applyProposal, newBatch, proposeRecapChanges, type ProposalFile } from "@/core/recap";
 import { reviewProposal, splitRisky } from "@/core/review";
+import { draftNotes, liveEntries, wrapLiveSession } from "@/core/live";
 import { suggest } from "@/core/suggest";
 import { recentBatches, undoBatch } from "@/core/undo";
 
@@ -27,13 +28,33 @@ export async function nextSessionNumber(campaignId: number) {
   return 1;
 }
 
+// The session played at the table, if any: what the log already put in the loom.
+export async function liveSummary(campaignId: number) {
+  const entries = await liveEntries(campaignId);
+  if (!entries.length) return null;
+  const used = entries.filter((e) => e.choiceKind);
+  return {
+    session: entries[0].sessionNumber,
+    moments: entries.length,
+    used: used.length,
+    changes: used.reduce((n, e) => n + e.summary.length, 0),
+    openQuestions: entries.reduce((n, e) => n + e.questions.filter((q) => !q.answer).length, 0),
+    draft: await draftNotes(campaignId),
+  };
+}
+
 export async function proposeRecap(campaignId: number, recap: string, sessionNumber?: number) {
-  const number = sessionNumber ?? (await nextSessionNumber(campaignId));
-  const res = await proposeRecapChanges(campaignId, recap);
+  const live = await liveSummary(campaignId);
+  const number = sessionNumber ?? live?.session ?? (await nextSessionNumber(campaignId));
+  const wrapping = live && live.session === number && live.used > 0;
+  // Wrapping up a session played with Loom: only what wasn't logged is extracted, and the stored
+  // notes are the log plus these additions.
+  const res = await proposeRecapChanges(campaignId, recap, undefined, wrapping ? { alreadyRecorded: live.draft } : {});
+  const notes = wrapping ? `At the table (logged by Loom):\n${live.draft}\n\nAdded at wrap-up:\n${recap}` : recap;
   // Risky fields become their own items; the numbers the GM accepts refer to this split file.
-  const file = await splitRisky({ campaignId, sessionNumber: number, recap, proposal: res.data });
+  const file = await splitRisky({ campaignId, sessionNumber: number, recap: notes, proposal: res.data });
   mkdirSync("data/proposals", { recursive: true });
-  writeFileSync(proposalPath(campaignId, number), JSON.stringify(file, null, 2));
+  writeFileSync(proposalPath(campaignId, number), JSON.stringify({ ...file, wrapsLive: !!wrapping }, null, 2));
   const reviewed = await reviewProposal(file);
   return {
     sessionNumber: number,
@@ -45,19 +66,35 @@ export async function proposeRecap(campaignId: number, recap: string, sessionNum
 export async function applyRecap(campaignId: number, sessionNumber: number, skip: number[], confirmed: number[]) {
   const path = proposalPath(campaignId, sessionNumber);
   if (!existsSync(path)) throw new Error("That proposal has expired. Read the notes again.");
-  const file = JSON.parse(readFileSync(path, "utf8")) as ProposalFile & { savedAs?: string };
+  const file = JSON.parse(readFileSync(path, "utf8")) as ProposalFile & { savedAs?: string; wrapsLive?: boolean };
   // A proposal is saved once. Marked before writing, so a retry after a failure can't add the
   // same threads again; the GM undoes the batch and reads the notes again instead.
   if (file.savedAs) throw new Error(`These notes were already saved ("${file.savedAs}"). To redo them, undo that save under Recent changes, then read the notes again.`);
   const batch = newBatch(file);
   writeFileSync(path, JSON.stringify({ ...file, savedAs: batch }, null, 2));
   const r = await applyProposal(file, new Set(skip), batch, new Set(confirmed));
+  if (file.wrapsLive) await wrapLiveSession(campaignId);
   return {
     batch: r.batch,
     counts: { ...r.counts, details: r.entityResult.updated, relationships: r.entityResult.relations, moments: r.moments, party: !!r.entityResult.party },
     warnings: r.warnings,
     kept: r.entityResult.conflicts.flatMap((c) => c.proposals.map((p) => `${c.entity} · ${p.field}: kept yours (${JSON.stringify(p.current)}); the notes suggest ${JSON.stringify(p.proposed)}`)),
   };
+}
+
+// Wrap up with nothing to add: the log becomes the session's notes.
+export async function wrapWithoutAdding(campaignId: number) {
+  const live = await liveSummary(campaignId);
+  if (!live) throw new Error("There's no session in progress to wrap up.");
+  const notes = `At the table (logged by Loom):\n${live.draft}`;
+  const [existing] = await db
+    .select()
+    .from(schema.sessions)
+    .where(and(eq(schema.sessions.campaignId, campaignId), eq(schema.sessions.number, live.session)));
+  if (existing) await db.update(schema.sessions).set({ recap: notes }).where(eq(schema.sessions.id, existing.id));
+  else await db.insert(schema.sessions).values({ campaignId, number: live.session, recap: notes });
+  await wrapLiveSession(campaignId);
+  return { session: live.session };
 }
 
 export async function history(campaignId: number) {

@@ -61,8 +61,9 @@ export function useCampaigns() {
 }
 
 const NAV = [
-  { href: "/", label: "At the table" },
-  { href: "/prep", label: "Between sessions" },
+  { href: "/", label: "At the table", short: "Table" },
+  { href: "/prep", label: "Between sessions", short: "Prep" },
+  { href: "/campaign", label: "Campaign", short: "Campaign" },
 ];
 
 export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
@@ -83,9 +84,10 @@ export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
               key={n.href}
               href={n.href}
               aria-current={path === n.href ? "page" : undefined}
-              className={`rounded-md px-2.5 py-1 transition-colors ${path === n.href ? "bg-surface font-medium shadow-sm" : "text-muted hover:text-foreground"}`}
+              className={`whitespace-nowrap rounded-md px-2.5 py-1 transition-colors ${path === n.href ? "bg-surface font-medium shadow-sm" : "text-muted hover:text-foreground"}`}
             >
-              {n.label}
+              <span className="sm:hidden">{n.short}</span>
+              <span className="hidden sm:inline">{n.label}</span>
             </Link>
           ))}
         </nav>

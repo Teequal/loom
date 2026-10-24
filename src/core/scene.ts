@@ -23,6 +23,7 @@ export interface Scene {
   holds: { holder: string; item: string }[];
   effects: EffectInPlay[];
   safetyLines: string[];
+  realNames: string[]; // the real people at the table: never written into anything the model says
   /** Resolves a name as the model wrote it ("Zara", "the alchemist") to an entity. */
   resolve: (name: string) => Entity | undefined;
   presence: (e: Entity) => Presence;
@@ -30,6 +31,8 @@ export interface Scene {
 }
 
 const MAX_CARDS = 10;
+// "Played by Sam." in a character's description names a real person: kept out of every prompt.
+export const PLAYED_BY = /\s*\(?\b(?:[Pp]layed|[Rr]un) by ([A-Z][\w'’-]+(?: [A-Z][\w'’-]+)?)\.?\)?/g;
 
 export async function buildScene(
   campaignId: number,
@@ -218,6 +221,10 @@ export async function buildScene(
       .filter((h) => h.holder && h.item),
     effects,
     safetyLines: campaign?.safetyLines ?? [],
+    realNames: [
+      ...(await db.select({ handle: schema.players.handle }).from(schema.players).where(eq(schema.players.campaignId, campaignId))).map((p) => p.handle),
+      ...entities.flatMap((e) => [...e.description.matchAll(PLAYED_BY)].map((m) => m[1])),
+    ].filter((n) => n && n.length >= 2),
     resolve,
     presence,
     whereabouts,
@@ -240,7 +247,7 @@ function card(e: Entity, ctx: { nameOf: (id: number | null) => string | null; pr
   const head = [label, e.status, e.type !== "pc" && e.attitude && `${e.attitude} to the party`, t.alignment, t.race, t.occupation].filter(Boolean).join(", ");
 
   const parts: string[] = [];
-  if (e.description) parts.push(e.description);
+  if (e.description) parts.push(e.description.replace(PLAYED_BY, "").trim());
   if (e.status === "dead") parts.push("Dead: can be remembered or found, never acts.");
   else if (ctx.presence === "with-party") parts.push("With the party.");
   else if (ctx.presence === "nearby") parts.push("Somewhere around here, not with the party.");

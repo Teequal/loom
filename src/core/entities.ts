@@ -311,6 +311,7 @@ export interface CampaignPatch {
   partyLocationId?: number | null;
   inGameDate?: string;
   tone?: string;
+  direction?: string;
   mechanics?: CampaignMechanic[];
   safetyLines?: string[];
 }

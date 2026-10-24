@@ -4,6 +4,7 @@ import type { z } from "zod";
 // so callers get typed data and never parse free text.
 export interface LlmRequest<T> {
   feature: string; // e.g. "recap", "improv"; used for cost tracking
+  campaignId?: number; // logged with the call, for per-campaign activity and cost
   system: string;
   prompt: string;
   schema: z.ZodType<T>;

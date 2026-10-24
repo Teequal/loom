@@ -213,6 +213,36 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
     - Duradan was repaired: all 4 session 6 saves undone (DB backed up first). Session 6 needs reading again.
     - Tested on the fixture: a bad "leads" relationship is skipped with a warning while the valid one beside it saves; a second save of the same notes is refused.
 
+- [x] **Step 10: Live sessions, Develop and the campaign page** (Jacob's feedback after one real session, 24 Oct; built together because they're tested together at the table).
+  - **Three tiers:** Quick (Haiku) / Balanced (Sonnet) / Best (Opus). Jacob found Opus "pulls things that fit more often".
+  - **Length follows input** (`lengthFor` in `improv.ts`): ≤10 words gets 1 beat under 20 words; ≤35 words gets 1–2 beats under 35; longer gets 2–3 beats up to 60 and may tie in more threads. Measured: 25–29 words vs 80–85 words.
+  - **Tone slider** (Grounded · Restrained · Balanced · Dramatic · Theatrical, default Restrained, since Jacob found the default "a bit theatrical"). It changes only the wording instructions.
+  - **Where the story is heading:** `campaigns.direction` (migration `0007`), written on the campaign page. Improv, Develop and prep ideas all steer by it.
+  - **Live session log** (`src/core/live.ts`, table `live_entries`): every moment asked is logged.
+    - **Use this** on a card, or **✎ None of these. Write what happened**, or **+ Note** (something that happened without asking) logs the choice and extracts it straight away in the background. It uses the recap extractor in `live` mode (Sonnet, ~10–15 s; Next's `after()`; one at a time per campaign).
+    - Auto and confirm-tier changes are applied (batch `live s<n> HH:MM #e<id>`); must-tier changes wait as questions on the timeline. A yes is saved as the DM's own entry.
+    - **Take back** undoes what a choice added. Changing your pick undoes the old one first.
+    - The next suggestion gets THIS SESSION SO FAR: the last 8 choices.
+    - **Timeline:** a strip of small icons above the box (✓ used, ✎ own, · asked, a pulse while extracting, a red dot for a question). Tapping one opens the moment, what was added, questions, Develop and Take back. "N to check" jumps to the questions.
+    - **Wrap up →** goes to the Between sessions page, which shows what the table logged and asks only for what's missing. The extraction is told what's ALREADY RECORDED, so it isn't added twice. The stored notes are the log plus the additions. "Nothing to add: wrap up as it is" saves the log as the notes.
+    - Live proposals use `kind: "live"`: quotes are checked against the moment itself, and a session created mid-play gets its notes only at wrap-up.
+  - **Develop ↳** on any card or logged choice (`src/core/develop.ts`, Opus, ~15–25 s, ~$0.03–0.05): a read-aloud intro, 2–3 setups and 2–3 directions with their threads. A **reach slider** (Next few minutes · This scene · Next session · The arc) sets how far ahead it plans. It uses the session so far and the story direction; tested, it called back a vial detail logged earlier that session.
+  - **Campaign page** (`/campaign`, `src/server/campaign.ts`): one search across everything; tabs with counts.
+    - **Threads:** open / resolved, each with its history by session.
+    - **Cast:** filter by type; details and relationships, GM-only items marked 🔒.
+    - **Moments:** ☆ suggested with one-tap ★ / ×, plus starred ones.
+    - **Sessions:** the stored notes, with search matches highlighted.
+    - **Activity:** moments asked and used, saves and undos, cost by feature.
+    - The direction box autosaves. LLM calls now record their campaign (`llm_calls.campaign_id`) for per-campaign cost.
+  - **Real players stay out:** the fixture's "Played by Sam." reached the prompt and an option said "Ask Sam whether…". `PLAYED_BY` now strips "played/run by X" from cards, and any option naming a player handle or a played-by name is rejected. 3 new checks.
+  - Also: an actor of "world" in a non-world beat rendered as "world A council runner…"; fixed. Nav labels shorten on phones.
+  - **Tested on the fixture, then reseeded:**
+    - Ask, use an option and watch it land; take back and re-pick; own choice; a question answered yes (saved as ✎); Develop at "Next session".
+    - Campaign page: search, expand, direction autosave.
+    - Wrap up as it is: the session's notes became the log and the next session started.
+    - 94/94 crafted checks pass.
+  - **Cost per live session** (estimate): ~$0.001 per Quick ask, plus ~$0.03–0.05 per extracted choice on Sonnet.
+
 ## Entity model build (docs/entity-model.md)
 
 - [x] Step 1: Schema with provenance (migration `drizzle/0001`):

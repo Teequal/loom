@@ -76,7 +76,7 @@ const EnrichSchema = z.object({ new_entities: z.array(NewEntitySchema), ...Entit
 // A proposal plus what's needed to apply it later (possibly after the DM edits the file).
 // kind "enrich" proposals don't touch the session's stored recap.
 export interface ProposalFile {
-  kind?: "recap" | "enrich";
+  kind?: "recap" | "enrich" | "live"; // live: one moment at the table; the session's notes come at wrap-up
   campaignId: number;
   sessionNumber: number;
   recap: string;
@@ -155,27 +155,44 @@ async function campaignState(campaignId: number) {
   return { entities, threads };
 }
 
-export async function proposeRecapChanges(campaignId: number, recap: string, model?: string) {
+export interface RecapOptions {
+  // "live": one moment at the table, extracted as it happens (smaller, in the background).
+  live?: boolean;
+  // Wrap-up: what the live log already put in the loom, so these notes don't add it twice.
+  alreadyRecorded?: string;
+}
+
+export async function proposeRecapChanges(campaignId: number, recap: string, model?: string, opts: RecapOptions = {}) {
   const { entities, threads } = await campaignState(campaignId);
 
   void entities; // listed, with their fields, by entityStateText
   const threadLines = threads.map((t) => `- T${t.id} [${t.status}] (${t.kind}) ${t.title}: ${t.summary}`);
 
+  const heading = opts.live
+    ? "WHAT JUST HAPPENED AT THE TABLE (one moment of the session in progress: what the players did, and what the GM decided happened)"
+    : "NEW SESSION RECAP";
+  const already = opts.alreadyRecorded?.trim()
+    ? `\nALREADY RECORDED THIS SESSION (logged at the table and already in the records above; don't propose it again)\n${opts.alreadyRecorded}\n`
+    : "";
+  const liveNote = opts.live
+    ? "\nThis is a single moment, so expect few changes: often one thread progressed or one new thread, a detail or two. Don't propose key moments unless something truly memorable happened.\n"
+    : "";
   const prompt = `${await entityStateText(campaignId)}
 
 EXISTING OPEN THREADS
 ${threadLines.join("\n") || "(none yet)"}
-
-NEW SESSION RECAP
+${already}${liveNote}
+${heading}
 ${recap}`;
 
   return callLlm({
-    feature: "recap",
+    feature: opts.live ? "live" : "recap",
+    campaignId,
     system: SYSTEM,
     prompt,
     schema: ProposalSchema,
-    maxTokens: 16000,
-    effort: "medium",
+    maxTokens: opts.live ? 6000 : 16000,
+    effort: opts.live ? "low" : "medium",
     model,
   });
 }
@@ -195,7 +212,7 @@ export async function proposeEnrichment(campaignId: number, model?: string) {
 SESSION RECAPS (oldest first)
 ${withRecaps.map((s) => `=== Session ${s.number} ===\n${s.recap}`).join("\n\n")}`;
 
-  const res = await callLlm({ feature: "enrich", system: ENRICH_SYSTEM, prompt, schema: EnrichSchema, maxTokens: 32000, effort: "medium", model });
+  const res = await callLlm({ feature: "enrich", campaignId, system: ENRICH_SYSTEM, prompt, schema: EnrichSchema, maxTokens: 32000, effort: "medium", model });
   const latest = withRecaps.at(-1)!.number;
   return { ...res, data: withDefaults(res.data), sessionNumber: latest };
 }
@@ -249,9 +266,10 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
       .from(schema.sessions)
       .where(and(eq(schema.sessions.campaignId, campaignId), eq(schema.sessions.number, sessionNumber)));
     if (session) {
-      if (file.kind !== "enrich") await tx.update(schema.sessions).set({ recap }).where(eq(schema.sessions.id, session.id));
+      if (!file.kind || file.kind === "recap") await tx.update(schema.sessions).set({ recap }).where(eq(schema.sessions.id, session.id));
     } else {
-      [session] = await tx.insert(schema.sessions).values({ campaignId, number: sessionNumber, recap }).returning();
+      // A session started at the table gets its notes at wrap-up, not from the first moment.
+      [session] = await tx.insert(schema.sessions).values({ campaignId, number: sessionNumber, recap: file.kind === "live" ? "" : recap }).returning();
     }
     sessionId = session.id;
 

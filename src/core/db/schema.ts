@@ -27,6 +27,8 @@ export const campaigns = sqliteTable("campaigns", {
   partyLocationId: integer("party_location_id").references((): AnySQLiteColumn => entities.id, { onDelete: "set null" }),
   inGameDate: text("in_game_date").notNull().default(""),
   tone: text("tone").notNull().default(""), // comedic / heroic / grim / horror …
+  // Where the GM wants the story to go, in their words: improv, Develop and prep steer by it.
+  direction: text("direction").notNull().default(""),
   // Superseded by the effects table (structured house rules); kept until old data is migrated.
   mechanics: text("mechanics", { mode: "json" }).$type<CampaignMechanic[]>().notNull().default([]),
   ruleToggles: text("rule_toggles", { mode: "json" }).$type<Toggles>().notNull().default({}),
@@ -238,6 +240,7 @@ export const threadEvents = sqliteTable("thread_events", {
 // Every LLM call, for latency and cost tracking.
 export const llmCalls = sqliteTable("llm_calls", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  campaignId: integer("campaign_id"), // which campaign it was for, when known (activity and cost per campaign)
   feature: text("feature").notNull(),
   model: text("model").notNull(),
   latencyMs: integer("latency_ms").notNull(),
@@ -246,5 +249,29 @@ export const llmCalls = sqliteTable("llm_calls", {
   costUsd: real("cost_usd").notNull().default(0),
   ok: integer("ok", { mode: "boolean" }).notNull(),
   error: text("error"),
+  createdAt: createdAt(),
+});
+
+// The session in progress, as it happens at the table: every moment the GM asked about, the option
+// they used (or their own), and what extracting it added to the loom. Each logged choice is
+// extracted straight away so later suggestions see it; risky changes wait as questions.
+export const LIVE_STATUS = ["asked", "extracting", "done", "failed"] as const;
+export const liveEntries = sqliteTable("live_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+  sessionNumber: integer("session_number").notNull(),
+  moment: text("moment").notNull(),
+  options: text("options", { mode: "json" }).$type<{ label: string; text: string; threadIds: number[] }[]>().notNull().default([]),
+  choiceKind: text("choice_kind", { enum: ["option", "own"] }), // null: asked, nothing used
+  choiceLabel: text("choice_label").notNull().default(""),
+  choice: text("choice").notNull().default(""),
+  status: text("status", { enum: LIVE_STATUS }).notNull().default("asked"),
+  batch: text("batch"), // what extraction wrote (undoable)
+  summary: text("summary", { mode: "json" }).$type<string[]>().notNull().default([]), // what it added, one line each
+  questions: text("questions", { mode: "json" })
+    .$type<{ n: number; group: string; summary: string; reasons: string[]; evidence: string; answer: "yes" | "no" | null }[]>()
+    .notNull()
+    .default([]),
+  wrapped: integer("wrapped", { mode: "boolean" }).notNull().default(false), // the session it belongs to was wrapped up
   createdAt: createdAt(),
 });

@@ -27,6 +27,14 @@ interface Applied {
   warnings: string[];
   kept: string[];
 }
+interface Live {
+  session: number;
+  moments: number;
+  used: number;
+  changes: number;
+  openQuestions: number;
+  draft: string;
+}
 interface Batch {
   batch: string;
   changes: number;
@@ -75,18 +83,21 @@ function Board({ campaignId }: { campaignId: number }) {
   const [busy, setBusy] = useState<"" | "reading" | "saving" | "ideas" | "undo">("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [live, setLive] = useState<Live | null>(null);
   const elapsed = useElapsed(busy === "reading" || busy === "ideas");
 
   const refresh = useCallback(async (id: number) => {
-    const r = await post<{ nextSession: number; history: Batch[] }>("/api/prep", { campaignId: id });
+    const r = await post<{ nextSession: number; history: Batch[]; live: Live | null }>("/api/prep", { campaignId: id });
     setSession(r.nextSession);
+    setLive(r.live);
     setHistory(r.history);
   }, []);
 
   useEffect(() => {
-    post<{ nextSession: number; history: Batch[] }>("/api/prep", { campaignId })
+    post<{ nextSession: number; history: Batch[]; live: Live | null }>("/api/prep", { campaignId })
       .then((r) => {
         setSession(r.nextSession);
+        setLive(r.live);
         setHistory(r.history);
       })
       .catch((e) => setError(e.message));
@@ -144,6 +155,13 @@ function Board({ campaignId }: { campaignId: number }) {
       await refresh(campaignId);
     });
 
+  const wrapAsIs = () =>
+    run("saving", async () => {
+      const r = await post<{ session: number }>("/api/live/wrap", { campaignId });
+      setNotice(`Session ${r.session} wrapped up: the table log is saved as its notes.`);
+      await refresh(campaignId);
+    });
+
   const getIdeas = () => run("ideas", async () => setIdeas(await post<Ideas>("/api/suggest", { campaignId })));
 
   const toggle = (set: Set<number>, n: number, on: boolean) => {
@@ -163,7 +181,7 @@ function Board({ campaignId }: { campaignId: number }) {
       {!proposal && (
         <section>
           <div className="mb-2 flex items-baseline justify-between">
-            <h2 className="text-[15px] font-semibold">After the session</h2>
+            <h2 className="text-[15px] font-semibold">{live?.used ? `Wrap up session ${live.session}` : "After the session"}</h2>
             <label className="flex items-center gap-1.5 text-sm text-muted">
               Session
               <input
@@ -175,22 +193,48 @@ function Board({ campaignId }: { campaignId: number }) {
               />
             </label>
           </div>
+          {!!live?.used && (
+            <details className="mb-3 rounded-xl border border-line bg-surface p-4 text-sm">
+              <summary className="cursor-pointer">
+                <span className="font-medium">Played at the table with Loom:</span>{" "}
+                <span className="text-muted">
+                  {live.used} moment{live.used === 1 ? "" : "s"} used, {live.changes} change{live.changes === 1 ? "" : "s"} already in the loom
+                  {live.openQuestions ? ` · ${live.openQuestions} still to check on the table page` : ""}
+                </span>
+              </summary>
+              <pre className="mt-3 whitespace-pre-wrap font-sans text-[13.5px] leading-relaxed text-muted">{live.draft}</pre>
+            </details>
+          )}
           <div className="rounded-xl border border-line bg-surface shadow-sm focus-within:border-thread/60">
             <textarea
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={9}
-              placeholder="Paste your session notes, however rough. Loom proposes what changed: new threads, progress, who's where. You confirm before anything is saved."
+              placeholder={
+                live?.used
+                  ? "What else happened? Anything you didn't use Loom for: fights, discoveries, conversations, where things ended. Loom adds only what the table log doesn't already have."
+                  : "Paste your session notes, however rough. Loom proposes what changed: new threads, progress, who's where. You confirm before anything is saved."
+              }
               className="block w-full resize-y bg-transparent px-4 py-3.5 text-[15px] leading-relaxed outline-none placeholder:text-muted/70"
             />
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
-              <span className="text-xs text-muted">{busy === "reading" ? `Reading your notes… ${elapsed} s (usually under a minute)` : "Uses the smartest model: about $0.05–0.10 a session"}</span>
+              <span className="text-xs text-muted">
+                {busy === "reading" ? (
+                  `Reading your notes… ${elapsed} s (usually under a minute)`
+                ) : live?.used ? (
+                  <button type="button" onClick={wrapAsIs} disabled={!!busy} className="underline-offset-2 hover:text-foreground hover:underline">
+                    Nothing to add: wrap up as it is
+                  </button>
+                ) : (
+                  "Uses the smartest model: about $0.05–0.10 a session"
+                )}
+              </span>
               <button
                 onClick={read}
                 disabled={notes.trim().length < 20 || !!busy}
                 className="shrink-0 whitespace-nowrap rounded-lg bg-foreground px-4 py-1.5 text-sm font-medium text-background transition-opacity disabled:opacity-30"
               >
-                {busy === "reading" ? "Reading…" : "Read notes"}
+                {busy === "reading" ? "Reading…" : live?.used ? "Read and wrap up" : "Read notes"}
               </button>
             </div>
           </div>

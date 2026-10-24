@@ -6,6 +6,7 @@ import { PILLARS, type Pillar } from "./db/schema";
 import { db, schema } from "./db/client";
 import { embeddingProvider, ensureEmbeddings, searchByMeaning, type MeaningSearch } from "./embeddings";
 import { BUDGETS, distancesFrom } from "./graph";
+import { sessionSoFar } from "./live";
 import { listMoments, momentLine } from "./moments";
 import { personalLines, spotlightScore, tableSeats, tableText } from "./players";
 import { buildScene, type Scene } from "./scene";
@@ -44,7 +45,8 @@ const SYSTEM = `You are Loom, a game master's assistant used live at the table. 
 Rules:
 - Every option builds on one of the listed threads (thread). Prefer options that pay off, complicate or collide existing threads. also_ties_to lists other threads the option genuinely uses; one strong tie beats three loose ones.
 - Get the facts right: who did what to whom must match the threads and cards exactly.
-- Match the energy of the moment: comedic stays comedic, tense stays tense.
+- Match the energy of the moment: comedic stays comedic, tense stays tense. LENGTH and TONE at the end say how much to write and how dramatic to be.
+- Serve where the story is going: when the GM has said where they want it to head, options should move toward that, not away from it. Build on what this session has already established.
 - The GM controls the world, NPCs and consequences; the players control their characters (PCs). Never decide what a PC does, says, thinks or feels.
 - Use what's already established: characters' abilities, health and gear, relationships, and the GM's mechanics. Threads and fields marked as GM secrets shape what happens but are never stated outright.
 - Small table-level details (a sound, a line of dialogue, an unnamed extra) are fine; new plots, factions or major NPCs are not. Never include anything on the safety lines.
@@ -53,7 +55,7 @@ Rules:
 TAGS: write every named character, place, item and mechanic in curly braces, exactly as named in the scene, e.g. {Zara the Unbound}, {Figurine madness}. To make it read naturally, add how it should read after a bar: {Figurines of a knight and a monk|the monk figurine}, {Zara the Unbound|Zara}.
 
 Each option is a scaffold:
-- setup: 1-2 short beats of what happens right now, under 35 words in total. Each beat has a kind and an actor from the allowed list:
+- setup: short beats of what happens right now, as many and as long as LENGTH says. Each beat has a kind and an actor from the allowed list:
   - "world": the environment, magic or events. actor "world". does is a full sentence; things may happen to or around a PC ("{Khayiulad}'s figurine grows warm against his palm").
   - "npc": a character who is here acts or speaks. actor is their name. does is what they do, without repeating the name ("turns the figurine over and goes pale").
   - "walk_on": an unnamed extra (a merchant, a guard). actor "walk-on", walk_on describes them ("a nervous merchant"), does is what they do.
@@ -180,8 +182,9 @@ const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 export function renderBeat(b: ScaffoldBeat, tagger: Tagger) {
   const tagged = tagger.tag(b.does).trim();
   // "Uses the tables as cover" after a name reads "Vex'ahlia uses…"; names (tagged) keep their capital.
-  const does = tagger.render(b.kind === "world" || tagged.startsWith("{") ? tagged : tagged.replace(/^([A-Z])(?=[a-z])/, (c) => c.toLowerCase())).trim();
-  if (b.kind === "world") return sentence(capitalise(does));
+  const does = tagger.render(b.kind === "world" || b.actor === "world" || tagged.startsWith("{") ? tagged : tagged.replace(/^([A-Z])(?=[a-z])/, (c) => c.toLowerCase())).trim();
+  // "world" as the actor of another kind of beat is still the world talking, not a character called World.
+  if (b.kind === "world" || b.actor === "world") return sentence(capitalise(does));
   const subject = b.kind === "walk_on" || b.actor === "walk-on" ? capitalise(tagger.render(b.walk_on).trim() || "someone") : b.actor;
   const startsWithSubject = does.toLowerCase().startsWith(subject.toLowerCase()) || does.toLowerCase().startsWith(subject.split(/[\s,]+/)[0].toLowerCase());
   return sentence(startsWithSubject ? capitalise(does) : `${subject} ${does}`);
@@ -222,6 +225,10 @@ export function normaliseHandOff(o: ScaffoldOption, c: CheckContext) {
 export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
   if (!o.setup.length) return "has no setup";
   if ([o.hand_off.text, o.why, o.on_fail.effect, ...o.setup.map((b) => b.does)].some((t) => TABLE_TALK.test(t))) return "mentions the table notes";
+  // The real people at the table are never named, only their characters.
+  const texts = [o.label, o.hand_off.text, o.why, o.on_fail.effect, ...o.setup.map((b) => b.does), ...o.setup.map((b) => b.walk_on)];
+  const real = c.scene.realNames.find((n) => texts.some((t) => new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(t)));
+  if (real) return `names a real player (${real})`;
   for (const b of o.setup) {
     const r = checkBeat(b, c);
     if (r) return r;
@@ -371,7 +378,26 @@ async function safetyCheck(lines: string[], texts: string[]) {
   return { flagged: new Set(call.data.flagged.map((f) => f.option - 1)), call };
 }
 
+// How much to write follows how much the GM wrote: a quick line gets a quick answer.
+export function lengthFor(moment: string) {
+  const words = moment.trim().split(/\s+/).length;
+  if (words <= 10) return "LENGTH: the GM wrote a quick line, so answer quickly: setup is 1 beat, under 20 words; hand-off one short sentence; why under 10 words.";
+  if (words <= 35) return "LENGTH: setup is 1-2 beats, under 35 words in total.";
+  return "LENGTH: the GM gave detail, so answer in kind: setup is 2-3 beats, up to 60 words in total, and an option may tie in a second or third thread where it genuinely fits.";
+}
+
+// 0 grounded … 4 theatrical. Changes only how things are told, never the rules.
+export const TONES = ["Grounded", "Restrained", "Balanced", "Dramatic", "Theatrical"] as const;
+const TONE_TEXT = [
+  "TONE: grounded. Plain, plausible and understated: no flourishes, no sudden magic or reveals unless a thread already calls for it. Consequences follow from what's established.",
+  "TONE: restrained. Mostly plain and plausible, with one vivid detail where it earns its place. Avoid melodrama.",
+  "TONE: balanced. Match the campaign's tone; vivid where it matters, never overwrought.",
+  "TONE: dramatic. Lean into striking images and rising stakes, while staying true to the threads.",
+  "TONE: theatrical. Big, dramatic and cinematic: bold reveals and high stakes, but every beat still ties to a thread.",
+];
+
 export interface ImprovOptions {
+  tone?: number; // 0 grounded … 4 theatrical (default 1: Jacob found the default a bit theatrical)
   focused?: boolean; // a tighter scene and fewer threads (cheapest); the default is wide
   threads?: number; // send exactly this many threads (plus any tied to what the moment names)
   embeddings?: string; // "local" | "voyage" | "off"; default from LOOM_EMBEDDINGS (local)
@@ -485,6 +511,10 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
     : "";
 
   const titleOf = new Map(threads.map((t) => [t.id, t.title]));
+  // The GM's direction for the story, and what this session has already established at the table.
+  const [campaignRow] = await db.select({ direction: schema.campaigns.direction }).from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
+  const direction = campaignRow?.direction.trim() ?? "";
+  const soFar = await sessionSoFar(campaignId);
   const OptionsSchema = optionsSchema({ threads: threads.map((t) => `T${t.id}`), actors: lists.actors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`) });
   const prompt = `${scene.text}
 
@@ -495,6 +525,10 @@ ${lists.stated.length ? `- As of this moment: ${lists.stated.join("; ")}\n` : ""
 OPEN THREADS
 ${threads.map((t) => (t.detail === "full" ? threadBlock(t, titleOf, typeOf) : `T${t.id} [${t.kind}] ${t.title}: ${t.summary}`)).join("\n")}
 ${sceneBlock}${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callbacks.map(momentLine).join("\n")}\n` : ""}${tableBlock ? `\n${tableBlock}\n` : ""}
+${direction ? `\nWHERE THE GM WANTS THE STORY TO GO\n${direction}\n` : ""}${soFar ? `\nTHIS SESSION SO FAR (what already happened at the table, oldest first)\n${soFar}\n` : ""}
+${lengthFor(moment)}
+${TONE_TEXT[Math.max(0, Math.min(4, opts.tone ?? 1))]}
+
 WHAT JUST HAPPENED AT THE TABLE
 ${moment}`;
 
@@ -552,7 +586,7 @@ ${moment}`;
     // options that streamed in whole before it went wrong still count.
     let res: LlmResult<z.infer<typeof OptionsSchema>>;
     try {
-      res = await callLlm({ feature: "improv", system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true, onText });
+      res = await callLlm({ feature: "improv", campaignId, system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true, onText });
     } catch (err) {
       rejected.push({ label: `attempt ${attempt + 1}`, reason: `unusable answer (${err instanceof Error ? err.message.slice(0, 60) : "error"}…)` });
       continue;
@@ -578,7 +612,7 @@ ${moment}`;
     const steer = `${prompt}
 
 IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}. Every option must steer away from it: keep it off-screen, redirect the danger elsewhere (often onto the party or the villain's plans), or resolve it without depicting or threatening it.`;
-    const res = await callLlm({ feature: "improv", system: SYSTEM, prompt: steer, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
+    const res = await callLlm({ feature: "improv", campaignId, system: SYSTEM, prompt: steer, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
     calls.push(res);
     const fresh = (res.data.options as ScaffoldOption[]).filter((o) => {
       normaliseHandOff(o, lists.check);
