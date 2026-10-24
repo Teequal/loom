@@ -12,6 +12,7 @@ import {
   TraitsSchema,
   type EntityTraits,
 } from "./entity-fields";
+import { RELATION_LAWS } from "./rules";
 
 // The entity side of extraction: field updates, relationships and where the party is.
 // Shared by `recap` (alongside thread changes) and `enrich` (backfill from stored recaps).
@@ -47,6 +48,12 @@ export const EntityChangesShape = {
 export type EntityUpdate = z.infer<typeof EntityUpdateSchema>;
 export type RelationChange = z.infer<typeof RelationChangeSchema>;
 
+// What each constrained relationship can point at, from the laws, so proposals respect them.
+const LAW_TEXT = Object.entries(RELATION_LAWS)
+  .filter(([, law]) => law?.to || law?.from)
+  .map(([type, law]) => `${type}${law!.from ? ` (from ${law!.from.join("/")})` : ""}${law!.to ? ` → ${law!.to.join("/")} only` : ""}`)
+  .join("; ");
+
 export const ENTITY_RULES = `EVIDENCE: every entity update, relationship and the party location carries evidence: a short exact quote (under 20 words) copied word for word from the notes that supports it. If nothing in the notes supports a change, don't propose it.
 
 entity_updates
@@ -62,6 +69,7 @@ entity_updates
 relations
 - Relationships the notes state or clearly show, between named entities: from, type, to, note (a few words of context), strength from -3 (strongly negative) to +3 (strongly positive), 0 if neutral.
 - type is one of: ${RELATION_TYPES.join(", ")}.
+- Some types only connect certain kinds of thing: ${LAW_TEXT}. "leads" means is the leader of a faction or group; guiding, escorting or taking someone somewhere is an event for a thread, not a relationship.
 - Include possession (a character "holds" an item), membership ("member_of" a faction), service and hunting. Skip ones already listed below unless they changed.
 
 party_location
@@ -158,9 +166,15 @@ export async function applyEntityChanges(
     }
     if (Object.keys(traits).length) patch.traits = traits as EntityTraits;
 
-    const r = await updateEntity(e.id, patch, opts);
-    if (r.written.length) result.updated++;
-    if (r.proposed.length) result.conflicts.push({ entity: e.name, proposals: r.proposed });
+    // One change that breaks a rule (a wrong kind of place, say) is skipped with a warning; it
+    // never stops the rest of the save.
+    try {
+      const r = await updateEntity(e.id, patch, opts);
+      if (r.written.length) result.updated++;
+      if (r.proposed.length) result.conflicts.push({ entity: e.name, proposals: r.proposed });
+    } catch (err) {
+      result.warnings.push(`${e.name}: skipped (${err instanceof Error ? err.message : String(err)})`);
+    }
   }
 
   for (const rel of changes.relations) {
@@ -170,17 +184,25 @@ export async function applyEntityChanges(
       result.warnings.push(`Relationship ${rel.from} ${rel.type} ${rel.to} skipped (unknown entity)`);
       continue;
     }
-    const r = await setRelation(campaignId, { fromEntityId: from.id, toEntityId: to.id, type: rel.type, note: rel.note, strength: rel.strength }, opts);
-    if (r.written.length) result.relations++;
-    if (r.proposed.length) result.conflicts.push({ entity: `${from.name} ${rel.type} ${to.name}`, proposals: r.proposed });
+    try {
+      const r = await setRelation(campaignId, { fromEntityId: from.id, toEntityId: to.id, type: rel.type, note: rel.note, strength: rel.strength }, opts);
+      if (r.written.length) result.relations++;
+      if (r.proposed.length) result.conflicts.push({ entity: `${from.name} ${rel.type} ${to.name}`, proposals: r.proposed });
+    } catch (err) {
+      result.warnings.push(`Relationship ${from.name} ${rel.type} ${to.name} skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   if (changes.party_location) {
     const id = location(changes.party_location, "Party location");
     if (id) {
-      const r = await updateCampaign(campaignId, { partyLocationId: id }, opts);
-      result.party = r.written.length > 0;
-      if (r.proposed.length) result.conflicts.push({ entity: "Party location", proposals: r.proposed });
+      try {
+        const r = await updateCampaign(campaignId, { partyLocationId: id }, opts);
+        result.party = r.written.length > 0;
+        if (r.proposed.length) result.conflicts.push({ entity: "Party location", proposals: r.proposed });
+      } catch (err) {
+        result.warnings.push(`Party location skipped: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
   return result;

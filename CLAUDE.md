@@ -204,7 +204,14 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
     - A risky session: "Tobin dead" with Yes was saved as ✎; "close the bridge thread" with No left it open.
     - Prep ideas found the cure swap again ("The Other Half of the Pair").
     - The fixture was reseeded afterwards.
-  - **Gaps:** undoing a recap leaves its session row (and stored recap text) behind, so the next session number counts it. Duradan's recaps predate the change log, so its Recent changes list is empty.
+  - **Gaps:** Duradan's recaps before session 6 predate the change log, so they aren't in Recent changes.
+  - **Bug from Jacob's session 6 (24 Oct):** extraction proposed "Zara leads Iresia" (meaning she guided her to the palace). `leads` only points at factions, so `setRelation` threw. That stopped the save halfway, and the review stayed open, so each retry saved the threads again: 4 partial saves and every session 6 thread ×4. Fixed:
+    - `applyEntityChanges` skips any update, relationship or party move that breaks a rule, with a warning, and carries on.
+    - The extraction prompt lists what each constrained type can point at (generated from `RELATION_LAWS`) and says guiding someone is an event, not "leads".
+    - A proposal can only be saved once: the file is marked `savedAs` before writing, and the review closes if a save fails.
+    - The next session number skips a session whose saves were all undone.
+    - Duradan was repaired: all 4 session 6 saves undone (DB backed up first). Session 6 needs reading again.
+    - Tested on the fixture: a bad "leads" relationship is skipped with a warning while the valid one beside it saves; a second save of the same notes is refused.
 
 ## Entity model build (docs/entity-model.md)
 

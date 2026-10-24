@@ -120,7 +120,12 @@ function Board({ campaignId }: { campaignId: number }) {
       // Anything risky the GM didn't say yes to is skipped.
       const must = proposal.items.filter((i) => i.tier === "must");
       const skipped = [...skip, ...must.filter((i) => !yes.has(i.n)).map((i) => i.n)];
-      const r = await post<Applied>("/api/recap/apply", { campaignId, sessionNumber: proposal.sessionNumber, skip: skipped, confirmed: [...yes] });
+      const r = await post<Applied>("/api/recap/apply", { campaignId, sessionNumber: proposal.sessionNumber, skip: skipped, confirmed: [...yes] }).catch(async (e) => {
+        // A failed save may have written part of it; the review closes so it can't be saved twice.
+        setProposal(null);
+        await refresh(campaignId);
+        throw e;
+      });
       setApplied(r);
       setProposal(null);
       setNotes("");

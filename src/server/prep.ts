@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { eq, max } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { db, schema } from "@/core/db/client";
-import { applyProposal, proposeRecapChanges, type ProposalFile } from "@/core/recap";
+import { applyProposal, newBatch, proposeRecapChanges, type ProposalFile } from "@/core/recap";
 import { reviewProposal, splitRisky } from "@/core/review";
 import { suggest } from "@/core/suggest";
 import { recentBatches, undoBatch } from "@/core/undo";
@@ -11,9 +11,20 @@ import { recentBatches, undoBatch } from "@/core/undo";
 
 const proposalPath = (campaignId: number, sessionNumber: number) => `data/proposals/web-c${campaignId}-s${sessionNumber}.json`;
 
+// The session after the last one that still holds anything. A recap that was saved and then
+// fully undone leaves its session row behind; that number is offered again.
 export async function nextSessionNumber(campaignId: number) {
-  const [row] = await db.select({ n: max(schema.sessions.number) }).from(schema.sessions).where(eq(schema.sessions.campaignId, campaignId));
-  return (row?.n ?? 0) + 1;
+  const sessions = await db.select().from(schema.sessions).where(eq(schema.sessions.campaignId, campaignId)).orderBy(desc(schema.sessions.number));
+  for (const s of sessions) {
+    const [live] = await db
+      .select({ id: schema.stateChanges.id })
+      .from(schema.stateChanges)
+      .where(and(eq(schema.stateChanges.sessionId, s.id), isNull(schema.stateChanges.undoneAt)))
+      .limit(1);
+    const [event] = await db.select({ id: schema.threadEvents.id }).from(schema.threadEvents).where(eq(schema.threadEvents.sessionId, s.id)).limit(1);
+    if (live || event) return s.number + 1;
+  }
+  return 1;
 }
 
 export async function proposeRecap(campaignId: number, recap: string, sessionNumber?: number) {
@@ -34,8 +45,13 @@ export async function proposeRecap(campaignId: number, recap: string, sessionNum
 export async function applyRecap(campaignId: number, sessionNumber: number, skip: number[], confirmed: number[]) {
   const path = proposalPath(campaignId, sessionNumber);
   if (!existsSync(path)) throw new Error("That proposal has expired. Read the notes again.");
-  const file = JSON.parse(readFileSync(path, "utf8")) as ProposalFile;
-  const r = await applyProposal(file, new Set(skip), undefined, new Set(confirmed));
+  const file = JSON.parse(readFileSync(path, "utf8")) as ProposalFile & { savedAs?: string };
+  // A proposal is saved once. Marked before writing, so a retry after a failure can't add the
+  // same threads again; the GM undoes the batch and reads the notes again instead.
+  if (file.savedAs) throw new Error(`These notes were already saved ("${file.savedAs}"). To redo them, undo that save under Recent changes, then read the notes again.`);
+  const batch = newBatch(file);
+  writeFileSync(path, JSON.stringify({ ...file, savedAs: batch }, null, 2));
+  const r = await applyProposal(file, new Set(skip), batch, new Set(confirmed));
   return {
     batch: r.batch,
     counts: { ...r.counts, details: r.entityResult.updated, relationships: r.entityResult.relations, moments: r.moments, party: !!r.entityResult.party },
