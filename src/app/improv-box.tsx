@@ -6,7 +6,7 @@ import { Choice, Field, Steps, Switch, Tune } from "./controls";
 import { Icon } from "./icons";
 import { type Encounter, FightPanel } from "./fight";
 import { ResultPrompt } from "./results";
-import { Linked, LoomProvider, RefChips } from "./loom-ui";
+import { Linked, LoomProvider, RefChips, useLoom } from "./loom-ui";
 import { Header, Note, post, store, useCampaigns, useElapsed } from "./shell";
 
 // The table page: type what the players just did, get options tied back to threads (each shown
@@ -23,10 +23,15 @@ interface Card {
   needs: "roll" | "fight" | null;
   pillar: string | null;
 }
+interface RecordFix {
+  say: string;
+  apply: string;
+  fix: { kind: "condition"; entityId: number; condition: string } | { kind: "holds"; holderId: number; itemId: number };
+}
 interface Done {
   entryId: number;
   count: number;
-  notes: string[];
+  fixes: RecordFix[];
   safetyNote: string | null;
   llm: { model: string; seconds: number; costUsd: number; attempts: number };
 }
@@ -506,10 +511,10 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           {current && <Branches parent={current} live={live} />}
 
           {/* Arrives with the last option, so it goes below the cards rather than shifting them. */}
-          {!!done?.notes.length && (
-            <div className="mt-3">
-              {done.notes.map((n) => (
-                <Note key={n}>{n}</Note>
+          {!!done?.fixes.length && (
+            <div className="mt-3 space-y-2">
+              {done.fixes.map((f) => (
+                <RecordNote key={f.say} campaignId={campaignId} note={f} />
               ))}
             </div>
           )}
@@ -528,6 +533,44 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       )}
       {!asked && error && <p className="mt-4 text-sm text-danger">{error}</p>}
     </>
+  );
+}
+
+// The moment and the records disagreed. Loom went with the moment for these options; say so, and
+// let the GM settle it in one tap: record it, or keep it to this moment. Either way, play on.
+function RecordNote({ campaignId, note }: { campaignId: number; note: RecordFix }) {
+  const [state, setState] = useState<"" | "busy" | "saved" | "kept">("");
+  const loom = useLoom();
+  if (state === "kept") return null;
+  return (
+    <div className="rise flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-line bg-surface px-3 py-2 text-[13px]">
+      <Icon name="sparkle" className="text-thread" />
+      <span className="min-w-0 flex-1 text-muted">{state === "saved" ? "Recorded. Your records match this moment now." : <Linked text={note.say} />}</span>
+      {state !== "saved" && (
+        <span className="flex shrink-0 gap-2">
+          <button
+            type="button"
+            disabled={state === "busy"}
+            onClick={async () => {
+              setState("busy");
+              try {
+                await post("/api/records", { campaignId, fix: note.fix });
+                setState("saved");
+                loom?.reload();
+              } catch {
+                setState("");
+              }
+            }}
+            className="btn-secondary text-xs"
+          >
+            {note.apply}
+          </button>
+          <button type="button" onClick={() => setState("kept")} className="btn-tertiary text-xs" title="Keep the records as they are">
+            Just this moment
+          </button>
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -826,7 +869,7 @@ function EntryDetail({ entry, live, onClose, onOpen }: { entry: Entry; live: Liv
       {entry.choiceKind ? (
         <>
           <p className="mt-1.5">
-            {entry.choiceLabel && <span className="mr-1.5 text-[12px] font-semibold uppercase tracking-wide">{entry.choiceLabel}</span>}
+            {entry.choiceLabel && entry.choiceKind !== "result" && <span className="mr-1.5 text-[12px] font-semibold uppercase tracking-wide">{entry.choiceLabel}</span>}
             <Linked text={entry.choice} />
           </p>
           <LoomStatus entry={entry} />
@@ -861,7 +904,8 @@ function Branches({ parent, live, onOpen }: { parent: Entry; live: Live; onOpen?
         {kids.map((k) => (
           <li key={k.id} className="text-[14px]">
             <Icon name="branch" size={12} className="mr-1 text-thread" />
-            {k.choiceLabel && <span className="mr-1 font-medium">{k.choiceLabel}.</span>}
+            {/* A result's text already opens with its outcome ("Partly. Only Khayiulad…"). */}
+            {k.choiceLabel && k.choiceKind !== "result" && <span className="mr-1 font-medium">{k.choiceLabel}.</span>}
             <Linked text={k.choice} />
             <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
               <LoomStatus entry={k} compact />

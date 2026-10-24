@@ -71,6 +71,14 @@ Each option is a scaffold:
 - pillar: the kind of play the option mostly offers: combat, social, exploration, mystery, comedy or drama.
 - THE TABLE says who has been quiet. Hand-offs mostly go to whoever the moment is about; at most one option goes to a quiet player instead, and only when it fits. Never mention players.`;
 
+// When the moment and the records disagree, Loom goes with the moment for that call, and offers
+// to update the records: a condition the moment states, or an item in someone else's hands.
+export type RecordFix = {
+  say: string; // what Loom did, for the page
+  apply: string; // the button that records it
+  fix: { kind: "condition"; entityId: number; condition: string } | { kind: "holds"; holderId: number; itemId: number };
+};
+
 // Conditions the moment itself states ("Iresia, at 0 HP and unconscious…"). The moment wins for
 // this call, like possession, and the GM is told the records disagree.
 const MOMENT_CONDITIONS: [RegExp, string][] = [
@@ -88,8 +96,9 @@ const MOMENT_CONDITIONS: [RegExp, string][] = [
 function momentConditions(scene: Scene, moment: string, mentioned: Set<string>) {
   const notes: string[] = [];
   const stated: string[] = [];
+  const fixes: RecordFix[] = [];
   const pcs = scene.pcs.filter((p) => mentioned.has(p.name));
-  if (!pcs.length) return { notes, stated };
+  if (!pcs.length) return { notes, stated, fixes };
   for (const clause of moment.split(/[.;!?]+/)) {
     // The condition belongs to the PC named last before it in the same sentence (or the only one named).
     for (const [re, condition] of MOMENT_CONDITIONS) {
@@ -111,10 +120,15 @@ function momentConditions(scene: Scene, moment: string, mentioned: Set<string>) 
       for (const e of [pc, ...scene.entities.filter((x) => x.id === pc.id)]) e.traits = traits as typeof e.traits;
       const field = condition === "unconscious" ? "health=unconscious" : `conditions="${traits.conditions!.join(", ")}"`;
       notes.push(`This moment has ${pc.name} ${condition}; your records don't. Update with: entity set "${pc.name}" ${field}`);
+      fixes.push({
+        say: `Loom treated ${pc.name} as ${condition} for these options, because the moment says so. Your records don't have that yet.`,
+        apply: `Record ${pc.name} as ${condition}`,
+        fix: { kind: "condition", entityId: pc.id, condition },
+      });
       stated.push(`${pc.name} is ${condition} (${condition === "unconscious" ? "can't act, speak or notice anything; death saves only" : "per the 5e condition"})`);
     }
   }
-  return { notes, stated };
+  return { notes, stated, fixes };
 }
 
 // Moments where the players themselves reach someone at a distance; that NPC may then act from afar.
@@ -301,7 +315,7 @@ function meaningSummary(m: MeaningSearch | undefined, entities: Scene["entities"
 // `reach`: entity ids close enough to the moment to be offered as actors (see graph.ts). Without
 // it, every entity is offered.
 export function buildLists(scene: Scene, moment: string, mentioned: Set<string>, reach?: Map<number, number>) {
-  const { notes, stated } = momentConditions(scene, moment, mentioned);
+  const { notes, stated, fixes } = momentConditions(scene, moment, mentioned);
   const tagger = makeTagger(scene);
   const alive = (e: Scene["entities"][number]) => e.status !== "dead";
   const free = (e: Scene["entities"][number]) => e.status !== "captured" && e.status !== "missing";
@@ -342,12 +356,18 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
       notes.push(
         `Your records say ${who.join(" and ")} ${who.length > 1 ? "hold" : "holds"} ${item.name}; this moment has ${withItem.map((p) => p.name).join(" and ")} with it. Update with: relate "${withItem[0].name}" holds "${item.name}"`,
       );
+      fixes.push({
+        say: `Loom treated ${withItem[0].name} as holding ${item.name} for these options. Your records say ${who.join(" and ")} ${who.length > 1 ? "hold" : "holds"} it.`,
+        apply: `${withItem[0].name} has it now`,
+        fix: { kind: "holds", holderId: withItem[0].id, itemId: item.id },
+      });
     }
   }
 
   return {
     tagger,
     notes,
+    fixes,
     stated,
     check: { scene, tagger, present, remoteOk, outcomePcs, possession } satisfies CheckContext,
     // Actors on offer: those within reach of the moment (and anyone it names), plus the PCs. A
@@ -638,5 +658,5 @@ IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}
     costUsd: calls.reduce((s, c) => s + c.costUsd, 0),
     attempts: calls.filter((c) => c.model !== "safety" && c !== safety.call).length,
   };
-  return { options, dropped: rejected.length, rejected, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes, quiet: new Map(seats.map((x) => [x.pc.name, x.quietFor])), meaning: meaningSummary(meaning, base.entities, sessionNumber, provider?.model ?? null, meaningNote) };
+  return { options, dropped: rejected.length, rejected, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes, fixes: lists.fixes, quiet: new Map(seats.map((x) => [x.pc.name, x.quietFor])), meaning: meaningSummary(meaning, base.entities, sessionNumber, provider?.model ?? null, meaningNote) };
 }

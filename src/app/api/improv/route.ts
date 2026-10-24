@@ -51,8 +51,8 @@ export async function POST(request: Request) {
           type: "done",
           entryId: entry.id,
           count: result.options.length,
-          // The CLI's "Update with: …" commands don't belong on the page.
-          notes: result.notes.map((n) => n.replace(/\s*Update with:.*$/, "")),
+          // Where the moment and the records disagree: what Loom did, and a fix the page can apply.
+          fixes: result.fixes,
           safetyNote: result.safetyNote,
           llm: { model: result.llm.model, seconds: result.llm.latencyMs / 1000, costUsd: result.llm.costUsd, attempts: result.llm.attempts },
         });

@@ -313,6 +313,11 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - Develop retries once with the offending lines and an instruction to rewrite them as conditions, then drops any sentences still slipping. Fights and fresh ideas drop them directly. The Develop prompt now gives the right form ("If the party hides in Tomas's cellar…").
   - 12 crafted cases (106/106 checks pass). A live rerun of the same kind of scene came back all conditional.
   - **Phone access:** `npm run dev:lan`, then http://<the Mac's LAN address>:3000.
+- **Record notes you can act on** (25 Oct, Jacob on his phone): "This moment has Darius restrained; your records don't." was a dead end, because the CLI's update command had been stripped for the page.
+  - `buildLists` now also returns `fixes` (`RecordFix`: what Loom did, a button label, and a structured fix for a moment-stated condition or an item that changed hands). The CLI still prints its text notes.
+  - The page shows "Loom treated Darius as restrained for these options, because the moment says so…" with **Record Darius as restrained** (`POST /api/records`, saved as the DM's own entry) or **Just this moment**.
+  - Results no longer repeat their outcome ("Partly. Partly.").
+  - A roll instruction that colours the PC's effort ("Bram makes a death save as he tries to rise", in the sample campaign) is fine by Jacob; not a slip to fix.
 
 ## Entity model build (docs/entity-model.md)
 
