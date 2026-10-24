@@ -5,6 +5,7 @@ import { THREAD_KINDS } from "./db/schema";
 import { logChanges } from "./history";
 import { callLlm } from "./llm";
 import { loadThreadContexts } from "./retrieval";
+import { withoutSlips } from "./plan-agency";
 import { buildScene } from "./scene";
 
 // New material, on request. Loom's job is usually to tie back to what's there; this is the one
@@ -32,12 +33,13 @@ Offer 5 ideas, a mix of kinds:
 - connection: a hidden link between two things already in play that nobody has noticed.
 
 For each: title (3-6 words), pitch (2-3 sentences the GM can use), ties_to (ids of existing threads it touches; at least one), and thread: how it would be recorded (title, kind, summary, entities by exact name, existing or new).
-New material must fit the world, tone and direction, and must not contradict established facts. Never decide what player characters do.`;
+New material must fit the world, tone and direction, and must not contradict established facts. Never decide what player characters do: write what the world offers, or what follows "if the party…".`;
 
 export async function freshIdeas(campaignId: number) {
   const threads = await loadThreadContexts(campaignId);
   const scene = await buildScene(campaignId, { mentioned: new Set(), threadEntities: threads.flatMap((t) => t.entities) });
   const [camp] = await db.select().from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
+  const pcs = scene.pcs.map((p) => ({ name: p.name, aliases: p.aliases }));
   const prompt = `${scene.text}
 
 OPEN THREADS
@@ -46,7 +48,9 @@ ${camp?.direction.trim() ? `\nWHERE THE GM WANTS THE STORY TO GO\n${camp.directi
   const res = await callLlm({ feature: "fresh", campaignId, system: SYSTEM, prompt, schema: Schema, maxTokens: 5000, effort: "medium" });
   const titleOf = new Map(threads.map((t) => [t.id, t.title]));
   return {
-    ideas: res.data.ideas.map((i) => ({ ...i, ties: i.ties_to.filter((id) => titleOf.has(id)).map((id) => ({ id, title: titleOf.get(id)! })) })),
+    ideas: res.data.ideas
+      .map((i) => ({ ...i, pitch: withoutSlips(i.pitch, pcs), ties: i.ties_to.filter((id) => titleOf.has(id)).map((id) => ({ id, title: titleOf.get(id)! })) }))
+      .filter((i) => i.pitch),
     llm: { model: res.model, seconds: res.latencyMs / 1000, costUsd: res.costUsd },
   };
 }

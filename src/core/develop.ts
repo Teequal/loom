@@ -5,6 +5,7 @@ import { BUDGETS, distancesFrom } from "./graph";
 import { sessionSoFar } from "./live";
 import { callLlm } from "./llm";
 import { findMentions, loadThreadContexts } from "./retrieval";
+import { planSlips, withoutSlips } from "./plan-agency";
 import { buildScene } from "./scene";
 
 // Develop: the GM picked an option and wants to plan ahead from it. A scene intro to read aloud,
@@ -37,7 +38,7 @@ Rules:
 - Follow REACH for how far ahead to plan, and TONE for how dramatic to be.
 - Steer toward where the GM wants the story to go, when they've said.
 - Use only the facts listed. You may propose hidden connections, but never contradict what the threads say. GM secrets shape what happens but are never stated outright.
-- The GM controls the world and NPCs; the players control their characters. Set up situations; never decide what player characters choose, say or feel.
+- The GM controls the world and NPCs; the players control their characters. Set up situations; never decide what player characters choose, say, feel or do. Never write the party or a PC doing something as fact ("The party drags Darius into the cellar"). Write what the world offers, and what follows if they choose it: "If the party hides in Tomas's cellar, the crowd turns back to the festival…", "The cellar is open to them".
 - Dead characters stay dead; someone elsewhere has to travel or send word.
 - Refer to threads by name in the text, never by number.
 - new_thread: only at REACH "the arc", and only if it earns its place: one genuinely new thread this could open (title, one-line summary). Otherwise null.`;
@@ -84,14 +85,32 @@ ${input.text}
 ${REACH_TEXT[reach]}
 TONE: ${tone}.`;
 
-  const res = await callLlm({ feature: "develop", campaignId, system: SYSTEM, prompt, schema: DevelopSchema, maxTokens: 6000, effort: "low", model });
+  let res = await callLlm({ feature: "develop", campaignId, system: SYSTEM, prompt, schema: DevelopSchema, maxTokens: 6000, effort: "low", model });
+  // Prose can't be scaffolded, so it's read: a line where the party or a PC acts goes back once
+  // to be rewritten as a condition, and anything still deciding for the players is dropped.
+  const party = pcs.map((p) => ({ name: p.name, aliases: p.aliases }));
+  const slipsIn = (d: z.infer<typeof DevelopSchema>) => [d.intro, ...d.setups.map((x) => x.text), ...d.directions.map((x) => x.text)].flatMap((t) => planSlips(t, party));
+  const first = slipsIn(res.data);
+  if (first.length) {
+    const fix = `${prompt}
+
+REWRITE NEEDED: these lines decide what the player characters do. Rewrite them as what the world offers, or as a condition ("If the party…"), and keep everything else:
+${first.map((l) => `- ${l}`).join("\n")}`;
+    try {
+      const again = await callLlm({ feature: "develop", campaignId, system: SYSTEM, prompt: fix, schema: DevelopSchema, maxTokens: 6000, effort: "low", model });
+      if (slipsIn(again.data).length < first.length) res = { ...again, latencyMs: res.latencyMs + again.latencyMs, costUsd: res.costUsd + again.costUsd };
+    } catch {
+      // keep the first answer; its slips are dropped below
+    }
+  }
+  const clean = (t: string) => withoutSlips(t, party);
   const titleOf = new Map(threads.map((t) => [t.id, t.title]));
   const titles = (ids: number[]) => [...new Set(ids)].filter((id) => titleOf.has(id)).map((id) => ({ id, title: titleOf.get(id)! }));
   return {
     reach: REACH[reach],
-    intro: res.data.intro,
-    setups: res.data.setups.map((s) => ({ title: s.title, text: s.text, threads: titles(s.thread_ids) })),
-    directions: res.data.directions.map((d) => ({ title: d.title, text: d.text, threads: titles(d.thread_ids) })),
+    intro: clean(res.data.intro),
+    setups: res.data.setups.map((s) => ({ title: s.title, text: clean(s.text), threads: titles(s.thread_ids) })).filter((s) => s.text),
+    directions: res.data.directions.map((d) => ({ title: d.title, text: clean(d.text), threads: titles(d.thread_ids) })).filter((d) => d.text),
     newThread: reach === 3 ? res.data.new_thread : null,
     llm: { model: res.model, seconds: res.latencyMs / 1000, costUsd: res.costUsd },
   };

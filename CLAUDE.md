@@ -187,6 +187,7 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
     - **`--secret`** for when the players don't know they're the same person. Threads stay unlinked from the real record, since a prompt would otherwise show "Involves: Vex'ahlia" on the mystery. The identity goes into the real record's GM-only secrets. Aliases are never shown to the model; they're only used to work out who a name means. Duradan's guard merge was redone this way (Jacob: the players don't know). Live, 6 runs about the guard: no option named her as the guard. Options dropped breadcrumbs ("the sigil matches one seen near the ritual site"), and one offered a reveal as a choice ("the fighter was the one who ambushed Darius").
     - **Measured:** 8 new crafted checks (87/87 pass). Live, across 5 moments, Vex'ahlia appeared only in the one that names her, and no NPC was dropped into a scene.
     - **Possessive inside a tag:** the model sometimes writes `{Professor Aldric Vex|Vex's} apartment`. The checks only knew `{…}'s` as "belongs to", so this read as Vex acting, and the same form let body slips like "{Khayiulad|Khayiulad's} knees buckle" through. `tag()` now moves the possessive outside the tag. 90/90 crafted checks pass.
+  - **On a phone (same Wi-Fi):** `npm run dev:lan`, then open http://<the Mac's LAN address>:3000 (currently 192.168.0.100; `ipconfig getifaddr en0` to check). `allowedDevOrigins` in `next.config.ts` allows 192.168.x.x, 10.x.x.x and .local names. There's no login, so anyone on the same network can use it (and the API key): home Wi-Fi only.
   - The desktop app's preview runner can't read the Desktop folder (macOS permission), so run the dev server from a terminal; `.claude/launch.json` attaches the preview to port 3000.
 
 - [x] **Step 9: Between-sessions page** (`/prep`, 24 Oct). This is what lets other DMs bring their own campaign.
@@ -307,6 +308,11 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
     - **After editing `FEATURE_MODELS`, restart the dev server:** hot reload kept the old map.
   - **Fresh ideas** (`fresh.ts`, Opus, ~17 s, ~$0.03): on Prep, five ideas (theme / thread / character / connection), each tied to existing threads and one tap from the loom (`addThread`, logged and undoable). Develop at "The arc" may propose one new thread, marked as new.
   - 94/94 crafted checks pass; the fixture was reseeded after testing.
+- **Agency in plans** (25 Oct, caught by Jacob on his phone): Develop wrote "The party drags Darius into Tomas's smuggling cellar". Prose results (Develop, fight terrain and twists, fresh ideas) never went through the scaffold.
+  - `planSlips` (`src/core/plan-agency.ts`) flags a sentence where the party or a PC (by name, first name or alias) is the subject of an action, at the start of a sentence or a clause. It allows conditions ("If the party…", "When Dahlia…"), modals ("they can…"), perception and discovery ("learns", "finds"), and possessives.
+  - Develop retries once with the offending lines and an instruction to rewrite them as conditions, then drops any sentences still slipping. Fights and fresh ideas drop them directly. The Develop prompt now gives the right form ("If the party hides in Tomas's cellar…").
+  - 12 crafted cases (106/106 checks pass). A live rerun of the same kind of scene came back all conditional.
+  - **Phone access:** `npm run dev:lan`, then http://<the Mac's LAN address>:3000.
 
 ## Entity model build (docs/entity-model.md)
 

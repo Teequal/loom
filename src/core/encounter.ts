@@ -7,6 +7,7 @@ import { BUDGETS, distancesFrom } from "./graph";
 import { sessionSoFar } from "./live";
 import { callLlm } from "./llm";
 import { findMentions, loadThreadContexts } from "./retrieval";
+import { withoutSlips } from "./plan-agency";
 import { buildScene } from "./scene";
 
 // Setting up a fight from a choice at the table: who the party faces (drawn from who's in play),
@@ -109,8 +110,8 @@ ${text}`;
     why: res.data.why,
     band: recommended,
     foes: fitted.map((f) => ({ ...foes.find((x) => x.name === f.name)!, count: f.count })),
-    terrain: res.data.terrain,
-    twist: res.data.twist,
+    terrain: withoutSlips(res.data.terrain, pcs),
+    twist: withoutSlips(res.data.twist, pcs),
   };
   await saveEncounter(entryId, encounter);
   return { encounter, rating: rate(encounter.foes, levels, edition), llm: { model: res.model, seconds: res.latencyMs / 1000, costUsd: res.costUsd } };
