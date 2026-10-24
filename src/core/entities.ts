@@ -1,4 +1,4 @@
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import {
   ENTITY_STATUSES,
@@ -10,7 +10,7 @@ import {
   TraitsSchema,
 } from "./entity-fields";
 import { logChanges } from "./history";
-import { RELATION_LAWS } from "./rules";
+import { OPPOSITE_TIES, RELATION_LAWS } from "./rules";
 
 // Writes to entities, relationships and the campaign, applying the provenance rule:
 // the DM can always write; extraction writes only where the DM hasn't, and otherwise
@@ -232,6 +232,28 @@ export async function setRelation(campaignId: number, input: RelationInput, opts
       const subject = `${nameOf(r.fromEntityId)} ${verb(input.type)} ${nameOf(r.toEntityId)}`;
       await logChanges([{ campaignId, sessionId: opts.sessionId, subject, entityId: r.fromEntityId, kind: "relation-removed", field: input.type, before: { from: r.fromEntityId, to: r.toEntityId, type: r.type, note: r.note, strength: r.strength, secret: r.secret, source: r.source }, after: null, source: opts.source, batch: opts.batch }]);
       notes.push(`replaces: ${subject}`);
+    }
+  }
+
+  // A tie and its opposite can't both hold: enemies who become allies stop being enemies. Two-way
+  // ties are matched in either direction; feelings only in the same direction.
+  const opposite = OPPOSITE_TIES[input.type] ?? [];
+  if (opposite.length) {
+    const pair = or(
+      and(eq(schema.entityRelations.fromEntityId, from.id), eq(schema.entityRelations.toEntityId, to.id)),
+      and(eq(schema.entityRelations.fromEntityId, to.id), eq(schema.entityRelations.toEntityId, from.id)),
+    );
+    const gone = (await related(and(inArray(schema.entityRelations.type, opposite as RelationType[]), pair))).filter((r) => r.fromEntityId === from.id || RELATION_LAWS[r.type]?.symmetric);
+    if (gone.length && opts.source === "extracted" && gone.some((r) => r.source === "dm")) {
+      const r = gone.find((x) => x.source === "dm")!;
+      return { written: [], proposed: [{ field: `${from.name} ${verb(input.type)} ${to.name}`, current: `${r.type} (your entry)`, proposed: input.type }] };
+    }
+    const nameOf = (id: number) => all.find((e) => e.id === id)?.name ?? `#${id}`;
+    for (const r of gone) {
+      await db.delete(schema.entityRelations).where(eq(schema.entityRelations.id, r.id));
+      const subject = `${nameOf(r.fromEntityId)} ${verb(r.type)} ${nameOf(r.toEntityId)}`;
+      await logChanges([{ campaignId, sessionId: opts.sessionId, subject, entityId: r.fromEntityId, kind: "relation-removed", field: r.type, before: { from: r.fromEntityId, to: r.toEntityId, type: r.type, note: r.note, strength: r.strength, secret: r.secret, source: r.source }, after: { becameType: input.type }, source: opts.source, batch: opts.batch }]);
+      if (r.fromEntityId === from.id) notes.push(`no longer: ${subject}`);
     }
   }
 

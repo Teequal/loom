@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Choice, Field, Steps, Switch, Tune } from "./controls";
 import { Icon } from "./icons";
+import { type Encounter, FightPanel } from "./fight";
+import { ResultPrompt } from "./results";
 import { Linked, LoomProvider, RefChips } from "./loom-ui";
 import { Header, Note, post, store, useCampaigns, useElapsed } from "./shell";
 
@@ -18,6 +20,8 @@ interface Card {
   why: string;
   threads: { id: number; title: string }[];
   callback: { id: number; title: string } | null;
+  needs: "roll" | "fight" | null;
+  pillar: string | null;
 }
 interface Done {
   entryId: number;
@@ -38,19 +42,23 @@ interface Plan {
   intro: string;
   setups: { title: string; text: string; threads: { id: number; title: string }[] }[];
   directions: { title: string; text: string; threads: { id: number; title: string }[] }[];
+  newThread?: { title: string; summary: string } | null;
   llm: { model: string; seconds: number; costUsd: number };
 }
 interface Entry {
   id: number;
   parentId: number | null;
   moment: string;
-  choiceKind: "option" | "own" | "branch" | null;
+  choiceKind: "option" | "own" | "branch" | "result" | null;
   choiceLabel: string;
   choice: string;
   status: "asked" | "extracting" | "done" | "failed";
   summary: string[];
   questions: Question[];
   developments: Plan[];
+  awaiting: "roll" | "fight" | null;
+  resultState: "pending" | "given" | "skipped" | null;
+  encounter: unknown;
   at: string;
 }
 type Status = "idle" | "running" | "done" | "error";
@@ -89,6 +97,10 @@ interface Live {
   tone: number;
   focusBox: (placeholder?: string) => void;
 }
+
+// "Can she…?", "Does that provoke…?", "How does … work": likely a rules question, not a moment.
+const RULES_QUESTION =
+  /^(?:can|could|does|do|is|are|how (?:does|do|much|many|far|long)|what (?:happens|does|is the rule)|when (?:does|do)|if (?:a|an|she|he|they)\b)[^]*\?$|\b(?:provoke|opportunity attack|concentration|advantage|disadvantage|saving throw|bonus action|reaction|cover|grapple|RAW|rules? (?:for|on|say))\b[^]*\?$/i;
 
 // Moments to try in the sample campaign, so a first look shows Loom working straight away.
 const SAMPLE_MOMENTS = [
@@ -270,7 +282,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const current = done ? entries.find((e) => e.id === done.entryId) : undefined;
 
   // Uses an option (or your own) for the moment just asked. Changing your mind undoes the old pick.
-  async function use(choice: { kind: "option" | "own"; label: string; text: string }) {
+  async function use(choice: { kind: "option" | "own"; label: string; text: string; awaiting?: "roll" | "fight" | null }) {
     if (!current) return null;
     setError("");
     try {
@@ -290,6 +302,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
 
   const pending = status === "running" ? Math.max(0, 3 - cards.length) : 0;
   const questions = entries.flatMap((e) => e.questions.map((q) => ({ ...q, entry: e })));
+  const waiting = entries.filter((e) => e.awaiting).reverse();
 
   return (
     <>
@@ -307,6 +320,20 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           questions sit right above it until they're answered. */}
       <div className="sticky top-0 z-20 -mx-4 bg-background/95 px-4 pb-2 pt-2 backdrop-blur">
         {questions.length > 0 && <QuestionTray questions={questions} reload={reload} campaignId={campaignId} autoApprove={autoApprove} setAutoApprove={setAutoApprove} />}
+        {/* Then any roll or fight still waiting for how it turned out (newest first). */}
+        {!questions.length && waiting.length > 0 && (
+          <div className="mb-2">
+            <ResultPrompt
+              key={waiting[0].id}
+              entryId={waiting[0].id}
+              kind={waiting[0].awaiting!}
+              label={waiting[0].choiceLabel ? `${waiting[0].choiceLabel}: ${waiting[0].choice}` : waiting[0].choice}
+              count={waiting.length > 1 ? `1 of ${waiting.length}` : undefined}
+              onDone={reload}
+              folded={waiting[0].id === current?.id || waiting[0].parentId === current?.id}
+            />
+          </div>
+        )}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -386,6 +413,19 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
         </form>
       </div>
 
+      {/* Reads like a rules question? Offer the rules panel; never reroute on its own. */}
+      {RULES_QUESTION.test(moment.trim()) && (
+        <button
+          type="button"
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent("loom:rules", { detail: moment.trim() }));
+            setMoment("");
+          }}
+          className="btn-secondary rise mt-1 text-[13px]"
+        >
+          Ask as a rules question
+        </button>
+      )}
       {!asked && empty && <Welcome name={name} trySample={trySample} />}
       {!asked && sample && !entries.length && (
         <div className="rise mt-5">
@@ -428,11 +468,11 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                   n={i + 1}
                   state={state}
                   canUse={!!current}
-                  onUse={() => use({ kind: "option", label: card.label, text: card.text })}
+                  onUse={() => use({ kind: "option", label: card.label, text: card.text, awaiting: card.needs })}
                   live={live}
                   moment={asked}
                   // Developing a card you haven't used yet uses it first, so what grows from it has a parent.
-                  parent={async () => (state === "used" ? current!.id : await use({ kind: "option", label: card.label, text: card.text }))}
+                  parent={async () => (state === "used" ? current!.id : await use({ kind: "option", label: card.label, text: card.text, awaiting: card.needs }))}
                   saved={state === "used" ? current?.developments : undefined}
                 />
               );
@@ -450,6 +490,19 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
 
           {status === "done" && current && <OwnChoice entry={current} onSave={(text) => use({ kind: "own", label: "", text })} />}
           {current?.choiceKind && <LoomStatus entry={current} />}
+          {/* A fight gets its setup up front; anything else can still become one, quietly. */}
+          {current?.choiceKind && (
+            <div className="mt-3">
+              <FightPanel
+                key={current.id}
+                entryId={current.id}
+                campaignId={campaignId}
+                initial={(current.encounter as Encounter) ?? null}
+                onChange={reload}
+                quiet={current.awaiting !== "fight" && !current.encounter}
+              />
+            </div>
+          )}
           {current && <Branches parent={current} live={live} />}
 
           {/* Arrives with the last option, so it goes below the cards rather than shifting them. */}
@@ -671,8 +724,8 @@ function Timeline({ session, live, open, setOpen, glowing }: { session: number; 
                   e.choiceKind ? "bg-thread-soft text-thread" : "border border-line text-muted/70"
                 }`}
               >
-                {e.status === "extracting" ? <span className="h-2 w-2 animate-ping rounded-full bg-thread" /> : e.status === "failed" ? "!" : <Icon name={e.choiceKind === "branch" ? "branch" : e.choiceKind === "own" ? "pen" : e.choiceKind ? "check" : "dot"} size={12} />}
-                {e.questions.length > 0 && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-danger" />}
+                {e.status === "extracting" ? <span className="h-2 w-2 animate-ping rounded-full bg-thread" /> : e.status === "failed" ? "!" : <Icon name={e.choiceKind === "result" ? "diamond" : e.choiceKind === "branch" ? "branch" : e.choiceKind === "own" ? "pen" : e.choiceKind ? "check" : "dot"} size={12} />}
+                {(e.questions.length > 0 || e.awaiting) && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-danger" />}
               </button>
             </li>
           ))}
@@ -777,6 +830,11 @@ function EntryDetail({ entry, live, onClose, onOpen }: { entry: Entry; live: Liv
             <Linked text={entry.choice} />
           </p>
           <LoomStatus entry={entry} />
+          {(entry.awaiting === "fight" || !!entry.encounter) && (
+            <div className="mt-2">
+              <FightPanel key={entry.id} entryId={entry.id} campaignId={live.campaignId} initial={(entry.encounter as Encounter) ?? null} onChange={live.reload} />
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
             <DevelopToggle live={live} base={{ moment: entry.moment, label: entry.choiceLabel, text: entry.choice, threadIds: [] }} parent={async () => entry.id} saved={entry.developments} />
             <button type="button" onClick={takeBack} disabled={busy} className="btn-tertiary">
@@ -1050,10 +1108,40 @@ function DevelopToggle({
           <PlanItem live={live} parent={parent} depth={depth} from={base} item={{ title: "Opening", text: plan.intro, threads: [] }} quote />
           <PlanList title="Set up" items={plan.setups} live={live} parent={parent} depth={depth} from={base} />
           <PlanList title="Where it could lead" items={plan.directions} live={live} parent={parent} depth={depth} from={base} />
+          {plan.newThread && <NewThread campaignId={live.campaignId} idea={plan.newThread} linkTo={base.threadIds} />}
           <p className="text-xs text-muted">
             {plan.reach} · {plan.llm.model.replace(/^claude-/, "")} · {plan.llm.seconds.toFixed(0)} s · ${plan.llm.costUsd.toFixed(3)}
           </p>
         </div>
+      )}
+    </div>
+  );
+}
+
+// At the arc, Develop may open one genuinely new thread, marked as new and one tap from the loom.
+function NewThread({ campaignId, idea, linkTo }: { campaignId: number; idea: { title: string; summary: string }; linkTo: number[] }) {
+  const [added, setAdded] = useState(false);
+  return (
+    <div className="rounded-lg border border-dashed border-thread/50 p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-thread">A new thread</p>
+      <p className="story mt-0.5">
+        <span className="font-medium">{idea.title}.</span> {idea.summary}
+      </p>
+      {added ? (
+        <span className="mt-1.5 inline-block text-xs text-thread">
+          <Icon name="check" size={12} /> In the loom
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={async () => {
+            await post("/api/fresh/add", { campaignId, title: idea.title, kind: "hook", summary: idea.summary, entities: [], linkTo });
+            setAdded(true);
+          }}
+          className="btn-secondary mt-1.5 text-xs"
+        >
+          <Icon name="plus" size={12} /> Add to the loom
+        </button>
       )}
     </div>
   );

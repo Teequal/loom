@@ -73,6 +73,7 @@ export function LoomProvider({ campaignId, children }: { campaignId: number; chi
   );
   // Jump anywhere: ⌘K / Ctrl+K, or the search button in the header (which sends "loom:search").
   const [searching, setSearching] = useState(false);
+  const [rules, setRules] = useState<{ question: string } | null>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -81,17 +82,30 @@ export function LoomProvider({ campaignId, children }: { campaignId: number; chi
       }
     };
     const onAsk = () => setSearching(true);
+    // Rules: "?" outside a text box, the header button, or the table's chip (with the question).
+    const onRules = (e: Event) => setRules({ question: (e as CustomEvent<string>).detail ?? "" });
+    const onQ = (e: KeyboardEvent) => {
+      if (e.key === "?" && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+        e.preventDefault();
+        setRules({ question: "" });
+      }
+    };
     window.addEventListener("keydown", onKey);
+    window.addEventListener("keydown", onQ);
     window.addEventListener("loom:search", onAsk);
+    window.addEventListener("loom:rules", onRules);
     return () => {
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keydown", onQ);
       window.removeEventListener("loom:search", onAsk);
+      window.removeEventListener("loom:rules", onRules);
     };
   }, []);
   return (
     <Ctx.Provider value={value}>
       {children}
       {trail.length > 0 && <Inspector trail={trail} setTrail={setTrail} />}
+      {rules && <RulesPanel key={rules.question} campaignId={campaignId} initial={rules.question} onClose={() => setRules(null)} />}
       {searching && (
         <Palette
           index={index}
@@ -103,6 +117,111 @@ export function LoomProvider({ campaignId, children }: { campaignId: number; chi
         />
       )}
     </Ctx.Provider>
+  );
+}
+
+// ---------- rules questions ----------
+
+interface RulesAnswer {
+  answer: string;
+  rule: string;
+  here: string;
+  srd: boolean;
+  check: string;
+  llm: { model: string; seconds: number; costUsd: number };
+}
+
+// Slides in over the page and knows the session: the scene, conditions, toggles, house rules and
+// the last few moments. Keeps the last few answers so a follow-up reads in context.
+function RulesPanel({ campaignId, initial, onClose }: { campaignId: number; initial: string; onClose: () => void }) {
+  const [q, setQ] = useState(initial);
+  const [log, setLog] = useState<{ q: string; a: RulesAnswer | null; error?: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const ask = useCallback(
+    async (question: string) => {
+      if (!question.trim()) return;
+      setBusy(true);
+      setLog((l) => [...l, { q: question, a: null }]);
+      setQ("");
+      try {
+        const a = await post<RulesAnswer>("/api/rules", { campaignId, question });
+        setLog((l) => l.map((x, i) => (i === l.length - 1 ? { ...x, a } : x)));
+      } catch (e) {
+        setLog((l) => l.map((x, i) => (i === l.length - 1 ? { ...x, error: e instanceof Error ? e.message : "Couldn't answer that." } : x)));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [campaignId],
+  );
+  const asked = useRef(false);
+  useEffect(() => {
+    if (initial && !asked.current) {
+      asked.current = true;
+      void ask(initial);
+    }
+  }, [initial, ask]);
+  useEffect(() => {
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [onClose]);
+  return createPortal(
+    <aside aria-label="Rules" className="rise fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-2xl border border-line bg-surface shadow-2xl sm:inset-y-3 sm:left-auto sm:right-3 sm:max-h-none sm:w-[420px] sm:rounded-2xl">
+      <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
+        <p className="text-sm font-medium">Rules</p>
+        <button type="button" onClick={onClose} className="btn-tertiary" aria-label="Close rules">
+          <Icon name="close" />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3 text-sm">
+        {!log.length && <p className="text-muted">Ask anything about the rules. Loom answers for this table: who&apos;s in the scene, their state, your rule settings and house rules.</p>}
+        {log.map((x, i) => (
+          <div key={i}>
+            <p className="font-medium">{x.q}</p>
+            {!x.a && !x.error && <p className="mt-1 animate-pulse text-xs text-muted">Looking it up…</p>}
+            {x.error && <p className="mt-1 text-xs text-danger">{x.error}</p>}
+            {x.a && (
+              <div className="mt-1.5 space-y-1.5">
+                <p className="story leading-relaxed">
+                  <Linked text={x.a.answer} />
+                </p>
+                {x.a.here && (
+                  <p className="text-[13px]">
+                    <span className="text-muted">At your table: </span>
+                    <Linked text={x.a.here} />
+                  </p>
+                )}
+                <p className="text-xs text-muted">
+                  {x.a.rule}
+                  {!x.a.srd && " · not in the free SRD"}
+                </p>
+                {x.a.check && <p className="rounded-lg bg-background px-2.5 py-1.5 text-xs text-muted">Worth checking: {x.a.check}</p>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <form
+        className="flex gap-2 border-t border-line p-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void ask(q);
+        }}
+      >
+        <input
+          autoFocus
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Can a restrained character cast a spell?"
+          className="min-w-0 flex-1 rounded-lg border border-line bg-background px-3 py-1.5 text-sm outline-none focus:border-thread/60"
+        />
+        <button disabled={busy || !q.trim()} className="btn-primary text-sm">
+          Ask
+        </button>
+      </form>
+    </aside>,
+    document.body,
   );
 }
 
@@ -426,6 +545,12 @@ function Section({ title, items, render, initial = 4 }: { title: string; items: 
   );
 }
 
+// "this session", "last session", "3 sessions ago": time at the scale people remember it.
+const ago = (session: number, latest: number) => {
+  const d = latest - session;
+  return d <= 0 ? "this session" : d === 1 ? "last session" : `${d} sessions ago`;
+};
+
 const Lock = () => (
   <span title="GM only" className="ml-1 text-[11px]">
     🔒
@@ -475,6 +600,24 @@ function EntityView({ n }: { n: Node }) {
             )}
             {t.note && <span className="text-muted">: {t.note}</span>}
             {t.secret && <Lock />}
+            {/* The tie's story, condensed: what it was, and how long ago it changed. */}
+            {(t.was.length > 0 || t.since) && (
+              <span className="block text-xs text-muted">
+                {t.was.map((w: any) => `was ${w.type}${w.until != null ? ` until ${ago(w.until, n.latestSession)}` : ""}`).join(" · ")}
+                {!t.was.length && t.since != null ? `since session ${t.since}` : ""}
+              </span>
+            )}
+          </li>
+        )}
+      />
+      <Section
+        title="Former ties"
+        items={n.formerTies}
+        initial={3}
+        render={(t: any, i) => (
+          <li key={i} className="text-[13px] text-muted">
+            was {t.type} <RefLink r={t.other} />
+            {t.until != null ? `, until ${ago(t.until, n.latestSession)}` : ""}
           </li>
         )}
       />

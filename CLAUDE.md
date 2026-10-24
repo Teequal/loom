@@ -290,6 +290,24 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - **Header:** short page names (Table, Prep, Campaign) with full names as tooltips, so the header fits on one line everywhere.
   - 94/94 checks pass. The fixture was reseeded after testing, and a temporary "Welcome Test" campaign was deleted. A test "vex" typed into Duradan's box by mistake was removed from its log (it was only asked, nothing was used or extracted).
 
+- [x] **Step 14: Game tools for newer DMs** (25 Oct; plan in [docs/plan-2026-10-25-game-tools.md](docs/plan-2026-10-25-game-tools.md); migration `0009`).
+  - **Relationship history:** opposite ties replace each other (`OPPOSITE_TIES` in `rules.ts`: ally/enemy, loves/hates, trusts/distrusts…). The old tie is logged as removed, and extraction proposes rather than removing a DM-entered tie. The inspector shows each tie's story ("ally · was enemy until 3 sessions ago", or "since session 4") and any former ties. Tested: enmity, then reconciliation, left only "ally", and the grudge thread's closing came up as a question.
+  - **Results that follow through:**
+    - A used choice that sets up a fight or a roll waits for its result (`needsResult` in `live.ts`; fight wording beats a roll hand-off; `awaiting`/`resultState` on `live_entries`).
+    - The tray shows "How did it go?" with quick outcomes (Won / Fled / Lost / Talked it out, or Succeeded / Failed / Partly) and a detail line. It folds to one line while the fight is still running. "skip" is a small text link.
+    - A result is a child entry (`choiceKind: "result"`), extracted like any choice. Tested: it moved the thread, added Captain Mora and made Bram bloodied.
+    - Wrap-up asks for pending results like questions, and notes how many were skipped.
+  - **Fights** (`encounter.ts`, `encounter-math.ts`, `src/app/fight.tsx`; Sonnet):
+    - Enemies come from who's in play, with compact stats and a trick, marked SRD when stock. There's a terrain line and a twist tied to a thread.
+    - The difficulty dial (2014 Easy → Deadly, 2024 Low → High from the edition toggle) rings Loom's suggestion with a reason. Moving it rescales counts in code, and the −/+ counts recompute live.
+    - XP is exact: DMG thresholds per level, CR → XP, and the 2014 group multiplier with party-size shift, checked against the DMG examples. The model is given the party's XP budget, so its picks land in the suggested step.
+    - PC levels are asked once, inline. "Set up a fight" is a quiet link on any used choice that wasn't detected as one.
+  - **Rules panel** (`rules-qa.ts`, Sonnet, ~5 s, ~$0.008): "Rules" in the header, `?`, or the "Ask as a rules question" chip when table text reads like one (it never reroutes). Answers come with the rule named, "at your table" (using the scene, conditions, toggles, house rules and recent moments), an SRD flag, and "worth checking".
+    - Haiku got class spell lists wrong in testing (Revivify), so this stays on Sonnet.
+    - **After editing `FEATURE_MODELS`, restart the dev server:** hot reload kept the old map.
+  - **Fresh ideas** (`fresh.ts`, Opus, ~17 s, ~$0.03): on Prep, five ideas (theme / thread / character / connection), each tied to existing threads and one tap from the loom (`addThread`, logged and undoable). Develop at "The arc" may propose one new thread, marked as new.
+  - 94/94 crafted checks pass; the fixture was reseeded after testing.
+
 ## Entity model build (docs/entity-model.md)
 
 - [x] Step 1: Schema with provenance (migration `drizzle/0001`):

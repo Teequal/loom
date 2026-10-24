@@ -20,6 +20,9 @@ function card(o: ImprovOption, titleOf: Map<number, string>) {
     why: o.why,
     threads: [o.thread_id, ...o.also_ties_to].filter((id) => titleOf.has(id)).map((id) => ({ id, title: titleOf.get(id)! })),
     callback: o.callback,
+    // A roll or a fight waits for its result once used.
+    needs: o.scaffold.pillar === "combat" ? "fight" : o.scaffold.hand_off.kind === "roll" ? "roll" : null,
+    pillar: o.scaffold.pillar ?? null,
   };
 }
 

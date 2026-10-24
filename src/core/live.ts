@@ -70,12 +70,15 @@ export async function draftNotes(campaignId: number) {
   const lines: string[] = [];
   const walk = (e: Entry, depth: number) => {
     const pad = "  ".repeat(depth);
+    const skipped = e.resultState === "skipped" ? ` (result not recorded)` : "";
     lines.push(
-      e.choiceKind === "branch"
-        ? `${pad}- Then: ${e.choice}`
-        : e.moment === NOTED
-          ? `${pad}- ${e.choice}`
-          : `${pad}- ${e.moment}\n${pad}  What happened: ${e.choice}`,
+      e.choiceKind === "result"
+        ? `${pad}- Result: ${e.choice}`
+        : e.choiceKind === "branch"
+          ? `${pad}- Then: ${e.choice}${skipped}`
+          : e.moment === NOTED
+            ? `${pad}- ${e.choice}${skipped}`
+            : `${pad}- ${e.moment}\n${pad}  What happened: ${e.choice}${skipped}`,
     );
     for (const c of children.get(e.id) ?? []) walk(c, depth + 1);
   };
@@ -99,6 +102,8 @@ export async function logBranch(parentId: number, choice: { label: string; text:
       choiceLabel: choice.label,
       choice: choice.text,
       status: "extracting",
+      awaiting: needsResult(choice.text),
+      resultState: needsResult(choice.text) ? "pending" : null,
     })
     .returning();
   return e;
@@ -127,13 +132,50 @@ function queued<T>(campaignId: number, job: () => Promise<T>): Promise<T> {
   return next;
 }
 
-export async function commitChoice(entryId: number, choice: { kind: "option" | "own"; label: string; text: string }) {
+// Choices that can't be finished without an outcome: a fight, or a roll someone has to make.
+const FIGHT = /\b(?:fight|fights|fighting|combat|ambush(?:es|ed)?|duel|brawl|battle|initiative|skirmish|attacks?|attacked|draws? (?:their |his |her )?(?:blades?|swords?|steel|weapons?)|charges? (?:at|into))\b/i;
+const ROLL = /\b(?:rolls?|roll for|check|saving throw|save against|DC ?\d+)\b/i;
+export function needsResult(text: string, hint?: "roll" | "fight" | null): "roll" | "fight" | null {
+  // A fight is a fight even when the option ends on an attack roll.
+  if (hint === "fight" || FIGHT.test(text)) return "fight";
+  return hint ?? (ROLL.test(text) ? "roll" : null);
+}
+
+export async function commitChoice(entryId: number, choice: { kind: "option" | "own"; label: string; text: string; awaiting?: "roll" | "fight" | null }) {
+  const awaiting = needsResult(choice.text, choice.awaiting);
   const [e] = await db
     .update(schema.liveEntries)
-    .set({ choiceKind: choice.kind, choiceLabel: choice.label, choice: choice.text, status: "extracting" })
+    .set({ choiceKind: choice.kind, choiceLabel: choice.label, choice: choice.text, status: "extracting", awaiting, resultState: awaiting ? "pending" : null })
     .where(eq(schema.liveEntries.id, entryId))
     .returning();
   return e;
+}
+
+// How a roll or fight turned out: it joins the tree under the choice it settles, and is extracted
+// like any other choice, so deaths, captures and losses reach the loom.
+export async function recordResult(entryId: number, outcome: string, detail: string) {
+  const [parent] = await db.select().from(schema.liveEntries).where(eq(schema.liveEntries.id, entryId));
+  if (!parent) throw new Error("That moment isn't in the log any more.");
+  await db.update(schema.liveEntries).set({ resultState: "given" }).where(eq(schema.liveEntries.id, entryId));
+  const [e] = await db
+    .insert(schema.liveEntries)
+    .values({
+      campaignId: parent.campaignId,
+      sessionNumber: parent.sessionNumber,
+      parentId: entryId,
+      moment: `How “${parent.choiceLabel || clip(parent.choice || parent.moment, 50)}” turned out`,
+      choiceKind: "result",
+      choiceLabel: outcome,
+      choice: `${outcome}${detail.trim() ? `. ${detail.trim()}` : "."}`,
+      status: "extracting",
+    })
+    .returning();
+  return e;
+}
+
+// The GM chose not to record a result: allowed, and remembered, so wrap-up can mention it.
+export async function skipResult(entryId: number) {
+  await db.update(schema.liveEntries).set({ resultState: "skipped" }).where(eq(schema.liveEntries.id, entryId));
 }
 
 // Extracts one choice into the loom. Called after the response, in the background.
@@ -203,7 +245,7 @@ export async function clearChoice(entryId: number) {
   const r = e.batch ? await queued(e.campaignId, () => undoBatch(e.campaignId, e.batch!, { force: true })) : null;
   const [next] = await db
     .update(schema.liveEntries)
-    .set({ choiceKind: null, choiceLabel: "", choice: "", status: "asked", batch: null, summary: [], questions: [] })
+    .set({ choiceKind: null, choiceLabel: "", choice: "", status: "asked", batch: null, summary: [], questions: [], awaiting: null, resultState: null, encounter: null })
     .where(eq(schema.liveEntries.id, entryId))
     .returning();
   return { entry: next, undone: r?.undone ?? 0 };

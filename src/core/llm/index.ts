@@ -27,6 +27,9 @@ const FEATURE_MODELS: Record<string, string> = {
   improv: "claude-haiku-5-5", // blind run 3: ties Opus at ~1/40th the cost; Sonnet and Opus are the higher tiers
   live: "claude-sonnet-5-5", // extracting each choice at the table: auto-applied, so better than Haiku; runs in the background
   develop: "claude-opus-5-5", // turning a chosen option into a scene plan: not live, quality first
+  encounter: "claude-sonnet-5-5", // fight setup: stat blocks need a careful model, but it's at the table
+  rules: "claude-sonnet-5-5", // rules questions: accuracy matters, the answer is short
+  fresh: "claude-opus-5-5", // new material between sessions: invention needs the strongest model
   suggest: "claude-opus-5-5", // between-session prep: quality over speed
   enrich: "claude-opus-5-5", // one-off backfill of entity details from stored recaps
   flavor: "claude-opus-5-5", // read-aloud polish of the one option the GM picked

@@ -11,6 +11,7 @@ import { numberItems, type ProposalFile, type ProposalItem } from "./recap";
 //           hands, secrets, closing a thread, or evidence that isn't in the notes.
 
 export type Tier = "auto" | "quick" | "must";
+const SAME_PLACE = "\u0000same place";
 export type EvidenceCheck = "exact" | "close" | "missing" | "not-found";
 
 export interface Reviewed {
@@ -220,7 +221,9 @@ export async function reviewProposal(file: ProposalFile): Promise<Reviewed[]> {
         evidence = file.proposal.party_evidence ?? "";
         group = "Party";
         const current = nameOf(campaign?.partyLocationId);
-        summary = current ? `party moves: ${current} → ${i.item}` : `party is at ${i.item}`;
+        // Staying put isn't a change worth showing (it's dropped below).
+        if (current && current.trim().toLowerCase() === i.item.trim().toLowerCase()) summary = SAME_PLACE;
+        else summary = current ? `party moves: ${current} → ${i.item}` : `party is at ${i.item}`;
         tier = current ? "quick" : "auto";
         if (campaign?.fieldMeta.partyLocationId?.source === "dm" && current && current !== i.item) must("changes where you said the party is");
         break;
@@ -239,5 +242,5 @@ export async function reviewProposal(file: ProposalFile): Promise<Reviewed[]> {
     if (check === "not-found") must("its quote isn't in your notes");
     if (check === "missing" && tier === "auto") tier = "quick";
     return { item: i, tier, group, summary, evidence, check, reasons: [...new Set(reasons)] };
-  });
+  }).filter((r) => r.summary !== SAME_PLACE);
 }

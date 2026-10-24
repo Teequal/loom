@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import type { EntityTraits } from "./entity-fields";
 import { historyOf } from "./history";
@@ -72,11 +72,24 @@ async function entityNode(campaignId: number, id: number) {
   const L = await lookups(campaignId);
   const e = L.ent.get(id);
   if (!e) throw new Error("That isn't in the loom any more.");
-  const [relations, links, moments] = await Promise.all([
+  const [relations, links, moments, tieLog] = await Promise.all([
     db.select().from(schema.entityRelations).where(eq(schema.entityRelations.campaignId, campaignId)),
     db.select().from(schema.threadEntities).where(eq(schema.threadEntities.entityId, id)),
     db.select().from(schema.keyMoments).where(eq(schema.keyMoments.campaignId, campaignId)),
+    db
+      .select()
+      .from(schema.stateChanges)
+      .where(and(eq(schema.stateChanges.campaignId, campaignId), inArray(schema.stateChanges.kind, ["relation-added", "relation-removed"]), isNull(schema.stateChanges.undoneAt)))
+      .orderBy(desc(schema.stateChanges.id)),
   ]);
+  // How each tie came to be: what it was before, and since when (newest first, condensed).
+  type Snap = { from?: number; to?: number; type?: string };
+  const pairOf = (c: (typeof tieLog)[number]) => ((c.kind === "relation-removed" ? c.before : c.after) ?? {}) as Snap;
+  const withThis = tieLog
+    .map((c) => ({ c, s: pairOf(c) }))
+    .filter(({ s }) => s.from != null && s.to != null && (s.from === id || s.to === id))
+    .map(({ c, s }) => ({ kind: c.kind, type: s.type ?? c.field ?? "", other: s.from === id ? s.to! : s.from!, session: c.sessionId ? (L.sessionNo.get(c.sessionId) ?? null) : null }));
+  const latestSession = Math.max(0, ...L.sessions.map((x) => x.number));
   const traits = e.traits as EntityTraits;
   const secret = (f: string) => !!e.fieldMeta[f]?.secret;
   // Where it is, as a chain of places (the Ritual Site › the Time Pocket › the Woods).
@@ -92,8 +105,13 @@ async function entityNode(campaignId: number, id: number) {
     .filter((r) => r.fromEntityId === id || r.toEntityId === id)
     .map((r) => {
       const out = r.fromEntityId === id;
-      const other = L.entRef(out ? r.toEntityId : r.fromEntityId);
-      return other && { type: r.type.replace(/_/g, " "), out, other, note: r.note, strength: r.strength, secret: r.secret };
+      const otherId = out ? r.toEntityId : r.fromEntityId;
+      const other = L.entRef(otherId);
+      const since = withThis.find((h) => h.other === otherId && h.kind === "relation-added" && h.type === r.type)?.session ?? null;
+      const was = [...new Map(withThis.filter((h) => h.other === otherId && h.kind === "relation-removed" && h.type !== r.type).map((h) => [h.type, h])).values()]
+        .slice(0, 2)
+        .map((h) => ({ type: h.type.replace(/_/g, " "), until: h.session }));
+      return other && { type: r.type.replace(/_/g, " "), out, other, note: r.note, strength: r.strength, secret: r.secret, since, was };
     })
     .filter((r): r is NonNullable<typeof r> => {
       if (!r) return false;
@@ -120,6 +138,15 @@ async function entityNode(campaignId: number, id: number) {
       .filter(([, v]) => (Array.isArray(v) ? v.length : v))
       .map(([k, v]) => ({ key: k.replace(/_/g, " "), value: Array.isArray(v) ? v.join("; ") : String(v), secret: secret(`traits.${k}`) })),
     ties,
+    // Ties that ended with nothing in their place ("once allied with Zara").
+    formerTies: [
+      ...new Map(
+        withThis
+          .filter((h) => h.kind === "relation-removed" && !ties.some((t) => t.other.id === h.other))
+          .map((h) => [`${h.other}:${h.type}`, { type: h.type.replace(/_/g, " "), other: L.entRef(h.other), until: h.session }]),
+      ).values(),
+    ].filter((t) => t.other),
+    latestSession,
     threads: present(links.map((l) => L.thrRef(l.threadId))).sort((a, b) => Number(a.status === "resolved") - Number(b.status === "resolved")),
     moments: moments.filter((m) => m.entityIds.includes(id) && m.status !== "dismissed").map((m) => ({ kind: "moment" as const, id: m.id, name: m.title, sub: m.status === "key" ? "Key moment" : "Suggested moment" })),
     history: (await historyOf(campaignId, e)).slice(-30),

@@ -18,6 +18,9 @@ export function entryView(e: Entry) {
     summary: e.summary,
     questions: e.questions.filter((q) => !q.answer).map((q) => ({ n: q.n, group: q.group, summary: q.summary, reasons: q.reasons, evidence: q.evidence })),
     developments: e.developments,
+    awaiting: e.resultState === "pending" ? e.awaiting : null,
+    resultState: e.resultState,
+    encounter: e.encounter,
     at: e.createdAt,
   };
 }

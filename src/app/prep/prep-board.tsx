@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Linked, LoomProvider, RefChips } from "../loom-ui";
+import { Linked, LoomProvider, RefChips, useLoom } from "../loom-ui";
 import { Icon } from "../icons";
+import { ResultPrompt } from "../results";
 import { batchLabel, Header, Note, post, useCampaigns, useElapsed } from "../shell";
 
 // Between sessions: paste the notes, confirm what changed (by risk, with undo), then get prep ideas.
@@ -37,6 +38,8 @@ interface Live {
   openQuestions: number;
   draft: string;
   questions: { entryId: number; from: string; n: number; group: string; summary: string; reasons: string[]; evidence: string }[];
+  results: { entryId: number; kind: "roll" | "fight"; label: string }[];
+  skippedResults: number;
 }
 interface Batch {
   batch: string;
@@ -201,6 +204,18 @@ function Board({ campaignId }: { campaignId: number }) {
             </label>
           </div>
           {!!live?.questions.length && <OpenQuestions questions={live.questions} onAnswered={() => refresh(campaignId)} />}
+          {!!live?.results.length && (
+            <section className="mb-3 space-y-2">
+              {live.results.map((r, i) => (
+                <ResultPrompt key={r.entryId} entryId={r.entryId} kind={r.kind} label={r.label} count={live.results.length > 1 ? `${i + 1} of ${live.results.length}` : undefined} onDone={() => refresh(campaignId)} />
+              ))}
+            </section>
+          )}
+          {!!live?.skippedResults && !live.results.length && (
+            <p className="mb-3 text-[13px] text-muted">
+              {live.skippedResults} result{live.skippedResults === 1 ? " was" : "s were"} skipped at the table. If you know how {live.skippedResults === 1 ? "it" : "they"} turned out, add it to your notes below.
+            </p>
+          )}
           {!!live?.used && (
             <details className="mb-3 rounded-xl border border-line bg-surface p-4 text-sm">
               <summary className="cursor-pointer">
@@ -230,7 +245,7 @@ function Board({ campaignId }: { campaignId: number }) {
                 {busy === "reading" ? (
                   `Reading your notes… ${elapsed} s (usually under a minute)`
                 ) : live?.used ? (
-                  <button type="button" onClick={wrapAsIs} disabled={!!busy || !!live.openQuestions} className="underline-offset-2 hover:text-foreground hover:underline disabled:opacity-40 disabled:no-underline">
+                  <button type="button" onClick={wrapAsIs} disabled={!!busy || !!live.openQuestions || !!live.results.length} className="underline-offset-2 hover:text-foreground hover:underline disabled:opacity-40 disabled:no-underline">
                     Nothing to add: wrap up as it is
                   </button>
                 ) : (
@@ -239,7 +254,7 @@ function Board({ campaignId }: { campaignId: number }) {
               </span>
               <button
                 onClick={read}
-                disabled={notes.trim().length < 20 || !!busy || !!live?.openQuestions}
+                disabled={notes.trim().length < 20 || !!busy || !!live?.openQuestions || !!live?.results.length}
                 className="btn-primary shrink-0 text-sm"
               >
                 {busy === "reading" ? "Reading…" : live?.used ? "Read and wrap up" : "Read notes"}
@@ -389,6 +404,8 @@ function Board({ campaignId }: { campaignId: number }) {
         </section>
       )}
 
+      <FreshIdeas campaignId={campaignId} />
+
       <section className="mt-12">
         <div className="mb-3 flex items-baseline justify-between gap-3">
           <h2 className="text-[15px] font-semibold">Prep for next session</h2>
@@ -532,6 +549,88 @@ function IdeaList({ title, children }: { title: string; children: React.ReactNod
       <h3 className="mb-2 text-[13px] font-semibold uppercase tracking-wide text-muted">{title}</h3>
       <ul className="space-y-3">{children}</ul>
     </div>
+  );
+}
+
+interface Fresh {
+  ideas: { kind: string; title: string; pitch: string; ties: T[]; thread: { title: string; kind: string; summary: string; entities: string[] } }[];
+  llm: { model: string; seconds: number; costUsd: number };
+}
+
+// The one place Loom invents: new themes, threads, characters and connections, each tied to
+// something already in play, each one tap from becoming a thread.
+function FreshIdeas({ campaignId }: { campaignId: number }) {
+  const [fresh, setFresh] = useState<Fresh | null>(null);
+  const [added, setAdded] = useState<Set<number>>(new Set());
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const elapsed = useElapsed(busy);
+  const loom = useLoom();
+  return (
+    <section className="mt-12">
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <h2 className="text-[15px] font-semibold">Fresh ideas</h2>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            setError("");
+            try {
+              setFresh(await post<Fresh>("/api/fresh", { campaignId }));
+              setAdded(new Set());
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "Something went wrong.");
+            } finally {
+              setBusy(false);
+            }
+          }}
+          className="btn-secondary text-sm"
+        >
+          <Icon name="sparkle" /> {busy ? `Thinking… ${elapsed} s` : fresh ? "More ideas" : "Suggest something new"}
+        </button>
+      </div>
+      {!fresh && !busy && <p className="text-sm text-muted">New themes, threads, characters and hidden connections that fit where the story is heading. Add the ones you like to the loom.</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
+      {fresh && (
+        <ul className="rise space-y-3">
+          {fresh.ideas.map((idea, i) => (
+            <li key={i} className="rounded-xl border border-line bg-surface p-4 shadow-sm">
+              <div className="flex items-baseline justify-between gap-3">
+                <h4 className="text-[14px] font-semibold">
+                  {idea.title}
+                  <span className="ml-2 rounded-full border border-line px-2 py-0.5 text-[11px] font-normal text-muted">{idea.kind}</span>
+                </h4>
+                {added.has(i) ? (
+                  <span className="text-xs text-thread">
+                    <Icon name="check" size={12} /> In the loom
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await post("/api/fresh/add", { campaignId, ...idea.thread, linkTo: idea.ties.map((t) => t.id) });
+                      setAdded(new Set([...added, i]));
+                      loom?.reload();
+                    }}
+                    className="btn-secondary shrink-0 text-xs"
+                  >
+                    <Icon name="plus" size={12} /> Add to the loom
+                  </button>
+                )}
+              </div>
+              <p className="story mt-1 leading-relaxed">
+                <Linked text={idea.pitch} />
+              </p>
+              <RefChips refs={idea.ties.map((t) => ({ kind: "thread" as const, id: t.id, name: t.title }))} />
+            </li>
+          ))}
+          <li className="text-xs text-muted">
+            {fresh.llm.model.replace(/^claude-/, "")} · {fresh.llm.seconds.toFixed(0)} s · ${fresh.llm.costUsd.toFixed(3)}
+          </li>
+        </ul>
+      )}
+    </section>
   );
 }
 

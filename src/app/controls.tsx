@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 // a browser default that looks like it came from another app.
 
 // A step choice (tone, how far ahead): labelled dots on a thread, the current step named.
-export function Steps({ label, steps, value, onChange }: { label: string; steps: readonly string[]; value: number; onChange: (v: number) => void }) {
+export function Steps({ label, steps, value, onChange, marked }: { label: string; steps: readonly string[]; value: number; onChange: (v: number) => void; marked?: number }) {
   return (
     <div role="radiogroup" aria-label={label} className="flex items-center gap-3">
       <div className="relative flex items-center">
@@ -23,10 +23,15 @@ export function Steps({ label, steps, value, onChange }: { label: string; steps:
             className="relative grid h-6 w-6 place-items-center"
           >
             <span className={`block rounded-full transition-all ${value === i ? "h-2.5 w-2.5 bg-thread" : i < value ? "h-1.5 w-1.5 bg-thread/60" : "h-1.5 w-1.5 bg-muted/40"}`} />
+            {/* Loom's suggestion: a faint ring that stays put while you move the choice. */}
+            {marked === i && <span aria-hidden className="absolute inset-1 rounded-full border border-thread/60" />}
           </button>
         ))}
       </div>
-      <span className="text-[13px] text-foreground/80">{steps[value]}</span>
+      <span className="text-[13px] text-foreground/80">
+        {steps[value]}
+        {marked != null && marked === value && <span className="ml-1.5 text-xs text-muted">suggested</span>}
+      </span>
     </div>
   );
 }

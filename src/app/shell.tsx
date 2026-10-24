@@ -118,6 +118,14 @@ export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
       <div className="flex items-center gap-2">
         <button
           type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent("loom:rules", { detail: "" }))}
+          className="btn-tertiary rounded-md border border-line px-2 py-1 text-[13px]"
+          title="Rules questions (?)"
+        >
+          Rules
+        </button>
+        <button
+          type="button"
           onClick={() => window.dispatchEvent(new Event("loom:search"))}
           className="btn-tertiary rounded-md border border-line px-2 py-1"
           aria-label="Jump to anything"

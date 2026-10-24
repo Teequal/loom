@@ -23,6 +23,7 @@ const DevelopSchema = z.object({
   intro: z.string(),
   setups: z.array(z.object({ title: z.string(), text: z.string(), thread_ids: z.array(z.number()) })),
   directions: z.array(z.object({ title: z.string(), text: z.string(), thread_ids: z.array(z.number()) })),
+  new_thread: z.object({ title: z.string(), summary: z.string() }).nullable(),
 });
 
 const SYSTEM = `You are Loom, helping a game master plan ahead from a choice they just made at the table. Build only on what is already in the campaign: the threads, characters and what happened this session. Your job is payoffs and connections, not new plots.
@@ -38,7 +39,8 @@ Rules:
 - Use only the facts listed. You may propose hidden connections, but never contradict what the threads say. GM secrets shape what happens but are never stated outright.
 - The GM controls the world and NPCs; the players control their characters. Set up situations; never decide what player characters choose, say or feel.
 - Dead characters stay dead; someone elsewhere has to travel or send word.
-- Refer to threads by name in the text, never by number.`;
+- Refer to threads by name in the text, never by number.
+- new_thread: only at REACH "the arc", and only if it earns its place: one genuinely new thread this could open (title, one-line summary). Otherwise null.`;
 
 export async function develop(
   campaignId: number,
@@ -90,6 +92,7 @@ TONE: ${tone}.`;
     intro: res.data.intro,
     setups: res.data.setups.map((s) => ({ title: s.title, text: s.text, threads: titles(s.thread_ids) })),
     directions: res.data.directions.map((d) => ({ title: d.title, text: d.text, threads: titles(d.thread_ids) })),
+    newThread: reach === 3 ? res.data.new_thread : null,
     llm: { model: res.model, seconds: res.latencyMs / 1000, costUsd: res.costUsd },
   };
 }

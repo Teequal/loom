@@ -265,7 +265,8 @@ export const liveEntries = sqliteTable("live_entries", {
   parentId: integer("parent_id"), // the choice this one was developed from: the session as a branching tree
   moment: text("moment").notNull(),
   options: text("options", { mode: "json" }).$type<{ label: string; text: string; threadIds: number[] }[]>().notNull().default([]),
-  choiceKind: text("choice_kind", { enum: ["option", "own", "branch"] }), // null: asked, nothing used; branch: picked from a Develop result
+  // null: asked, nothing used; branch: picked from a Develop result; result: how a roll or fight turned out
+  choiceKind: text("choice_kind", { enum: ["option", "own", "branch", "result"] }),
   choiceLabel: text("choice_label").notNull().default(""),
   choice: text("choice").notNull().default(""),
   status: text("status", { enum: LIVE_STATUS }).notNull().default("asked"),
@@ -276,6 +277,10 @@ export const liveEntries = sqliteTable("live_entries", {
     .notNull()
     .default([]),
   wrapped: integer("wrapped", { mode: "boolean" }).notNull().default(false), // the session it belongs to was wrapped up
+  // A roll or fight waits for its result: "roll" | "fight" while pending; resultState says what happened to that wait.
+  awaiting: text("awaiting", { enum: ["roll", "fight"] }),
+  resultState: text("result_state", { enum: ["pending", "given", "skipped"] }),
+  encounter: text("encounter", { mode: "json" }).$type<unknown>(), // the fight as set up, when there is one
   // Develop results for this choice, kept so the branches survive a reload (newest last).
   developments: text("developments", { mode: "json" }).$type<unknown[]>().notNull().default([]),
   createdAt: createdAt(),

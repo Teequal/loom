@@ -109,6 +109,22 @@ export interface RelationLaw {
 const CHARACTERS: EntityType[] = ["pc", "npc"];
 const ACTORS: EntityType[] = ["pc", "npc", "faction"];
 
+// Ties that can't both be true at once between the same two: a new one replaces its opposite
+// (the old one stays in the change log, which is how "enemies, now allies" is remembered).
+export const OPPOSITE_TIES: Partial<Record<string, string[]>> = {
+  ally: ["enemy", "rivals"],
+  enemy: ["ally", "romance"],
+  rivals: ["ally"],
+  romance: ["enemy"],
+  loves: ["hates", "dislikes"],
+  cherishes: ["hates", "dislikes"],
+  likes: ["dislikes", "hates"],
+  dislikes: ["likes", "loves", "cherishes"],
+  hates: ["loves", "cherishes", "likes"],
+  trusts: ["distrusts"],
+  distrusts: ["trusts"],
+};
+
 export const RELATION_LAWS: Partial<Record<string, RelationLaw>> = {
   holds: { from: CHARACTERS, to: ["item"], cardinality: "one-per-target" },
   made: { to: ["item", "location"] },
