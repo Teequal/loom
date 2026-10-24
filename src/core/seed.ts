@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
 
-const FIXTURE_NAME = "Fixture: The Potion Swap";
+export const FIXTURE_NAME = "Fixture: The Potion Swap";
 
 // A small hand-written campaign built around the canonical example from CLAUDE.md.
 // The DM's real fix (give each player the other's cure) is deliberately NOT stored:

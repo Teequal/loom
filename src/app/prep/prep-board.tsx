@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Linked, LoomProvider, RefChips } from "../loom-ui";
+import { Icon } from "../icons";
 import { batchLabel, Header, Note, post, useCampaigns, useElapsed } from "../shell";
 
 // Between sessions: paste the notes, confirm what changed (by risk, with undo), then get prep ideas.
@@ -239,7 +240,7 @@ function Board({ campaignId }: { campaignId: number }) {
               <button
                 onClick={read}
                 disabled={notes.trim().length < 20 || !!busy || !!live?.openQuestions}
-                className="shrink-0 whitespace-nowrap rounded-lg bg-foreground px-4 py-1.5 text-sm font-medium text-background transition-opacity disabled:opacity-30"
+                className="btn-primary shrink-0 text-sm"
               >
                 {busy === "reading" ? "Reading…" : live?.used ? "Read and wrap up" : "Read notes"}
               </button>
@@ -270,7 +271,7 @@ function Board({ campaignId }: { campaignId: number }) {
           </p>
           {applied.kept.map((k) => (
             <p key={k} className="mt-2 text-[13px] text-muted">
-              ✎ {k}
+              <Icon name="pen" size={12} /> {k}
             </p>
           ))}
           {applied.warnings.map((w) => (
@@ -278,7 +279,7 @@ function Board({ campaignId }: { campaignId: number }) {
               {w}
             </p>
           ))}
-          <button onClick={() => undo(applied.batch)} disabled={!!busy} className="mt-3 text-sm text-muted underline-offset-2 hover:text-foreground hover:underline">
+          <button onClick={() => undo(applied.batch)} disabled={!!busy} className="btn-tertiary mt-3 text-sm">
             Undo all of this
           </button>
         </section>
@@ -378,10 +379,10 @@ function Board({ campaignId }: { campaignId: number }) {
           )}
 
           <div className="sticky bottom-4 flex items-center justify-between gap-3 rounded-xl border border-line bg-surface/95 p-3 shadow-sm backdrop-blur">
-            <button onClick={() => setProposal(null)} className="text-sm text-muted hover:text-foreground">
+            <button onClick={() => setProposal(null)} className="btn-tertiary text-sm">
               Discard
             </button>
-            <button onClick={save} disabled={!!busy || saving === 0} className="rounded-lg bg-foreground px-4 py-1.5 text-sm font-medium text-background disabled:opacity-30">
+            <button onClick={save} disabled={!!busy || saving === 0} className="btn-primary text-sm">
               {busy === "saving" ? "Saving…" : `Save ${saving} change${saving === 1 ? "" : "s"}`}
             </button>
           </div>
@@ -391,7 +392,7 @@ function Board({ campaignId }: { campaignId: number }) {
       <section className="mt-12">
         <div className="mb-3 flex items-baseline justify-between gap-3">
           <h2 className="text-[15px] font-semibold">Prep for next session</h2>
-          <button onClick={getIdeas} disabled={!!busy} className="rounded-lg border border-line bg-surface px-3 py-1 text-sm disabled:opacity-40">
+          <button onClick={getIdeas} disabled={!!busy} className="btn-secondary text-sm">
             {busy === "ideas" ? `Thinking… ${elapsed} s` : ideas ? "New ideas" : "Get prep ideas"}
           </button>
         </div>
@@ -411,7 +412,7 @@ function Board({ campaignId }: { campaignId: number }) {
             {ideas.callbacks.length > 0 && (
               <IdeaList title="Callbacks: bring a key moment back">
                 {ideas.callbacks.map((x) => (
-                  <Card key={x.moment} title={`⟲ ${x.moment}${x.session ? ` (session ${x.session})` : ""}`} body={x.idea} threads={x.threads} />
+                  <Card key={x.moment} title={`${x.moment}${x.session ? ` (session ${x.session})` : ""}`} body={x.idea} threads={x.threads} />
                 ))}
               </IdeaList>
             )}
@@ -439,7 +440,7 @@ function Board({ campaignId }: { campaignId: number }) {
                 {b.undone ? (
                   <span className="text-xs text-muted">undone</span>
                 ) : (
-                  <button onClick={() => undo(b.batch)} disabled={!!busy} className="text-xs text-muted hover:text-foreground disabled:opacity-40">
+                  <button onClick={() => undo(b.batch)} disabled={!!busy} className="btn-tertiary text-xs">
                     Undo
                   </button>
                 )}
@@ -472,7 +473,7 @@ function OpenQuestions({ questions, onAnswered }: { questions: Live["questions"]
           Before you wrap up · {questions.length} to answer
         </h3>
         {questions.length > 1 && (
-          <button type="button" disabled={busy} onClick={() => answer(questions, false)} className="text-xs text-muted hover:text-foreground disabled:opacity-40">
+          <button type="button" disabled={busy} onClick={() => answer(questions, false)} className="btn-tertiary text-xs">
             No to all
           </button>
         )}
@@ -489,10 +490,10 @@ function OpenQuestions({ questions, onAnswered }: { questions: Live["questions"]
               {q.reasons.join(" · ")} · from {q.from === "your note" ? q.from : `“${q.from}”`}{q.evidence && <span className="italic"> · “{q.evidence}”</span>}
             </p>
             <div className="mt-2 flex gap-2 text-sm">
-              <button type="button" disabled={busy} onClick={() => answer([q], true)} className="rounded-md bg-foreground px-3 py-0.5 text-background disabled:opacity-40">
+              <button type="button" disabled={busy} onClick={() => answer([q], true)} className="btn-primary text-sm">
                 Yes, record it
               </button>
-              <button type="button" disabled={busy} onClick={() => answer([q], false)} className="rounded-md border border-line px-3 py-0.5 disabled:opacity-40">
+              <button type="button" disabled={busy} onClick={() => answer([q], false)} className="btn-secondary text-sm">
                 No
               </button>
             </div>

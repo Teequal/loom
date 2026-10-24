@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { post } from "./shell";
+import { Icon } from "./icons";
 
 // Walking the loom from anywhere. Anything with an identity is a Ref: hover (or long-press) for a
 // preview, click to open it in the inspector, where every connection is another Ref. The trail
@@ -70,11 +71,126 @@ export function LoomProvider({ campaignId, children }: { campaignId: number; chi
     () => ({ campaignId, index, find: (k, id) => byKey.get(`${k}:${id}`), open, trail, reload: () => setVersion((v) => v + 1), linker }),
     [campaignId, index, byKey, open, trail, linker],
   );
+  // Jump anywhere: ⌘K / Ctrl+K, or the search button in the header (which sends "loom:search").
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setSearching((v) => !v);
+      }
+    };
+    const onAsk = () => setSearching(true);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("loom:search", onAsk);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("loom:search", onAsk);
+    };
+  }, []);
   return (
     <Ctx.Provider value={value}>
       {children}
       {trail.length > 0 && <Inspector trail={trail} setTrail={setTrail} />}
+      {searching && (
+        <Palette
+          index={index}
+          onPick={(n) => {
+            setSearching(false);
+            open({ kind: n.kind, id: n.id, name: n.name, sub: n.sub, status: n.status });
+          }}
+          onClose={() => setSearching(false)}
+        />
+      )}
     </Ctx.Provider>
+  );
+}
+
+// ---------- jump anywhere ----------
+
+const KIND_LABEL: Record<Kind, string> = { entity: "Cast and places", thread: "Threads", moment: "Key moments", session: "Sessions" };
+
+function Palette({ index, onPick, onClose }: { index: IndexNode[]; onPick: (n: IndexNode) => void; onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const [at, setAt] = useState(0);
+  const results = useMemo(() => {
+    const term = q.trim().toLowerCase();
+    if (!term) return [];
+    const score = (n: IndexNode) => {
+      const names = [n.name, ...n.aliases].map((x) => x.toLowerCase());
+      if (names.some((x) => x === term)) return 5;
+      if (names.some((x) => x.startsWith(term))) return 4;
+      if (names.some((x) => x.split(/[\s,'’-]+/).some((w) => w.startsWith(term)))) return 3;
+      if (names.some((x) => x.includes(term))) return 2;
+      if (n.line?.toLowerCase().includes(term)) return 1;
+      return 0;
+    };
+    const hits = index
+      .map((n) => ({ n, s: score(n) }))
+      .filter((x) => x.s > 0)
+      .sort((a, b) => b.s - a.s || a.n.name.length - b.n.name.length)
+      .slice(0, 12);
+    // Grouped by kind, groups in order of their best match, so each heading shows once.
+    const best = new Map<Kind, number>();
+    hits.forEach((h, i) => !best.has(h.n.kind) && best.set(h.n.kind, i));
+    return hits.sort((a, b) => best.get(a.n.kind)! - best.get(b.n.kind)!).map((x) => x.n);
+  }, [q, index]);
+  const pick = results[Math.min(at, results.length - 1)];
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-foreground/20 px-4 pt-[12vh] backdrop-blur-[2px]" onMouseDown={onClose}>
+      <div role="dialog" aria-label="Jump to anything" onMouseDown={(e) => e.stopPropagation()} className="rise w-full max-w-lg overflow-hidden rounded-2xl border border-line bg-surface shadow-2xl">
+        <div className="flex items-center gap-2 border-b border-line px-4">
+          <Icon name="search" className="text-muted" />
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setAt(0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") onClose();
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setAt((a) => Math.min(a + 1, results.length - 1));
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setAt((a) => Math.max(a - 1, 0));
+              }
+              if (e.key === "Enter" && pick) onPick(pick);
+            }}
+            placeholder="Jump to a character, place, thread, moment or session"
+            className="w-full bg-transparent py-3.5 text-[15px] outline-none placeholder:text-muted/70"
+          />
+          <kbd className="rounded border border-line px-1.5 text-[11px] text-muted">esc</kbd>
+        </div>
+        {q.trim() && (
+          <ul className="max-h-[50vh] overflow-y-auto py-1.5">
+            {!results.length && <li className="px-4 py-3 text-sm text-muted">Nothing in the loom matches “{q}”.</li>}
+            {results.map((n, i) => (
+              <li key={`${n.kind}:${n.id}`}>
+                {(i === 0 || results[i - 1].kind !== n.kind) && <p className="px-4 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted">{KIND_LABEL[n.kind]}</p>}
+                <button
+                  type="button"
+                  onMouseEnter={() => setAt(i)}
+                  onClick={() => onPick(n)}
+                  className={`flex w-full items-baseline justify-between gap-3 px-4 py-1.5 text-left ${i === at ? "bg-thread-soft" : ""}`}
+                >
+                  <span className="min-w-0 truncate">{n.name}</span>
+                  <span className="shrink-0 text-xs text-muted">
+                    {n.sub}
+                    {n.status && !["alive", "intact", "open", "key", "progressing", "resolved", "suggested"].includes(n.status) ? ` · ${n.status}` : ""}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {!q.trim() && <p className="px-4 py-3 text-xs text-muted">Type a name, a place or a word. ↑↓ to choose, Enter to open.</p>}
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -216,12 +332,29 @@ function Inspector({ trail, setTrail }: { trail: Ref[]; setTrail: (t: Ref[]) => 
 
   const shown = node && node.kind === current.kind && node.id === current.id ? node : null;
 
+  // On a phone it's a sheet: drag the top down to close it.
+  const [drag, setDrag] = useState(0);
+  const start = useRef<number | null>(null);
+  const touch = {
+    onTouchStart: (e: React.TouchEvent) => (start.current = e.touches[0].clientY),
+    onTouchMove: (e: React.TouchEvent) => start.current != null && setDrag(Math.max(0, e.touches[0].clientY - start.current)),
+    onTouchEnd: () => {
+      if (drag > 90) setTrail([]);
+      setDrag(0);
+      start.current = null;
+    },
+  };
+
   return (
     <aside
       aria-label="Loom inspector"
-      className="fixed inset-x-0 bottom-0 z-40 flex max-h-[78vh] flex-col rounded-t-2xl border border-line bg-surface shadow-2xl sm:inset-y-3 sm:left-auto sm:right-3 sm:max-h-none sm:w-[400px] sm:rounded-2xl"
+      style={drag ? { transform: `translateY(${drag}px)` } : undefined}
+      className={`fixed inset-x-0 bottom-0 z-40 flex max-h-[78vh] flex-col rounded-t-2xl border border-line bg-surface shadow-2xl sm:inset-y-3 sm:left-auto sm:right-3 sm:max-h-none sm:w-[400px] sm:rounded-2xl ${drag ? "" : "transition-transform"}`}
     >
-      <div className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+      <div {...touch} aria-hidden className="flex justify-center pt-2 sm:hidden">
+        <span className="h-1 w-9 rounded-full bg-line" />
+      </div>
+      <div {...touch} className="flex items-center gap-2 border-b border-line px-4 py-2.5">
         <nav aria-label="Path" className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto text-xs text-muted [scrollbar-width:none]">
           {trail.map((r, i) => (
             <span key={`${r.kind}:${r.id}`} className="flex shrink-0 items-center gap-1">
@@ -241,8 +374,8 @@ function Inspector({ trail, setTrail }: { trail: Ref[]; setTrail: (t: Ref[]) => 
             ← Back
           </button>
         )}
-        <button type="button" onClick={() => setTrail([])} className="text-lg leading-none text-muted hover:text-foreground" aria-label="Close inspector">
-          ×
+        <button type="button" onClick={() => setTrail([])} className="btn-tertiary" aria-label="Close inspector">
+          <Icon name="close" />
         </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-sm">

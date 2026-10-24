@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Choice, Field, Steps, Switch, Tune } from "./controls";
+import { Icon } from "./icons";
 import { Linked, LoomProvider, RefChips } from "./loom-ui";
 import { Header, Note, post, store, useCampaigns, useElapsed } from "./shell";
 
@@ -72,7 +73,7 @@ export function ImprovBox() {
       {c.error && <Note tone="danger">{c.error}</Note>}
       {c.campaignId && (
         <LoomProvider key={c.campaignId} campaignId={c.campaignId}>
-          <Table campaignId={c.campaignId} />
+          <Table campaignId={c.campaignId} name={c.campaigns.find((x) => x.id === c.campaignId)?.name ?? ""} trySample={c.sample} />
         </LoomProvider>
       )}
     </main>
@@ -89,7 +90,14 @@ interface Live {
   focusBox: (placeholder?: string) => void;
 }
 
-function Table({ campaignId }: { campaignId: number }) {
+// Moments to try in the sample campaign, so a first look shows Loom working straight away.
+const SAMPLE_MOMENTS = [
+  "Bram jumps off the bridge to prove he can't die",
+  "Kira writes Ysolde a note demanding the cure",
+  "The party decides to rob the Red Hand's toll-house",
+];
+
+function Table({ campaignId, name, trySample }: { campaignId: number; name: string; trySample: () => Promise<void> }) {
   const [model, setModel] = useState<Model>("haiku");
   const [tone, setTone] = useState(1);
   const [moment, setMoment] = useState("");
@@ -102,6 +110,9 @@ function Table({ campaignId }: { campaignId: number }) {
   const [session, setSession] = useState<number | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [autoApprove, setAutoApprove] = useState(false);
+  const [empty, setEmpty] = useState(false);
+  const [showOthers, setShowOthers] = useState(false);
+  const [sample, setSample] = useState(false);
   const [open, setOpen] = useState<number | null>(null); // timeline entry shown in detail
   const box = useRef<HTMLTextAreaElement>(null);
   const abort = useRef<AbortController | null>(null);
@@ -127,22 +138,55 @@ function Table({ campaignId }: { campaignId: number }) {
   }, []);
 
   const reload = useCallback(async () => {
-    const r = await post<{ session: number; autoApprove: boolean; entries: Entry[] }>("/api/live", { campaignId });
+    const r = await post<{ session: number; autoApprove: boolean; empty: boolean; sample: boolean; entries: Entry[] }>("/api/live", { campaignId });
     setSession(r.session);
     setEntries(r.entries);
     setAutoApprove(r.autoApprove);
+    setEmpty(r.empty);
+    setSample(r.sample);
     return r.entries;
   }, [campaignId]);
 
   useEffect(() => {
-    post<{ session: number; autoApprove: boolean; entries: Entry[] }>("/api/live", { campaignId })
+    post<{ session: number; autoApprove: boolean; empty: boolean; sample: boolean; entries: Entry[] }>("/api/live", { campaignId })
       .then((r) => {
         setSession(r.session);
         setEntries(r.entries);
         setAutoApprove(r.autoApprove);
+        setEmpty(r.empty);
+        setSample(r.sample);
       })
       .catch(() => {});
   }, [campaignId]);
+
+  // When a choice finishes landing in the loom, say so briefly, and make its dot glow.
+  const [toasts, setToasts] = useState<{ id: number; entryId: number; title: string; detail: string }[]>([]);
+  const [glowing, setGlowing] = useState<Set<number>>(new Set());
+  const previous = useRef(new Map<number, Entry["status"]>());
+  useEffect(() => {
+    const landed = entries.filter((e) => previous.current.get(e.id) === "extracting" && e.status !== "extracting");
+    previous.current = new Map(entries.map((e) => [e.id, e.status]));
+    if (!landed.length) return;
+    const fresh = landed.map((e) => ({
+      id: Date.now() + e.id,
+      entryId: e.id,
+      title:
+        e.status === "failed"
+          ? "Couldn't add that to the loom"
+          : e.summary.length
+            ? `Added ${e.summary.length} to the loom${e.questions.length ? ` · ${e.questions.length} to answer` : ""}`
+            : "Logged. Nothing new for the loom",
+      detail: e.summary[0]?.replace(/^~ progressed: /, "") ?? "",
+    }));
+    queueMicrotask(() => {
+      setToasts((t) => [...t, ...fresh].slice(-3));
+      setGlowing(new Set(landed.map((e) => e.id)));
+    });
+    // Not cleared on the next refresh: the glow always fades, whatever else changes.
+    setTimeout(() => setGlowing(new Set()), 2000);
+  }, [entries]);
+
+  const closeToast = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
   // While a choice is being added to the loom, check back every couple of seconds.
   const extracting = entries.some((e) => e.status === "extracting");
@@ -151,6 +195,19 @@ function Table({ campaignId }: { campaignId: number }) {
     const t = setInterval(() => reload().catch(() => {}), 2000);
     return () => clearInterval(t);
   }, [extracting, reload]);
+
+  // On a phone, the box shrinks to one line while you read further down, and opens again when
+  // you tap it or scroll back up.
+  const [compact, setCompact] = useState(false);
+  const [focused, setFocused] = useState(false);
+  useEffect(() => {
+    const narrow = window.matchMedia("(max-width: 639px)");
+    const onScroll = () => setCompact(narrow.matches && window.scrollY > 160);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  // Focus alone doesn't keep it open (it stays focused after asking); typing does.
+  const shrunk = compact && !moment && !(focused && window.scrollY < 160);
 
   const focusBox = useCallback((p?: string) => {
     if (p) setPlaceholder(p);
@@ -171,6 +228,7 @@ function Table({ campaignId }: { campaignId: number }) {
     setDone(null);
     setError("");
     setOpen(null);
+    setShowOthers(false);
     setStatus("running");
     window.scrollTo({ top: 0, behavior: "smooth" });
     try {
@@ -218,8 +276,11 @@ function Table({ campaignId }: { campaignId: number }) {
     try {
       if (current.choiceKind) await post("/api/live/clear", { entryId: current.id });
       await post("/api/live/choice", { entryId: current.id, ...choice });
+      setShowOthers(false);
       await reload();
       focusBox("What happened next?");
+      // Keep the chosen card in view once the others fold away.
+      requestAnimationFrame(() => document.getElementById("chosen")?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
       return current.id;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't log that.");
@@ -232,7 +293,15 @@ function Table({ campaignId }: { campaignId: number }) {
 
   return (
     <>
-      {session != null && <Timeline session={session} live={live} open={open} setOpen={setOpen} />}
+      {session != null && <Timeline session={session} live={live} open={open} setOpen={setOpen} glowing={glowing} />}
+      <Toasts
+        toasts={toasts}
+        onOpen={(entryId) => {
+          setOpen(entryId);
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }}
+        onClose={closeToast}
+      />
 
       {/* The box stays in reach: it sticks to the top while you read options further down. Open
           questions sit right above it until they're answered. */}
@@ -251,7 +320,9 @@ function Table({ campaignId }: { campaignId: number }) {
           <textarea
             id="moment"
             ref={box}
-            rows={Math.min(6, Math.max(2, Math.ceil(moment.length / 70) + (moment.match(/\n/g)?.length ?? 0)))}
+            rows={shrunk ? 1 : Math.min(6, Math.max(2, Math.ceil(moment.length / 70) + (moment.match(/\n/g)?.length ?? 0)))}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             value={moment}
             onChange={(e) => setMoment(e.target.value)}
             onKeyDown={(e) => {
@@ -261,9 +332,9 @@ function Table({ campaignId }: { campaignId: number }) {
               }
             }}
             placeholder={placeholder}
-            className="block w-full resize-none bg-transparent px-4 pt-3 text-[17px] leading-relaxed outline-none placeholder:text-muted/70"
+            className={`block w-full resize-none bg-transparent px-4 text-[17px] leading-relaxed outline-none placeholder:text-muted/70 ${shrunk ? "py-2.5" : "pt-3"}`}
           />
-          <div className="flex items-center justify-between gap-3 px-2 pb-2 pt-0.5">
+          <div className={`items-center justify-between gap-3 px-2 pb-2 pt-0.5 ${shrunk ? "hidden" : "flex"}`}>
             {/* Everything you might tune lives behind one quiet control, out of the way of the box. */}
             <Tune label="Tune suggestions" summary={`${MODELS.find((m) => m.id === model)?.label} · ${TONES[tone]}`}>
               <Field label="Model">
@@ -307,13 +378,35 @@ function Table({ campaignId }: { campaignId: number }) {
               type="submit"
               disabled={!moment.trim() || status === "running"}
               title="Enter"
-              className="shrink-0 whitespace-nowrap rounded-lg bg-foreground px-4 py-1.5 text-sm font-medium text-background transition-opacity disabled:opacity-30"
+              className="btn-primary shrink-0 text-sm"
             >
               {status === "running" ? "Weaving…" : "Find threads"}
             </button>
           </div>
         </form>
       </div>
+
+      {!asked && empty && <Welcome name={name} trySample={trySample} />}
+      {!asked && sample && !entries.length && (
+        <div className="rise mt-5">
+          <p className="mb-2 text-[13px] text-muted">This is the sample campaign: two players drank mystery potions. Try one of these, or type your own.</p>
+          <div className="flex flex-wrap gap-2">
+            {SAMPLE_MOMENTS.map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => {
+                  setMoment(m);
+                  focusBox();
+                }}
+                className="story btn-secondary text-[14px] italic"
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {asked && (
         <section aria-live="polite" className="mt-6">
@@ -326,6 +419,8 @@ function Table({ campaignId }: { campaignId: number }) {
           <ol className="space-y-3">
             {cards.map((card, i) => {
               const state = !current?.choiceKind ? "open" : current.choiceKind === "option" && current.choice === card.text ? "used" : "other";
+              // Once you've chosen, the rest fold away so the page follows the story, not the menu.
+              if (state === "other" && !showOthers) return null;
               return (
                 <OptionCard
                   key={`${card.label}-${i}`}
@@ -346,6 +441,12 @@ function Table({ campaignId }: { campaignId: number }) {
               <li key={`pending-${i}`} aria-hidden className="h-32 animate-pulse rounded-xl border border-line bg-surface/60" />
             ))}
           </ol>
+          {current?.choiceKind && cards.some((c) => !(current.choiceKind === "option" && current.choice === c.text)) && (
+            <button type="button" onClick={() => setShowOthers(!showOthers)} className="btn-tertiary mt-2 flex text-sm">
+              {showOthers ? "Fold the other options" : `${cards.filter((c) => !(current.choiceKind === "option" && current.choice === c.text)).length} other options`}
+              <Icon name="arrow" size={12} className={`transition-transform ${showOthers ? "-rotate-90" : "rotate-90"}`} />
+            </button>
+          )}
 
           {status === "done" && current && <OwnChoice entry={current} onSave={(text) => use({ kind: "own", label: "", text })} />}
           {current?.choiceKind && <LoomStatus entry={current} />}
@@ -374,6 +475,91 @@ function Table({ campaignId }: { campaignId: number }) {
       )}
       {!asked && error && <p className="mt-4 text-sm text-danger">{error}</p>}
     </>
+  );
+}
+
+// ---------- notices ----------
+
+// Quiet notices at the bottom: what just landed in the loom. Tap one to open that moment.
+function Toasts({ toasts, onOpen, onClose }: { toasts: { id: number; entryId: number; title: string; detail: string }[]; onOpen: (entryId: number) => void; onClose: (id: number) => void }) {
+  // Each notice stays about six seconds from when it appeared.
+  useEffect(() => {
+    const timers = toasts.map((t) => setTimeout(() => onClose(t.id), Math.max(0, 6000 - (Date.now() - t.id))));
+    return () => timers.forEach(clearTimeout);
+  }, [toasts, onClose]);
+  if (!toasts.length) return null;
+  return (
+    <div aria-live="polite" className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex flex-col items-center gap-2 px-4">
+      {toasts.map((t) => (
+        <div key={t.id} className="rise pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-xl border border-line bg-surface px-4 py-3 shadow-lg">
+          <Icon name="sparkle" className="mt-0.5 text-thread" />
+          <button type="button" onClick={() => onOpen(t.entryId)} className="min-w-0 flex-1 text-left">
+            <p className="text-sm font-medium">{t.title}</p>
+            {t.detail && <p className="story truncate text-[13px] text-muted">{t.detail}</p>}
+          </button>
+          <button type="button" onClick={() => onClose(t.id)} aria-label="Dismiss" className="btn-tertiary">
+            <Icon name="close" size={12} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ---------- first run ----------
+
+// An empty campaign: three ways in, each one tap.
+function Welcome({ name, trySample }: { name: string; trySample: () => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <section className="rise mt-8 rounded-2xl border border-line bg-surface p-6">
+      <p className="text-[12px] font-semibold uppercase tracking-wide text-thread">New campaign</p>
+      <h2 className="mt-1 text-xl font-semibold tracking-tight">{name ? `Welcome to ${name}` : "Welcome"}</h2>
+      <p className="story mt-2 max-w-prose leading-relaxed text-foreground/85">
+        When your players go off-script, Loom finds the threads already in play and shows you how to tie the moment back to them. To do that it needs something to remember.
+      </p>
+      <ol className="mt-5 space-y-4">
+        <li className="flex gap-3">
+          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-thread-soft text-xs font-semibold text-thread">1</span>
+          <div>
+            <p className="font-medium">Paste your last session&apos;s notes</p>
+            <p className="text-sm text-muted">However rough. Loom picks out the threads, characters and places, and you confirm them.</p>
+            <Link href="/prep" className="btn-primary mt-2 text-sm">
+              Add notes <Icon name="arrow" size={12} />
+            </Link>
+          </div>
+        </li>
+        <li className="flex gap-3">
+          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-thread-soft text-xs font-semibold text-thread">2</span>
+          <div>
+            <p className="font-medium">Or start at the table</p>
+            <p className="text-sm text-muted">Type the first thing that happens in the box above. Everything you use is remembered as you go.</p>
+          </div>
+        </li>
+        <li className="flex gap-3">
+          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-thread-soft text-xs font-semibold text-thread">3</span>
+          <div>
+            <p className="font-medium">Just looking?</p>
+            <p className="text-sm text-muted">Try a small sample campaign with a few threads already woven.</p>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await trySample();
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              className="btn-secondary mt-2 text-sm"
+            >
+              <Icon name="sparkle" /> Open the sample
+            </button>
+          </div>
+        </li>
+      </ol>
+    </section>
   );
 }
 
@@ -420,10 +606,10 @@ function QuestionTray({
         {q.evidence && <span className="italic"> · “{q.evidence}”</span>}
       </p>
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button type="button" disabled={busy} onClick={() => answer(true)} className="rounded-md bg-foreground px-3 py-1 text-background disabled:opacity-40">
+        <button type="button" disabled={busy} onClick={() => answer(true)} className="btn-primary text-sm">
           Yes, record it
         </button>
-        <button type="button" disabled={busy} onClick={() => answer(false)} className="rounded-md border border-line bg-surface px-3 py-1 disabled:opacity-40">
+        <button type="button" disabled={busy} onClick={() => answer(false)} className="btn-secondary text-sm">
           No
         </button>
         <span className="ml-auto">
@@ -444,7 +630,7 @@ function QuestionTray({
 
 // ---------- the session timeline (a tree, drawn flat) ----------
 
-function Timeline({ session, live, open, setOpen }: { session: number; live: Live; open: number | null; setOpen: (id: number | null) => void }) {
+function Timeline({ session, live, open, setOpen, glowing }: { session: number; live: Live; open: number | null; setOpen: (id: number | null) => void; glowing: Set<number> }) {
   const [noting, setNoting] = useState(false);
   const { entries } = live;
   const used = entries.filter((e) => e.choiceKind).length;
@@ -480,24 +666,24 @@ function Timeline({ session, live, open, setOpen }: { session: number; live: Liv
                 type="button"
                 onClick={() => setOpen(open === e.id ? null : e.id)}
                 aria-label={`${e.choiceKind === "branch" ? "Branch: " : ""}${e.choiceLabel || e.moment}${e.choiceKind ? " (used)" : " (asked)"}`}
-                title={e.choiceKind === "branch" ? `↳ ${e.choiceLabel || e.choice}` : e.moment}
-                className={`relative grid place-items-center rounded-full text-[11px] transition-colors ${depth > 0 ? "h-5 w-5" : "h-6 w-6"} ${open === e.id ? "ring-2 ring-thread/60" : ""} ${
+                title={e.choiceKind === "branch" ? `Continued: ${e.choiceLabel || e.choice}` : e.moment}
+                className={`relative grid place-items-center rounded-full text-[11px] transition-colors ${depth > 0 ? "h-5 w-5" : "h-6 w-6"} ${glowing.has(e.id) ? "glow" : ""} ${open === e.id ? "ring-2 ring-thread/60" : ""} ${
                   e.choiceKind ? "bg-thread-soft text-thread" : "border border-line text-muted/70"
                 }`}
               >
-                {e.status === "extracting" ? <span className="h-2 w-2 animate-ping rounded-full bg-thread" /> : e.status === "failed" ? "!" : e.choiceKind === "branch" ? "↳" : e.choiceKind === "own" ? "✎" : e.choiceKind ? "✓" : "·"}
+                {e.status === "extracting" ? <span className="h-2 w-2 animate-ping rounded-full bg-thread" /> : e.status === "failed" ? "!" : <Icon name={e.choiceKind === "branch" ? "branch" : e.choiceKind === "own" ? "pen" : e.choiceKind ? "check" : "dot"} size={12} />}
                 {e.questions.length > 0 && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-danger" />}
               </button>
             </li>
           ))}
         </ol>
         <div className="flex shrink-0 items-center gap-2 text-xs">
-          <button type="button" onClick={() => setNoting(!noting)} className="text-muted hover:text-foreground" title="Log something that happened without asking Loom">
-            + Note
+          <button type="button" onClick={() => setNoting(!noting)} className="btn-tertiary" title="Log something that happened without asking Loom">
+            <Icon name="plus" size={12} /> Note
           </button>
           {used > 0 && (
-            <Link href="/prep" className="text-muted hover:text-foreground" title="Add what Loom didn't see, and close the session">
-              Wrap up →
+            <Link href="/prep" className="btn-tertiary" title="Add what Loom didn't see, and close the session">
+              Wrap up <Icon name="arrow" size={12} />
             </Link>
           )}
         </div>
@@ -545,7 +731,7 @@ function QuickNote({ campaignId, onDone }: { campaignId: number; onDone: () => v
         placeholder="Something that happened, e.g. “Iresia bought the lockpicks off Hoder”"
         className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm outline-none focus:border-thread/60"
       />
-      <button disabled={busy || text.trim().length < 2} className="rounded-lg bg-foreground px-3 py-1.5 text-sm text-background disabled:opacity-30">
+      <button disabled={busy || text.trim().length < 2} className="btn-primary text-sm">
         Log
       </button>
       {error && <span className="self-center text-xs text-danger">{error}</span>}
@@ -571,7 +757,7 @@ function EntryDetail({ entry, live, onClose, onOpen }: { entry: Entry; live: Liv
         <p className="italic text-muted">
           {parent ? (
             <>
-              ↳ from{" "}
+              <Icon name="branch" size={12} /> from{" "}
               <button type="button" onClick={() => onOpen(parent.id)} className="underline decoration-dotted underline-offset-2 hover:text-foreground">
                 {parent.choiceLabel || parent.moment}
               </button>
@@ -580,8 +766,8 @@ function EntryDetail({ entry, live, onClose, onOpen }: { entry: Entry; live: Liv
             <Linked text={entry.moment} />
           )}
         </p>
-        <button type="button" onClick={onClose} aria-label="Close" className="text-muted hover:text-foreground">
-          ×
+        <button type="button" onClick={onClose} aria-label="Close" className="btn-tertiary">
+          <Icon name="close" />
         </button>
       </div>
       {entry.choiceKind ? (
@@ -593,8 +779,8 @@ function EntryDetail({ entry, live, onClose, onOpen }: { entry: Entry; live: Liv
           <LoomStatus entry={entry} />
           <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
             <DevelopToggle live={live} base={{ moment: entry.moment, label: entry.choiceLabel, text: entry.choice, threadIds: [] }} parent={async () => entry.id} saved={entry.developments} />
-            <button type="button" onClick={takeBack} disabled={busy} className="text-muted hover:text-foreground disabled:opacity-40">
-              Take back (undo what it added)
+            <button type="button" onClick={takeBack} disabled={busy} className="btn-tertiary">
+              <Icon name="undo" size={12} /> Take back
             </button>
           </div>
           <Branches parent={entry} live={live} onOpen={onOpen} />
@@ -616,7 +802,7 @@ function Branches({ parent, live, onOpen }: { parent: Entry; live: Live; onOpen?
       <ul className="mt-1 space-y-2">
         {kids.map((k) => (
           <li key={k.id} className="text-[14px]">
-            <span className="text-thread">↳ </span>
+            <Icon name="branch" size={12} className="mr-1 text-thread" />
             {k.choiceLabel && <span className="mr-1 font-medium">{k.choiceLabel}.</span>}
             <Linked text={k.choice} />
             <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
@@ -691,11 +877,12 @@ function OptionCard({
   const [copied, setCopied] = useState(false);
   return (
     <li
-      className={`rise group rounded-xl border bg-surface p-4 shadow-sm transition-opacity ${state === "used" ? "border-thread/60" : "border-line"} ${state === "other" ? "opacity-55 hover:opacity-100" : ""}`}
+      id={state === "used" ? "chosen" : undefined}
+      className={`rise group scroll-mt-40 rounded-xl border bg-surface p-4 shadow-sm transition-opacity ${state === "used" ? "border-thread/60" : "border-line"} ${state === "other" ? "opacity-55 hover:opacity-100" : ""}`}
     >
       <div className="mb-1.5 flex items-baseline justify-between gap-3">
         <h2 className="text-[13px] font-semibold uppercase tracking-wide">
-          <span className="mr-2 text-muted">{state === "used" ? <span className="text-thread">✓</span> : n}</span>
+          <span className="mr-2 text-muted">{state === "used" ? <Icon name="check" className="text-thread" /> : n}</span>
           {card.label}
         </h2>
         <button
@@ -714,15 +901,15 @@ function OptionCard({
       <p className="story leading-relaxed">
         <Linked text={card.text} />
       </p>
-      <RefChips refs={[...threadRefs(card.threads), ...(card.callback ? [{ kind: "moment" as const, id: card.callback.id, name: `⟲ ${card.callback.title}` }] : [])]} />
+      <RefChips refs={[...threadRefs(card.threads), ...(card.callback ? [{ kind: "moment" as const, id: card.callback.id, name: `Callback: ${card.callback.title}` }] : [])]} />
       {card.why && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
       <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
         {state !== "used" ? (
-          <button type="button" onClick={onUse} disabled={!canUse} className="rounded-lg border border-line px-3 py-1 font-medium hover:border-thread/60 disabled:opacity-30">
-            Use this
+          <button type="button" onClick={onUse} disabled={!canUse} className="btn-secondary font-medium">
+            <Icon name="check" /> Use this
           </button>
         ) : (
-          <span className="text-xs text-thread">Used</span>
+          <span className="text-xs text-thread">Used. What happens next goes in the box above.</span>
         )}
         <DevelopToggle live={live} base={{ moment, label: card.label, text: card.text, threadIds: card.threads.map((t) => t.id) }} parent={parent} saved={saved} />
       </div>
@@ -738,7 +925,7 @@ function OwnChoice({ entry, onSave }: { entry: Entry; onSave: (text: string) => 
     return (
       <div className="mt-3 rounded-xl border border-thread/60 bg-surface p-4">
         <p className="text-[13px] font-semibold uppercase tracking-wide">
-          <span className="mr-2 text-thread">✎</span>Your own
+          <Icon name="pen" className="mr-2 text-thread" />Your own
         </p>
         <p className="story mt-1 leading-relaxed">
           <Linked text={entry.choice} />
@@ -750,8 +937,8 @@ function OwnChoice({ entry, onSave }: { entry: Entry; onSave: (text: string) => 
     );
   if (!open)
     return (
-      <button type="button" onClick={() => setOpen(true)} className="mt-3 text-sm text-muted hover:text-foreground">
-        ✎ None of these. Write what happened
+      <button type="button" onClick={() => setOpen(true)} className="btn-tertiary mt-3 text-sm">
+        <Icon name="pen" /> None of these. Write what happened
       </button>
     );
   return (
@@ -780,7 +967,7 @@ function OwnChoice({ entry, onSave }: { entry: Entry; onSave: (text: string) => 
         <button type="button" onClick={() => setOpen(false)} className="text-muted">
           Cancel
         </button>
-        <button disabled={busy || text.trim().length < 2} className="rounded-lg bg-foreground px-3 py-1 text-background disabled:opacity-30">
+        <button disabled={busy || text.trim().length < 2} className="btn-primary">
           Use this
         </button>
       </div>
@@ -815,12 +1002,12 @@ function DevelopToggle({
   const elapsed = useElapsed(busy);
   if (!open)
     return (
-      <button type="button" onClick={() => setOpen(true)} className="text-xs text-muted hover:text-foreground sm:text-sm">
-        Develop ↳{saved?.length ? <span className="ml-1 text-thread">·</span> : null}
+      <button type="button" onClick={() => setOpen(true)} className="btn-tertiary text-sm" title={saved?.length ? "Developed before: open to see it" : "Plan ahead from this"}>
+        <Icon name="branch" /> Develop{saved?.length ? <span className="h-1.5 w-1.5 rounded-full bg-thread" /> : null}
       </button>
     );
   return (
-    <div className="rise mt-1 w-full basis-full rounded-xl border border-line bg-background p-3">
+    <div className={`rise mt-1 w-full basis-full ${depth > 0 ? "border-l-2 border-thread/30 py-1 pl-3" : "rounded-xl border border-line bg-background p-3"}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Steps
           label="How far ahead"
@@ -832,7 +1019,7 @@ function DevelopToggle({
           }}
         />
         <div className="flex items-center gap-3 text-sm">
-          <button type="button" onClick={() => setOpen(false)} className="text-muted">
+          <button type="button" onClick={() => setOpen(false)} className="btn-tertiary">
             Close
           </button>
           <button
@@ -851,7 +1038,7 @@ function DevelopToggle({
                 setBusy(false);
               }
             }}
-            className="rounded-lg bg-foreground px-3 py-1 text-background disabled:opacity-40"
+            className="btn-primary"
           >
             {busy ? `Planning… ${elapsed} s` : plan ? "Develop again" : "Develop"}
           </button>
@@ -930,10 +1117,12 @@ function PlanItem({
       <RefChips refs={threadRefs(item.threads)} />
       <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs">
         {branch ? (
-          <span className="text-thread">↳ Continued with this{branch.status === "extracting" ? " · adding to the loom…" : ""}</span>
+          <span className="text-thread">
+            <Icon name="branch" size={12} /> Continued with this{branch.status === "extracting" ? " · adding to the loom…" : ""}
+          </span>
         ) : (
-          <button type="button" disabled={busy} onClick={continueWith} className="rounded-md border border-line px-2.5 py-0.5 font-medium hover:border-thread/60 disabled:opacity-40">
-            {busy ? "Logging…" : "Use this ↳"}
+          <button type="button" disabled={busy} onClick={continueWith} className="btn-secondary text-xs font-medium">
+            {busy ? "Logging…" : "Continue with this"}
           </button>
         )}
         {depth < 4 && (

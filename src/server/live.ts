@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/core/db/client";
+import { FIXTURE_NAME } from "@/core/seed";
 import { liveEntries, liveSessionNumber } from "@/core/live";
 
 type Entry = typeof schema.liveEntries.$inferSelect;
@@ -22,6 +23,15 @@ export function entryView(e: Entry) {
 }
 
 export async function liveState(campaignId: number) {
-  const [camp] = await db.select({ auto: schema.campaigns.autoApprove }).from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
-  return { session: await liveSessionNumber(campaignId), autoApprove: !!camp?.auto, entries: (await liveEntries(campaignId)).map(entryView) };
+  const [camp] = await db.select({ auto: schema.campaigns.autoApprove, name: schema.campaigns.name }).from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
+  // A campaign with nothing in it yet gets a welcome instead of an empty box.
+  const [thread] = await db.select({ id: schema.threads.id }).from(schema.threads).where(eq(schema.threads.campaignId, campaignId)).limit(1);
+  const [entity] = await db.select({ id: schema.entities.id }).from(schema.entities).where(eq(schema.entities.campaignId, campaignId)).limit(1);
+  return {
+    session: await liveSessionNumber(campaignId),
+    autoApprove: !!camp?.auto,
+    empty: !thread && !entity,
+    sample: camp?.name === FIXTURE_NAME,
+    entries: (await liveEntries(campaignId)).map(entryView),
+  };
 }

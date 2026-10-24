@@ -21,16 +21,20 @@ const threadSub = (t: { kind: string; status: string }) => `${t.kind} thread${t.
 
 // Names to link inside text: every entity name and alias, every thread title.
 export async function loomIndex(campaignId: number) {
-  const [entities, threads, moments] = await Promise.all([
+  const [entities, threads, moments, sessions] = await Promise.all([
     db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId)),
     db.select().from(schema.threads).where(eq(schema.threads.campaignId, campaignId)),
     db.select().from(schema.keyMoments).where(and(eq(schema.keyMoments.campaignId, campaignId), inArray(schema.keyMoments.status, ["key", "suggested"]))),
+    db.select().from(schema.sessions).where(eq(schema.sessions.campaignId, campaignId)),
   ]);
   return {
     nodes: [
       ...entities.map((e) => ({ kind: "entity" as const, id: e.id, name: e.name, aliases: e.aliases, sub: TYPE_LABEL[e.type] ?? e.type, status: e.status, line: e.description })),
       ...threads.map((t) => ({ kind: "thread" as const, id: t.id, name: t.title, aliases: [], sub: threadSub(t), status: t.status, line: t.summary })),
       ...moments.map((m) => ({ kind: "moment" as const, id: m.id, name: m.title, aliases: [], sub: m.status === "key" ? "Key moment" : "Suggested moment", status: m.status, line: m.description })),
+      ...sessions
+        .filter((x) => x.recap.trim())
+        .map((x) => ({ kind: "session" as const, id: x.number, name: `Session ${x.number}`, aliases: [], sub: "Session", status: null, line: x.recap.replace(/\s+/g, " ").slice(0, 160) })),
     ],
   };
 }

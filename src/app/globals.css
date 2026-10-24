@@ -60,6 +60,65 @@ select.quiet {
   padding-right: 1.75rem;
 }
 
+/* Three kinds of button, and only three: primary (the one thing to do), secondary (a real
+   alternative), tertiary (quiet text). Sizes follow the text around them. */
+@layer components {
+  .btn-primary,
+  .btn-secondary,
+  .btn-tertiary {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    white-space: nowrap;
+    border-radius: 0.5rem;
+    transition: opacity 120ms, color 120ms, border-color 120ms, background-color 120ms;
+  }
+  .btn-primary {
+    background: var(--foreground);
+    color: var(--background);
+    font-weight: 500;
+    padding: 0.3rem 0.85rem;
+  }
+  .btn-secondary {
+    border: 1px solid var(--line);
+    background: var(--surface);
+    padding: 0.25rem 0.7rem;
+  }
+  .btn-secondary:hover {
+    border-color: color-mix(in srgb, var(--thread) 60%, transparent);
+  }
+  .btn-tertiary {
+    color: var(--muted);
+  }
+  .btn-tertiary:hover {
+    color: var(--foreground);
+  }
+  .btn-primary:disabled,
+  .btn-secondary:disabled,
+  .btn-tertiary:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+  /* One focus ring for everything you can reach with the keyboard. */
+  :where(button, a, input, textarea, select, [tabindex]):focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--thread) 70%, transparent);
+    outline-offset: 2px;
+    border-radius: 0.375rem;
+  }
+}
+
+@keyframes glow {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--thread) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+.glow {
+  animation: glow 900ms ease-out 2;
+}
+
 @keyframes rise {
   from {
     opacity: 0;
@@ -74,7 +133,8 @@ select.quiet {
   animation: rise 220ms ease-out both;
 }
 @media (prefers-reduced-motion: reduce) {
-  .rise {
+  .rise,
+  .glow {
     animation: none;
   }
 }

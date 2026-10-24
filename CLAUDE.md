@@ -277,6 +277,19 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - **Story typeface:** Newsreader (`.story`, `--font-newsreader`) for options, developments, ideas, descriptions and notes; Geist for the interface.
   - Quiet campaign picker (`select.quiet`) and session number field; change batches read as "Session 3 notes · 24 Oct, 12:51" (`batchLabel` in `shell.tsx`).
 
+- [x] **Step 13: Polish sprint** (25 Oct; P1 items 1–5 and ⌘K from the UX review).
+  - **Visual vocabulary:** one icon set (`src/app/icons.tsx`) replaces every unicode glyph. Three button styles (`btn-primary`, `btn-secondary`, `btn-tertiary` in `globals.css`). One focus ring.
+  - **First run:**
+    - An empty campaign shows a welcome with three ways in: add notes; start at the table; open the sample.
+    - The sample is `POST /api/campaigns/sample`, which opens the potion fixture and never resets it.
+    - The sample shows three example moments to tap. The campaign page has its own empty state.
+  - **Compact flow:** once an option (or your own) is used, the others fold into "N other options", and the chosen card stays in view. Nested Develop draws as an indented thread, not boxes in boxes.
+  - **Notices:** when a choice lands in the loom, a quiet notice says what was added (tap it to open that moment) and the timeline dot glows. Each notice lasts about 6 s.
+  - **Mobile:** the box shrinks to one line while you scroll and it's empty. The inspector sheet has a handle and swipes down to close.
+  - **Jump anywhere:** ⌘K / Ctrl+K, or the search button in the header, searches the loom index (cast, places, threads, moments, sessions), grouped by kind with arrow keys and Enter. Results open in the inspector.
+  - **Header:** short page names (Table, Prep, Campaign) with full names as tooltips, so the header fits on one line everywhere.
+  - 94/94 checks pass. The fixture was reseeded after testing, and a temporary "Welcome Test" campaign was deleted. A test "vex" typed into Duradan's box by mistake was removed from its log (it was only asked, nothing was used or extracted).
+
 ## Entity model build (docs/entity-model.md)
 
 - [x] Step 1: Schema with provenance (migration `drizzle/0001`):

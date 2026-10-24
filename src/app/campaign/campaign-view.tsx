@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Linked, LoomProvider, RefLink, useLoom } from "../loom-ui";
 import { Switch } from "../controls";
+import { Icon } from "../icons";
 import { batchLabel, Header, Note, post, store, useCampaigns } from "../shell";
 
 // The campaign at a glance, and the way in to all of it. The top is an overview built from links
@@ -134,6 +136,16 @@ function Loom({ campaignId }: { campaignId: number }) {
         <Settings campaignId={campaignId} initial={data.campaign} />
       </section>
 
+      {!data.threads.length && !data.cast.length && (
+        <section className="rise mt-6 rounded-2xl border border-line bg-surface p-6">
+          <p className="story text-[17px] leading-relaxed">The loom is empty for now.</p>
+          <p className="mt-1 text-sm text-muted">Threads, characters and places appear here as Loom reads your notes or as you play. Every one of them will link to everything it touches.</p>
+          <Link href="/prep" className="btn-primary mt-3 text-sm">
+            Add your first notes <Icon name="arrow" size={12} />
+          </Link>
+        </section>
+      )}
+
       {/* The overview: the way in. Every name opens in the inspector. */}
       <section className="mt-6 grid gap-4 sm:grid-cols-2">
         <Panel title="The party" wide>
@@ -153,7 +165,7 @@ function Loom({ campaignId }: { campaignId: number }) {
                     <ul className="mt-1 space-y-0.5 text-[13px]">
                       {conditions.map((t) => (
                         <li key={t.id}>
-                          <span className="text-thread">◆</span> <RefLink r={{ kind: "thread", id: t.id, name: t.title, sub: "condition thread" }} />
+                          <Icon name="diamond" size={10} className="text-thread" /> <RefLink r={{ kind: "thread", id: t.id, name: t.title, sub: "condition thread" }} />
                         </li>
                       ))}
                     </ul>
@@ -405,11 +417,11 @@ function Moments({ campaignId, moments, reload }: { campaignId: number; moments:
                     </p>
                   </div>
                   <div className="flex shrink-0 gap-1.5 text-sm">
-                    <button type="button" onClick={() => set(m.id, "key")} className="rounded-md border border-thread/50 px-2 py-0.5 text-thread" aria-label={`Star ${m.title}`}>
-                      ★
+                    <button type="button" onClick={() => set(m.id, "key")} className="btn-secondary border-thread/50 px-2 text-thread" aria-label={`Star ${m.title}`}>
+                      <Icon name="star" filled />
                     </button>
-                    <button type="button" onClick={() => set(m.id, "dismissed")} className="rounded-md border border-line px-2 py-0.5 text-muted" aria-label={`Dismiss ${m.title}`}>
-                      ×
+                    <button type="button" onClick={() => set(m.id, "dismissed")} className="btn-secondary px-2 text-muted" aria-label={`Dismiss ${m.title}`}>
+                      <Icon name="close" />
                     </button>
                   </div>
                 </div>
@@ -423,7 +435,7 @@ function Moments({ campaignId, moments, reload }: { campaignId: number; moments:
         {key.map((m) => (
           <IndexRow key={m.id} r={{ kind: "moment", id: m.id, name: m.title, sub: "Key moment" }} meta={m.session ? `s${m.session}` : ""}>
             <button type="button" onClick={() => set(m.id, "suggested")} className="ml-2 text-xs text-muted hover:text-foreground" aria-label={`Unstar ${m.title}`}>
-              ★ unstar
+              <Icon name="star" filled size={11} className="text-thread" /> unstar
             </button>
           </IndexRow>
         ))}
@@ -455,7 +467,7 @@ function Sessions({ sessions, q }: { sessions: Overview["sessions"]; q: string }
   );
 }
 
-const ACTIVITY_ICON = { asked: "·", used: "✓", saved: "⤓", undone: "↺" };
+const ACTIVITY_ICON = { asked: "dot", used: "check", saved: "save", undone: "undo" } as const;
 
 function Activity({ activity, items }: { activity: Overview["activity"]; items: Overview["activity"]["items"] }) {
   return (
@@ -473,7 +485,9 @@ function Activity({ activity, items }: { activity: Overview["activity"]; items: 
       <ol className="space-y-1.5 text-sm">
         {items.map((i, n) => (
           <li key={n} className="flex gap-3">
-            <span className="w-4 shrink-0 text-center text-thread">{ACTIVITY_ICON[i.kind]}</span>
+            <span className="w-4 shrink-0 text-center text-thread">
+              <Icon name={ACTIVITY_ICON[i.kind]} size={13} />
+            </span>
             <span className={`min-w-0 flex-1 ${i.kind === "asked" || i.kind === "undone" ? "text-muted" : ""}`}>
               {i.kind === "saved" || i.kind === "undone" ? `${batchLabel(i.text.split("|")[0])} · ${i.text.split("|")[1]} changes${i.kind === "undone" ? " (undone)" : ""}` : <Linked text={i.text} />}
             </span>
