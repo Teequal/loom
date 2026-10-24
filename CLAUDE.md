@@ -189,6 +189,23 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
     - **Possessive inside a tag:** the model sometimes writes `{Professor Aldric Vex|Vex's} apartment`. The checks only knew `{…}'s` as "belongs to", so this read as Vex acting, and the same form let body slips like "{Khayiulad|Khayiulad's} knees buckle" through. `tag()` now moves the possessive outside the tag. 90/90 crafted checks pass.
   - The desktop app's preview runner can't read the Desktop folder (macOS permission), so run the dev server from a terminal; `.claude/launch.json` attaches the preview to port 3000.
 
+- [x] **Step 9: Between-sessions page** (`/prep`, 24 Oct). This is what lets other DMs bring their own campaign.
+  - **Shared shell** (`src/app/shell.tsx`): an "At the table" / "Between sessions" switch, and a campaign picker with "+ New campaign" (remembered per browser).
+  - **After the session:** paste notes (the session number is pre-filled) and Read notes (Opus, ~25–30 s, ~$0.08–0.09). The review is by tier:
+    - **Needs your yes:** risky items one by one, with the reason, the quote and whether it's in the notes. Default No; a yes is saved as the DM's own entry.
+    - **Confirm:** ordinary changes grouped by thread or character, all ticked, untick per item or per group.
+    - **Added automatically:** folded away, still untickable.
+    - Then Save N changes, a summary of what was saved (including values kept because the DM had set them), and Undo all of this.
+  - **Prep ideas:** collisions, one idea per player (quiet ones badged), callbacks and quiet threads, as cards with thread chips (Opus, ~20 s, ~$0.045).
+  - **Recent changes:** the last 12 batches with an Undo each; a blocked undo says which later change is in the way.
+  - **API:** `POST /api/recap/propose` (stores the split proposal in `data/proposals/web-c<id>-s<n>.json`), `/api/recap/apply`, `/api/undo`, `/api/suggest`, `/api/prep`, and `POST /api/campaigns` to create one. `src/server/prep.ts` wraps the engine; `src/server/route.ts` validates input and turns failures into short messages.
+  - **Tested on the fixture**, light and dark, desktop and phone width:
+    - A session of 27 proposals: untick one, save 26, then one undo reversed all 47 writes exactly.
+    - A risky session: "Tobin dead" with Yes was saved as ✎; "close the bridge thread" with No left it open.
+    - Prep ideas found the cure swap again ("The Other Half of the Pair").
+    - The fixture was reseeded afterwards.
+  - **Gaps:** undoing a recap leaves its session row (and stored recap text) behind, so the next session number counts it. Duradan's recaps predate the change log, so its Recent changes list is empty.
+
 ## Entity model build (docs/entity-model.md)
 
 - [x] Step 1: Schema with provenance (migration `drizzle/0001`):

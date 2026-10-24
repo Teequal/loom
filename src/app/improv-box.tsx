@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Header, Note, store, useCampaigns } from "./shell";
 
 // The one-box improv page: type what the players just did, get 2-3 options tied back to threads,
 // each shown the moment it's written.
@@ -25,24 +26,9 @@ const MODELS = [
   { id: "opus", label: "Best", hint: "Opus · slower, richer payoffs" },
 ] as const;
 
-const store = {
-  get(key: string) {
-    try {
-      return localStorage.getItem(key);
-    } catch {
-      return null;
-    }
-  },
-  set(key: string, value: string) {
-    try {
-      localStorage.setItem(key, value);
-    } catch {}
-  },
-};
-
 export function ImprovBox() {
-  const [campaigns, setCampaigns] = useState<{ id: number; name: string }[]>([]);
-  const [campaignId, setCampaignId] = useState<number | null>(null);
+  const c = useCampaigns();
+  const campaignId = c.campaignId;
   const [model, setModel] = useState<"haiku" | "opus">("haiku");
   const [moment, setMoment] = useState("");
   const [asked, setAsked] = useState("");
@@ -54,16 +40,9 @@ export function ImprovBox() {
   const abort = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    fetch("/api/campaigns")
-      .then((r) => r.json())
-      .then(({ campaigns }: { campaigns: { id: number; name: string }[] }) => {
-        setCampaigns(campaigns);
-        const saved = Number(store.get("loom.campaign"));
-        setCampaignId(campaigns.some((c) => c.id === saved) ? saved : (campaigns[0]?.id ?? null));
-        const savedModel = store.get("loom.model");
-        if (savedModel === "opus" || savedModel === "haiku") setModel(savedModel);
-      })
-      .catch(() => setError("Couldn't load your campaigns. Is the database there?"));
+    const savedModel = store.get("loom.model");
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- a per-browser preference read once on load
+    if (savedModel === "opus" || savedModel === "haiku") setModel(savedModel);
     box.current?.focus();
   }, []);
 
@@ -117,34 +96,11 @@ export function ImprovBox() {
   }
 
   const pending = status === "running" ? Math.max(0, 3 - cards.length) : 0;
-  const campaign = campaigns.find((c) => c.id === campaignId);
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 pb-16 pt-8 sm:pt-14">
-      <header className="mb-6 flex items-center justify-between gap-4">
-        <h1 className="text-lg font-semibold tracking-tight">
-          Loom<span className="text-thread">.</span>
-        </h1>
-        {campaigns.length > 1 ? (
-          <select
-            aria-label="Campaign"
-            className="max-w-[60%] truncate rounded-md border border-line bg-surface px-2 py-1 text-sm text-muted"
-            value={campaignId ?? ""}
-            onChange={(e) => {
-              setCampaignId(Number(e.target.value));
-              store.set("loom.campaign", e.target.value);
-            }}
-          >
-            {campaigns.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        ) : (
-          campaign && <span className="text-sm text-muted">{campaign.name}</span>
-        )}
-      </header>
+      <Header c={c} />
+      {c.error && <Note tone="danger">{c.error}</Note>}
 
       <form
         onSubmit={(e) => {
@@ -275,8 +231,4 @@ function OptionCard({ card, n }: { card: Card; n: number }) {
       {card.why && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
     </li>
   );
-}
-
-function Note({ children }: { children: React.ReactNode }) {
-  return <p className="mb-2 rounded-lg border border-line bg-surface px-3 py-2 text-[13px] text-muted">{children}</p>;
 }
