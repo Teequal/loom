@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Chips, Header, Note, post, useCampaigns, useElapsed } from "../shell";
+import { Linked, LoomProvider, RefChips } from "../loom-ui";
+import { batchLabel, Header, Note, post, useCampaigns, useElapsed } from "../shell";
 
 // Between sessions: paste the notes, confirm what changed (by risk, with undo), then get prep ideas.
 
@@ -34,6 +35,7 @@ interface Live {
   changes: number;
   openQuestions: number;
   draft: string;
+  questions: { entryId: number; from: string; n: number; group: string; summary: string; reasons: string[]; evidence: string }[];
 }
 interface Batch {
   batch: string;
@@ -66,7 +68,11 @@ export function PrepBoard() {
       <Header c={c} />
       {c.error && <Note tone="danger">{c.error}</Note>}
       {/* Keyed by campaign, so switching campaigns starts clean. */}
-      {c.campaignId && <Board key={c.campaignId} campaignId={c.campaignId} />}
+      {c.campaignId && (
+        <LoomProvider key={c.campaignId} campaignId={c.campaignId}>
+          <Board campaignId={c.campaignId} />
+        </LoomProvider>
+      )}
     </main>
   );
 }
@@ -189,17 +195,18 @@ function Board({ campaignId }: { campaignId: number }) {
                 min={1}
                 value={session}
                 onChange={(e) => setSession(e.target.value ? Number(e.target.value) : "")}
-                className="w-14 rounded-md border border-line bg-surface px-1.5 py-0.5 text-foreground"
+                className="w-10 border-b border-dashed border-line bg-transparent text-center text-foreground outline-none [appearance:textfield] focus:border-solid focus:border-thread/60 [&::-webkit-inner-spin-button]:appearance-none"
               />
             </label>
           </div>
+          {!!live?.questions.length && <OpenQuestions questions={live.questions} onAnswered={() => refresh(campaignId)} />}
           {!!live?.used && (
             <details className="mb-3 rounded-xl border border-line bg-surface p-4 text-sm">
               <summary className="cursor-pointer">
                 <span className="font-medium">Played at the table with Loom:</span>{" "}
                 <span className="text-muted">
                   {live.used} moment{live.used === 1 ? "" : "s"} used, {live.changes} change{live.changes === 1 ? "" : "s"} already in the loom
-                  {live.openQuestions ? ` · ${live.openQuestions} still to check on the table page` : ""}
+                  {live.openQuestions ? ` · ${live.openQuestions} to answer above` : ""}
                 </span>
               </summary>
               <pre className="mt-3 whitespace-pre-wrap font-sans text-[13.5px] leading-relaxed text-muted">{live.draft}</pre>
@@ -222,7 +229,7 @@ function Board({ campaignId }: { campaignId: number }) {
                 {busy === "reading" ? (
                   `Reading your notes… ${elapsed} s (usually under a minute)`
                 ) : live?.used ? (
-                  <button type="button" onClick={wrapAsIs} disabled={!!busy} className="underline-offset-2 hover:text-foreground hover:underline">
+                  <button type="button" onClick={wrapAsIs} disabled={!!busy || !!live.openQuestions} className="underline-offset-2 hover:text-foreground hover:underline disabled:opacity-40 disabled:no-underline">
                     Nothing to add: wrap up as it is
                   </button>
                 ) : (
@@ -231,7 +238,7 @@ function Board({ campaignId }: { campaignId: number }) {
               </span>
               <button
                 onClick={read}
-                disabled={notes.trim().length < 20 || !!busy}
+                disabled={notes.trim().length < 20 || !!busy || !!live?.openQuestions}
                 className="shrink-0 whitespace-nowrap rounded-lg bg-foreground px-4 py-1.5 text-sm font-medium text-background transition-opacity disabled:opacity-30"
               >
                 {busy === "reading" ? "Reading…" : live?.used ? "Read and wrap up" : "Read notes"}
@@ -292,7 +299,7 @@ function Board({ campaignId }: { campaignId: number }) {
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-[13px] text-muted">{i.group}</p>
-                      <p className="text-[15px]">{i.summary}</p>
+                      <p className="text-[15px]"><Linked text={i.summary} /></p>
                     </div>
                     <div role="radiogroup" aria-label={`Apply: ${i.summary}`} className="flex shrink-0 rounded-lg bg-background p-0.5 text-sm">
                       {[true, false].map((v) => (
@@ -337,7 +344,7 @@ function Board({ campaignId }: { campaignId: number }) {
                         <label className="flex gap-2 text-[14.5px]">
                           <input type="checkbox" className="mt-1" checked={!skip.has(r.n)} onChange={(e) => setSkip(toggle(skip, r.n, !e.target.checked))} />
                           <span>
-                            {r.summary}
+                            <Linked text={r.summary} />
                             <Evidence item={r} />
                           </span>
                         </label>
@@ -361,7 +368,7 @@ function Board({ campaignId }: { campaignId: number }) {
                       <input type="checkbox" className="mt-1" checked={!skip.has(r.n)} onChange={(e) => setSkip(toggle(skip, r.n, !e.target.checked))} />
                       <span>
                         <span className="text-muted">{r.group}: </span>
-                        {r.summary}
+                        <Linked text={r.summary} />
                       </span>
                     </label>
                   </li>
@@ -427,7 +434,7 @@ function Board({ campaignId }: { campaignId: number }) {
             {history.map((b) => (
               <li key={b.batch} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
                 <span className={b.undone ? "text-muted line-through" : ""}>
-                  {b.batch} <span className="text-muted">· {b.changes} change{b.changes === 1 ? "" : "s"}</span>
+                  {batchLabel(b.batch)} <span className="text-muted">· {b.changes} change{b.changes === 1 ? "" : "s"}</span>
                 </span>
                 {b.undone ? (
                   <span className="text-xs text-muted">undone</span>
@@ -442,6 +449,57 @@ function Board({ campaignId }: { campaignId: number }) {
         </section>
       )}
     </>
+  );
+}
+
+// Risky changes from the table that were never answered. Wrap-up waits for them, so a session
+// can't close with something undecided.
+function OpenQuestions({ questions, onAnswered }: { questions: Live["questions"]; onAnswered: () => Promise<unknown> }) {
+  const [busy, setBusy] = useState(false);
+  const answer = async (qs: Live["questions"], yes: boolean) => {
+    setBusy(true);
+    try {
+      for (const q of qs) await post("/api/live/answer", { entryId: q.entryId, n: q.n, yes });
+      await onAnswered();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section role="alert" className="rise mb-3 rounded-xl border-2 border-thread/70 bg-thread-soft/50 p-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="text-[12px] font-semibold uppercase tracking-wide text-thread">
+          Before you wrap up · {questions.length} to answer
+        </h3>
+        {questions.length > 1 && (
+          <button type="button" disabled={busy} onClick={() => answer(questions, false)} className="text-xs text-muted hover:text-foreground disabled:opacity-40">
+            No to all
+          </button>
+        )}
+      </div>
+      <p className="mt-0.5 text-[13px] text-muted">These came up at the table and are still waiting. Nothing risky is recorded without a yes.</p>
+      <ul className="mt-3 space-y-2.5">
+        {questions.map((q) => (
+          <li key={`${q.entryId}:${q.n}`} className="rounded-lg bg-surface p-3">
+            <p className="text-[14.5px]">
+              <span className="text-muted">{q.group}: </span>
+              <Linked text={q.summary} />
+            </p>
+            <p className="mt-0.5 text-xs text-muted">
+              {q.reasons.join(" · ")} · from {q.from === "your note" ? q.from : `“${q.from}”`}{q.evidence && <span className="italic"> · “{q.evidence}”</span>}
+            </p>
+            <div className="mt-2 flex gap-2 text-sm">
+              <button type="button" disabled={busy} onClick={() => answer([q], true)} className="rounded-md bg-foreground px-3 py-0.5 text-background disabled:opacity-40">
+                Yes, record it
+              </button>
+              <button type="button" disabled={busy} onClick={() => answer([q], false)} className="rounded-md border border-line px-3 py-0.5 disabled:opacity-40">
+                No
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -483,9 +541,11 @@ function Card({ title, body, why, badge, threads }: { title: string; body: strin
         {title}
         {badge && <span className="ml-2 rounded-full border border-thread/40 px-2 py-0.5 text-[11px] font-normal text-thread">{badge}</span>}
       </h4>
-      <p className="text-[15px] leading-relaxed">{body}</p>
+      <p className="story leading-relaxed">
+        <Linked text={body} />
+      </p>
       {why && <p className="mt-2 text-[13px] italic text-muted">{why}</p>}
-      <Chips threads={threads} />
+      <RefChips refs={threads.map((t) => ({ kind: "thread" as const, id: t.id, name: t.title }))} />
     </li>
   );
 }

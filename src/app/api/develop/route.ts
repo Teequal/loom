@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { develop } from "@/core/develop";
+import { saveDevelopment } from "@/core/live";
 import { campaignId, jsonRoute } from "@/server/route";
 
 export const POST = jsonRoute(
@@ -12,7 +13,12 @@ export const POST = jsonRoute(
     reach: z.number().int().min(0).max(3).default(1),
     tone: z.number().int().min(0).max(4).optional(),
     model: z.enum(["haiku", "sonnet", "opus"]).optional(),
+    entryId: z.number().int().positive().optional(), // the logged choice this develops; the result is kept on it
   }),
-  ({ campaignId, model, ...input }) => develop(campaignId, input, model),
+  async ({ campaignId, model, entryId, ...input }) => {
+    const plan = await develop(campaignId, input, model);
+    if (entryId) await saveDevelopment(entryId, plan);
+    return plan;
+  },
   "Loom couldn't plan that ahead this time. Try again.",
 );

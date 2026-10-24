@@ -29,6 +29,8 @@ export const campaigns = sqliteTable("campaigns", {
   tone: text("tone").notNull().default(""), // comedic / heroic / grim / horror …
   // Where the GM wants the story to go, in their words: improv, Develop and prep steer by it.
   direction: text("direction").notNull().default(""),
+  // At the table: apply risky changes without asking (still logged, still undoable).
+  autoApprove: integer("auto_approve", { mode: "boolean" }).notNull().default(false),
   // Superseded by the effects table (structured house rules); kept until old data is migrated.
   mechanics: text("mechanics", { mode: "json" }).$type<CampaignMechanic[]>().notNull().default([]),
   ruleToggles: text("rule_toggles", { mode: "json" }).$type<Toggles>().notNull().default({}),
@@ -260,9 +262,10 @@ export const liveEntries = sqliteTable("live_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
   sessionNumber: integer("session_number").notNull(),
+  parentId: integer("parent_id"), // the choice this one was developed from: the session as a branching tree
   moment: text("moment").notNull(),
   options: text("options", { mode: "json" }).$type<{ label: string; text: string; threadIds: number[] }[]>().notNull().default([]),
-  choiceKind: text("choice_kind", { enum: ["option", "own"] }), // null: asked, nothing used
+  choiceKind: text("choice_kind", { enum: ["option", "own", "branch"] }), // null: asked, nothing used; branch: picked from a Develop result
   choiceLabel: text("choice_label").notNull().default(""),
   choice: text("choice").notNull().default(""),
   status: text("status", { enum: LIVE_STATUS }).notNull().default("asked"),
@@ -273,5 +276,7 @@ export const liveEntries = sqliteTable("live_entries", {
     .notNull()
     .default([]),
   wrapped: integer("wrapped", { mode: "boolean" }).notNull().default(false), // the session it belongs to was wrapped up
+  // Develop results for this choice, kept so the branches survive a reload (newest last).
+  developments: text("developments", { mode: "json" }).$type<unknown[]>().notNull().default([]),
   createdAt: createdAt(),
 });

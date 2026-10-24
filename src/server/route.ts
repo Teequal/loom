@@ -12,7 +12,7 @@ export function jsonRoute<S extends z.ZodType, R>(schema: S, run: (body: z.infer
       return Response.json(await run(parsed.data));
     } catch (err) {
       console.error(err);
-      const message = err instanceof Error && /expired|already saved|no open threads|no session|isn.t|can.t/i.test(err.message) ? err.message : failure;
+      const message = err instanceof Error && /expired|already saved|open question|no open threads|no session|any more|isn.t recorded|isn.t|can.t/i.test(err.message) ? err.message : failure;
       return Response.json({ error: message }, { status: 500 });
     }
   };

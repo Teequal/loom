@@ -243,6 +243,40 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
     - 94/94 crafted checks pass.
   - **Cost per live session** (estimate): ~$0.001 per Quick ask, plus ~$0.03–0.05 per extracted choice on Sonnet.
 
+- [x] **Step 11: The loom you can walk, branching and a tighter table** (25 Oct, from Jacob's feedback; review in [docs/review-2026-10-25.md](docs/review-2026-10-25.md)). Backup first: git tag `backup-2026-10-25-before-review` and `data/backups/loom-2026-10-25-before-review.db`.
+  - **Loom inspector** (`src/app/loom-ui.tsx`, `src/core/loom.ts`, `/api/loom` and `/api/loom/node`): every thread, character, place, item, faction, key moment and session is a node.
+    - `RefLink`: hover (or focus) for a preview card, click to open.
+    - `Linked`: auto-links every name and alias inside any text, using one pattern built per campaign.
+    - The inspector is a side panel on desktop and a bottom sheet on a phone, with a breadcrumb trail, Back, Escape and Backspace.
+    - **Node views:**
+      - Entity: where it is (as a chain of places), ties as sentences, threads, holds/contains, details (🔒 GM-only), key moments, change history.
+      - Thread: summary, stakes and deadline, who's involved, connected threads (two-way links merged), history linked to sessions, moments.
+      - Moment and session views.
+    - Long lists fold ("Show all N"). Used on the table, prep and campaign pages.
+    - Tested: Khayiulad › Microfractures › Darius (health: critical).
+  - **Campaign page overview:**
+    - Party cards with health, conditions and condition threads; In play now; Gone quiet; Who matters; Recent sessions with "N moments to star".
+    - Inline settings: tone, and auto-approve.
+    - The index rows (threads, cast, moments) open the inspector; session notes fold out with names linked.
+  - **Branching** (migration `0008`: `live_entries.parent_id`, `developments`; `campaigns.auto_approve`):
+    - Every piece of a Develop result (the opening, each setup, each direction) has **Use this ↳**, which logs it as a child entry (`logBranch`, `choiceKind: "branch"`) and extracts it. **Develop ↳** develops from that piece (nested up to 5 levels).
+    - Developing an option you haven't used uses it first, so the tree has a root.
+    - Develop results are saved on the entry, so they survive a reload.
+    - On the timeline, children follow their parent with a connector. The entry view shows "Continued with". The wrap-up draft indents branches ("- Then: …").
+    - Tested two levels deep. The second level already cited threads the first branch had added.
+  - **Questions tray:** pending questions are pinned above the box (which sticks to the top), one at a time ("1 of N"), with the reason and the quote. They stay until answered. **Auto-approve** (tray checkbox or campaign setting) applies risky changes as the DM's own entries, marked "(auto-approved)" and undoable with Take back.
+  - **The box stays in reach:** sticky, grows as you type, "/" focuses it from anywhere, and after you use something it says "What happened next?".
+  - Also: two-way thread links merged in the inspector, no nested list items in Develop, quick notes draft as one line (`NOTED`).
+  - 94/94 crafted checks pass; the fixture was reseeded after testing.
+
+- [x] **Step 12: Wrap-up questions first, quiet controls, UX review** (25 Oct). Review and roadmap: [docs/ux-review-2026-10-25.md](docs/ux-review-2026-10-25.md).
+  - **Wrap-up:** unanswered table questions appear first on Between sessions ("Before you wrap up · N to answer", Yes / No / No to all). Read-and-wrap and "wrap up as it is" stay disabled until they're answered, and the server refuses too.
+  - **Controls** (`src/app/controls.tsx`): `Steps` (dots on a thread), `Choice` (text tabs), `Switch`, `Tune` (a quiet trigger with a small panel), `Field`. Native range sliders and checkboxes are gone.
+    - On the table page, model, tone and "ask before recording risky changes" live behind one line under the box ("Quick · Restrained"); the shortcut hint moved into that panel.
+    - Develop's reach, the tray's auto-approve and the campaign settings use the same controls.
+  - **Story typeface:** Newsreader (`.story`, `--font-newsreader`) for options, developments, ideas, descriptions and notes; Geist for the interface.
+  - Quiet campaign picker (`select.quiet`) and session number field; change batches read as "Session 3 notes · 24 Oct, 12:51" (`batchLabel` in `shell.tsx`).
+
 ## Entity model build (docs/entity-model.md)
 
 - [x] Step 1: Schema with provenance (migration `drizzle/0001`):

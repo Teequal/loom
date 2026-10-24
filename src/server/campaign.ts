@@ -74,7 +74,8 @@ export async function overview(campaignId: number) {
   const party = campaign.partyLocationId ? (nameOf.get(campaign.partyLocationId) ?? null) : null;
 
   return {
-    campaign: { id: campaign.id, name: campaign.name, direction: campaign.direction, tone: campaign.tone, party, date: campaign.inGameDate, safety: campaign.safetyLines },
+    campaign: { id: campaign.id, name: campaign.name, direction: campaign.direction, tone: campaign.tone, party, partyId: campaign.partyLocationId, date: campaign.inGameDate, safety: campaign.safetyLines, autoApprove: campaign.autoApprove },
+    latestSession: Math.max(0, ...sessions.map((s) => s.number)),
     threads: threadViews,
     cast,
     moments: moments.map((m) => ({ id: m.id, title: m.title, description: m.description, callback: m.callback, session: m.session, status: m.status, entities: m.entities })),
@@ -110,7 +111,7 @@ async function activity(campaignId: number) {
     })),
     ...[...batches.values()]
       .filter((b) => !b.label.startsWith("live "))
-      .map((b) => ({ at: b.at, kind: b.undone ? ("undone" as const) : ("saved" as const), text: `${b.label.replace(/ #\w+$/, "")} · ${b.changes} changes`, session: null })),
+      .map((b) => ({ at: b.at, kind: b.undone ? ("undone" as const) : ("saved" as const), text: `${b.label}|${b.changes}`, session: null })),
   ]
     .sort((a, b) => b.at.localeCompare(a.at))
     .slice(0, 80);
@@ -121,8 +122,11 @@ async function activity(campaignId: number) {
   };
 }
 
-export async function saveCampaign(campaignId: number, patch: { direction?: string; tone?: string }) {
-  await updateCampaign(campaignId, patch, { source: "dm" });
+export async function saveCampaign(campaignId: number, patch: { direction?: string; tone?: string; autoApprove?: boolean }) {
+  const { autoApprove, ...fields } = patch;
+  if (Object.keys(fields).length) await updateCampaign(campaignId, fields, { source: "dm" });
+  // A table preference, not story data: no provenance or change log.
+  if (autoApprove !== undefined) await db.update(schema.campaigns).set({ autoApprove }).where(eq(schema.campaigns.id, campaignId));
 }
 
 export async function starMoment(campaignId: number, id: number, status: "key" | "suggested" | "dismissed") {

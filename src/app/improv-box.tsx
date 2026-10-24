@@ -2,11 +2,14 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Chips, Header, Note, post, store, useCampaigns, useElapsed } from "./shell";
+import { Choice, Field, Steps, Switch, Tune } from "./controls";
+import { Linked, LoomProvider, RefChips } from "./loom-ui";
+import { Header, Note, post, store, useCampaigns, useElapsed } from "./shell";
 
 // The table page: type what the players just did, get options tied back to threads (each shown
 // the moment it's written), use one or write your own, and Loom adds it to the loom straight
-// away so the next suggestion knows. The session so far sits in a small timeline at the top.
+// away so the next suggestion knows. Develop any choice and keep going from what it suggests:
+// the session grows as a tree, shown in the timeline. Every name links into the loom.
 
 interface Card {
   label: string;
@@ -29,15 +32,24 @@ interface Question {
   reasons: string[];
   evidence: string;
 }
+interface Plan {
+  reach: string;
+  intro: string;
+  setups: { title: string; text: string; threads: { id: number; title: string }[] }[];
+  directions: { title: string; text: string; threads: { id: number; title: string }[] }[];
+  llm: { model: string; seconds: number; costUsd: number };
+}
 interface Entry {
   id: number;
+  parentId: number | null;
   moment: string;
-  choiceKind: "option" | "own" | null;
+  choiceKind: "option" | "own" | "branch" | null;
   choiceLabel: string;
   choice: string;
   status: "asked" | "extracting" | "done" | "failed";
   summary: string[];
   questions: Question[];
+  developments: Plan[];
   at: string;
 }
 type Status = "idle" | "running" | "done" | "error";
@@ -50,13 +62,38 @@ const MODELS = [
 type Model = (typeof MODELS)[number]["id"];
 const TONES = ["Grounded", "Restrained", "Balanced", "Dramatic", "Theatrical"];
 const REACH = ["Next few minutes", "This scene", "Next session", "The arc"];
+const threadRefs = (ts: { id: number; title: string }[]) => ts.map((t) => ({ kind: "thread" as const, id: t.id, name: t.title }));
 
 export function ImprovBox() {
   const c = useCampaigns();
-  const campaignId = c.campaignId;
+  return (
+    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 pb-24 pt-8 sm:pt-14">
+      <Header c={c} />
+      {c.error && <Note tone="danger">{c.error}</Note>}
+      {c.campaignId && (
+        <LoomProvider key={c.campaignId} campaignId={c.campaignId}>
+          <Table campaignId={c.campaignId} />
+        </LoomProvider>
+      )}
+    </main>
+  );
+}
+
+// Everything the table needs to log a choice or a branch, shared by cards, the timeline and Develop.
+interface Live {
+  campaignId: number;
+  entries: Entry[];
+  reload: () => Promise<Entry[]>;
+  model: Model;
+  tone: number;
+  focusBox: (placeholder?: string) => void;
+}
+
+function Table({ campaignId }: { campaignId: number }) {
   const [model, setModel] = useState<Model>("haiku");
   const [tone, setTone] = useState(1);
   const [moment, setMoment] = useState("");
+  const [placeholder, setPlaceholder] = useState("What did the players just do?");
   const [asked, setAsked] = useState("");
   const [cards, setCards] = useState<Card[]>([]);
   const [done, setDone] = useState<Done | null>(null);
@@ -64,6 +101,7 @@ export function ImprovBox() {
   const [error, setError] = useState("");
   const [session, setSession] = useState<number | null>(null);
   const [entries, setEntries] = useState<Entry[]>([]);
+  const [autoApprove, setAutoApprove] = useState(false);
   const [open, setOpen] = useState<number | null>(null); // timeline entry shown in detail
   const box = useRef<HTMLTextAreaElement>(null);
   const abort = useRef<AbortController | null>(null);
@@ -77,19 +115,31 @@ export function ImprovBox() {
     box.current?.focus();
   }, []);
 
-  const loadLive = useCallback(async (id: number) => {
-    const r = await post<{ session: number; entries: Entry[] }>("/api/live", { campaignId: id });
-    setSession(r.session);
-    setEntries(r.entries);
-    return r.entries;
+  // "/" jumps to the box from anywhere on the page.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      e.preventDefault();
+      box.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const reload = useCallback(async () => {
+    const r = await post<{ session: number; autoApprove: boolean; entries: Entry[] }>("/api/live", { campaignId });
+    setSession(r.session);
+    setEntries(r.entries);
+    setAutoApprove(r.autoApprove);
+    return r.entries;
+  }, [campaignId]);
+
   useEffect(() => {
-    if (!campaignId) return;
-    post<{ session: number; entries: Entry[] }>("/api/live", { campaignId })
+    post<{ session: number; autoApprove: boolean; entries: Entry[] }>("/api/live", { campaignId })
       .then((r) => {
         setSession(r.session);
         setEntries(r.entries);
+        setAutoApprove(r.autoApprove);
       })
       .catch(() => {});
   }, [campaignId]);
@@ -97,24 +147,32 @@ export function ImprovBox() {
   // While a choice is being added to the loom, check back every couple of seconds.
   const extracting = entries.some((e) => e.status === "extracting");
   useEffect(() => {
-    if (!extracting || !campaignId) return;
-    const t = setInterval(() => loadLive(campaignId).catch(() => {}), 2000);
+    if (!extracting) return;
+    const t = setInterval(() => reload().catch(() => {}), 2000);
     return () => clearInterval(t);
-  }, [extracting, campaignId, loadLive]);
+  }, [extracting, reload]);
+
+  const focusBox = useCallback((p?: string) => {
+    if (p) setPlaceholder(p);
+    box.current?.focus({ preventScroll: true });
+  }, []);
+  const live: Live = { campaignId, entries, reload, model, tone, focusBox };
 
   async function ask() {
     const text = moment.trim();
-    if (!text || !campaignId || status === "running") return;
+    if (!text || status === "running") return;
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
     setAsked(text);
     setMoment("");
+    setPlaceholder("What did the players just do?");
     setCards([]);
     setDone(null);
     setError("");
     setOpen(null);
     setStatus("running");
+    window.scrollTo({ top: 0, behavior: "smooth" });
     try {
       const res = await fetch("/api/improv", {
         method: "POST",
@@ -143,132 +201,155 @@ export function ImprovBox() {
         }
       }
       setStatus("done");
-      await loadLive(campaignId);
+      await reload();
     } catch (err) {
       if (controller.signal.aborted) return;
       setError(err instanceof Error ? err.message : "Something went wrong.");
       setStatus("error");
-    } finally {
-      box.current?.focus();
     }
   }
 
   const current = done ? entries.find((e) => e.id === done.entryId) : undefined;
 
+  // Uses an option (or your own) for the moment just asked. Changing your mind undoes the old pick.
   async function use(choice: { kind: "option" | "own"; label: string; text: string }) {
-    if (!current || !campaignId) return;
+    if (!current) return null;
     setError("");
     try {
-      if (current.choiceKind) await post("/api/live/clear", { entryId: current.id }); // changed their mind
+      if (current.choiceKind) await post("/api/live/clear", { entryId: current.id });
       await post("/api/live/choice", { entryId: current.id, ...choice });
-      await loadLive(campaignId);
+      await reload();
+      focusBox("What happened next?");
+      return current.id;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't log that.");
+      return null;
     }
   }
 
   const pending = status === "running" ? Math.max(0, 3 - cards.length) : 0;
+  const questions = entries.flatMap((e) => e.questions.map((q) => ({ ...q, entry: e })));
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 pb-16 pt-8 sm:pt-14">
-      <Header c={c} />
-      {c.error && <Note tone="danger">{c.error}</Note>}
+    <>
+      {session != null && <Timeline session={session} live={live} open={open} setOpen={setOpen} />}
 
-      {campaignId && session != null && (
-        <Timeline
-          session={session}
-          entries={entries}
-          open={open}
-          setOpen={setOpen}
-          campaignId={campaignId}
-          reload={() => loadLive(campaignId)}
-          model={model}
-          tone={tone}
-        />
-      )}
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          ask();
-        }}
-        className="rounded-xl border border-line bg-surface shadow-sm focus-within:border-thread/60"
-      >
-        <label htmlFor="moment" className="sr-only">
-          What did the players just do?
-        </label>
-        <textarea
-          id="moment"
-          ref={box}
-          rows={2}
-          value={moment}
-          onChange={(e) => setMoment(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              ask();
-            }
+      {/* The box stays in reach: it sticks to the top while you read options further down. Open
+          questions sit right above it until they're answered. */}
+      <div className="sticky top-0 z-20 -mx-4 bg-background/95 px-4 pb-2 pt-2 backdrop-blur">
+        {questions.length > 0 && <QuestionTray questions={questions} reload={reload} campaignId={campaignId} autoApprove={autoApprove} setAutoApprove={setAutoApprove} />}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            ask();
           }}
-          placeholder="What did the players just do?"
-          className="block w-full resize-none bg-transparent px-4 pt-3.5 text-[17px] leading-relaxed outline-none placeholder:text-muted/70"
-        />
-        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 pb-3 pt-1">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <Segmented
-              label="Model"
-              options={MODELS.map((m) => ({ id: m.id, label: m.label, hint: m.hint }))}
-              value={model}
-              onChange={(v) => {
-                setModel(v as Model);
-                store.set("loom.model", v);
-              }}
-            />
-            <Slider
-              label="Tone"
-              steps={TONES}
-              value={tone}
-              onChange={(v) => {
-                setTone(v);
-                store.set("loom.tone", String(v));
-              }}
-            />
+          className="rounded-xl border border-line bg-surface shadow-sm focus-within:border-thread/60"
+        >
+          <label htmlFor="moment" className="sr-only">
+            What did the players just do?
+          </label>
+          <textarea
+            id="moment"
+            ref={box}
+            rows={Math.min(6, Math.max(2, Math.ceil(moment.length / 70) + (moment.match(/\n/g)?.length ?? 0)))}
+            value={moment}
+            onChange={(e) => setMoment(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                ask();
+              }
+            }}
+            placeholder={placeholder}
+            className="block w-full resize-none bg-transparent px-4 pt-3 text-[17px] leading-relaxed outline-none placeholder:text-muted/70"
+          />
+          <div className="flex items-center justify-between gap-3 px-2 pb-2 pt-0.5">
+            {/* Everything you might tune lives behind one quiet control, out of the way of the box. */}
+            <Tune label="Tune suggestions" summary={`${MODELS.find((m) => m.id === model)?.label} · ${TONES[tone]}`}>
+              <Field label="Model">
+                <Choice
+                  label="Model"
+                  options={MODELS}
+                  value={model}
+                  onChange={(v) => {
+                    setModel(v);
+                    store.set("loom.model", v);
+                  }}
+                />
+                <p className="mt-1 text-xs text-muted">{MODELS.find((m) => m.id === model)?.hint}</p>
+              </Field>
+              <Field label="Tone">
+                <Steps
+                  label="Tone"
+                  steps={TONES}
+                  value={tone}
+                  onChange={(v) => {
+                    setTone(v);
+                    store.set("loom.tone", String(v));
+                  }}
+                />
+              </Field>
+              <Field label="Risky changes">
+                <Switch
+                  checked={!autoApprove}
+                  onChange={async (ask) => {
+                    setAutoApprove(!ask);
+                    await post("/api/campaign/save", { campaignId, autoApprove: !ask });
+                  }}
+                  hint="Deaths, secrets, items changing hands, closing a thread"
+                >
+                  Ask me before recording them
+                </Switch>
+              </Field>
+              <p className="text-[11px] text-muted">Enter asks · Shift+Enter for a new line · / brings you back to the box</p>
+            </Tune>
+            <button
+              type="submit"
+              disabled={!moment.trim() || status === "running"}
+              title="Enter"
+              className="shrink-0 whitespace-nowrap rounded-lg bg-foreground px-4 py-1.5 text-sm font-medium text-background transition-opacity disabled:opacity-30"
+            >
+              {status === "running" ? "Weaving…" : "Find threads"}
+            </button>
           </div>
-          <button
-            type="submit"
-            disabled={!moment.trim() || !campaignId || status === "running"}
-            className="ml-auto shrink-0 whitespace-nowrap rounded-lg bg-foreground px-4 py-1.5 text-sm font-medium text-background transition-opacity disabled:opacity-30"
-          >
-            {status === "running" ? "Weaving…" : "Find threads"}
-          </button>
-        </div>
-      </form>
-      <p className="mt-2 px-1 text-xs text-muted">Enter to ask · Shift+Enter for a new line</p>
+        </form>
+      </div>
 
       {asked && (
-        <section aria-live="polite" className="mt-8">
-          <p className="mb-4 border-l-2 border-thread pl-3 text-[15px] italic text-muted">{asked}</p>
+        <section aria-live="polite" className="mt-6">
+          <p className="story mb-4 border-l-2 border-thread pl-3 italic text-muted">
+            <Linked text={asked} />
+          </p>
 
           {done?.safetyNote && <Note>{done.safetyNote}</Note>}
 
           <ol className="space-y-3">
-            {cards.map((card, i) => (
-              <OptionCard
-                key={`${card.label}-${i}`}
-                card={card}
-                n={i + 1}
-                state={!current?.choiceKind ? "open" : current.choiceKind === "option" && current.choice === card.text ? "used" : "other"}
-                canUse={!!current}
-                onUse={() => use({ kind: "option", label: card.label, text: card.text })}
-                develop={campaignId ? { campaignId, moment: asked, model, tone } : null}
-              />
-            ))}
+            {cards.map((card, i) => {
+              const state = !current?.choiceKind ? "open" : current.choiceKind === "option" && current.choice === card.text ? "used" : "other";
+              return (
+                <OptionCard
+                  key={`${card.label}-${i}`}
+                  card={card}
+                  n={i + 1}
+                  state={state}
+                  canUse={!!current}
+                  onUse={() => use({ kind: "option", label: card.label, text: card.text })}
+                  live={live}
+                  moment={asked}
+                  // Developing a card you haven't used yet uses it first, so what grows from it has a parent.
+                  parent={async () => (state === "used" ? current!.id : await use({ kind: "option", label: card.label, text: card.text }))}
+                  saved={state === "used" ? current?.developments : undefined}
+                />
+              );
+            })}
             {Array.from({ length: pending }, (_, i) => (
               <li key={`pending-${i}`} aria-hidden className="h-32 animate-pulse rounded-xl border border-line bg-surface/60" />
             ))}
           </ol>
 
           {status === "done" && current && <OwnChoice entry={current} onSave={(text) => use({ kind: "own", label: "", text })} />}
-          {current?.choiceKind && <LoomStatus entry={current} onAnswer={() => (campaignId ? loadLive(campaignId) : undefined)} />}
+          {current?.choiceKind && <LoomStatus entry={current} />}
+          {current && <Branches parent={current} live={live} />}
 
           {/* Arrives with the last option, so it goes below the cards rather than shifting them. */}
           {!!done?.notes.length && (
@@ -291,83 +372,100 @@ export function ImprovBox() {
           )}
         </section>
       )}
-    </main>
+      {!asked && error && <p className="mt-4 text-sm text-danger">{error}</p>}
+    </>
   );
 }
 
-// ---------- controls ----------
+// ---------- questions: pinned in view until answered ----------
 
-function Segmented({ label, options, value, onChange }: { label: string; options: { id: string; label: string; hint?: string }[]; value: string; onChange: (v: string) => void }) {
+function QuestionTray({
+  questions,
+  reload,
+  campaignId,
+  autoApprove,
+  setAutoApprove,
+}: {
+  questions: (Question & { entry: Entry })[];
+  reload: () => Promise<unknown>;
+  campaignId: number;
+  autoApprove: boolean;
+  setAutoApprove: (v: boolean) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const q = questions[0];
+  const answer = async (yes: boolean) => {
+    setBusy(true);
+    try {
+      await post("/api/live/answer", { entryId: q.entry.id, n: q.n, yes });
+      await reload();
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <div role="radiogroup" aria-label={label} className="flex rounded-lg bg-background p-0.5 text-sm">
-      {options.map((o) => (
-        <button
-          key={o.id}
-          type="button"
-          role="radio"
-          aria-checked={value === o.id}
-          title={o.hint}
-          onClick={() => onChange(o.id)}
-          className={`rounded-md px-2.5 py-1 transition-colors ${value === o.id ? "bg-surface font-medium shadow-sm" : "text-muted hover:text-foreground"}`}
-        >
-          {o.label}
+    <div role="alert" className="rise mb-2 rounded-xl border-2 border-thread/70 bg-thread-soft/60 p-3 text-sm">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-[12px] font-semibold uppercase tracking-wide text-thread">
+          Needs your answer{questions.length > 1 ? ` · 1 of ${questions.length}` : ""}
+        </p>
+        <span className="truncate text-xs text-muted">from “{q.entry.choiceLabel || q.entry.moment}”</span>
+      </div>
+      <p className="mt-1 text-[14.5px]">
+        <span className="text-muted">{q.group}: </span>
+        <Linked text={q.summary} />
+      </p>
+      <p className="mt-0.5 text-xs text-muted">
+        {q.reasons.join(" · ")}
+        {q.evidence && <span className="italic"> · “{q.evidence}”</span>}
+      </p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button type="button" disabled={busy} onClick={() => answer(true)} className="rounded-md bg-foreground px-3 py-1 text-background disabled:opacity-40">
+          Yes, record it
         </button>
-      ))}
+        <button type="button" disabled={busy} onClick={() => answer(false)} className="rounded-md border border-line bg-surface px-3 py-1 disabled:opacity-40">
+          No
+        </button>
+        <span className="ml-auto">
+          <Switch
+            checked={autoApprove}
+            onChange={async (v) => {
+              setAutoApprove(v);
+              await post("/api/campaign/save", { campaignId, autoApprove: v });
+            }}
+          >
+            Auto-approve from now on
+          </Switch>
+        </span>
+      </div>
     </div>
   );
 }
 
-function Slider({ label, steps, value, onChange }: { label: string; steps: readonly string[]; value: number; onChange: (v: number) => void }) {
-  return (
-    <label className="flex items-center gap-2 text-xs text-muted">
-      <span className="sr-only">{label}</span>
-      <input
-        type="range"
-        min={0}
-        max={steps.length - 1}
-        step={1}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        aria-valuetext={steps[value]}
-        className="w-24 accent-[var(--thread)]"
-      />
-      <span className="w-[5.5rem] text-foreground/80">{steps[value]}</span>
-    </label>
-  );
-}
+// ---------- the session timeline (a tree, drawn flat) ----------
 
-// ---------- the session timeline ----------
-
-function Timeline({
-  session,
-  entries,
-  open,
-  setOpen,
-  campaignId,
-  reload,
-  model,
-  tone,
-}: {
-  session: number;
-  entries: Entry[];
-  open: number | null;
-  setOpen: (id: number | null) => void;
-  campaignId: number;
-  reload: () => Promise<unknown>;
-  model: Model;
-  tone: number;
-}) {
+function Timeline({ session, live, open, setOpen }: { session: number; live: Live; open: number | null; setOpen: (id: number | null) => void }) {
   const [noting, setNoting] = useState(false);
+  const { entries } = live;
   const used = entries.filter((e) => e.choiceKind).length;
-  const questions = entries.reduce((n, e) => n + e.questions.length, 0);
   const shown = entries.find((e) => e.id === open);
   const strip = useRef<HTMLOListElement>(null);
   useEffect(() => {
     strip.current?.scrollTo({ left: strip.current.scrollWidth, behavior: "smooth" });
   }, [entries.length]);
+  // Children sit right after their parent, so a branch reads left to right.
+  const ordered: { e: Entry; depth: number }[] = [];
+  const kids = new Map<number, Entry[]>();
+  for (const e of entries) if (e.parentId != null) kids.set(e.parentId, [...(kids.get(e.parentId) ?? []), e]);
+  const ids = new Set(entries.map((e) => e.id));
+  const walk = (e: Entry, depth: number) => {
+    ordered.push({ e, depth });
+    for (const k of kids.get(e.id) ?? []) walk(k, depth + 1);
+  };
+  for (const e of entries) if (e.parentId == null || !ids.has(e.parentId)) walk(e, 0);
 
   return (
-    <section aria-label={`Session ${session} so far`} className="mb-4">
+    <section aria-label={`Session ${session} so far`} className="mb-2">
       <div className="flex items-center gap-3">
         <span className="shrink-0 text-xs font-medium text-muted">
           Session {session}
@@ -375,29 +473,25 @@ function Timeline({
         </span>
         <ol ref={strip} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1 [scrollbar-width:none]">
           {entries.length === 0 && <li className="text-xs text-muted/70">Nothing yet. What you use at the table lands here.</li>}
-          {entries.map((e, i) => (
-            <li key={e.id}>
+          {ordered.map(({ e, depth }) => (
+            <li key={e.id} className="flex items-center">
+              {depth > 0 && <span aria-hidden className="mr-1 h-px w-2 bg-thread/50" />}
               <button
                 type="button"
                 onClick={() => setOpen(open === e.id ? null : e.id)}
-                aria-label={`${i + 1}. ${e.moment}${e.choiceKind ? " (used)" : " (asked)"}`}
-                title={e.moment}
-                className={`relative grid h-6 w-6 place-items-center rounded-full text-[11px] transition-colors ${open === e.id ? "ring-2 ring-thread/60" : ""} ${
+                aria-label={`${e.choiceKind === "branch" ? "Branch: " : ""}${e.choiceLabel || e.moment}${e.choiceKind ? " (used)" : " (asked)"}`}
+                title={e.choiceKind === "branch" ? `↳ ${e.choiceLabel || e.choice}` : e.moment}
+                className={`relative grid place-items-center rounded-full text-[11px] transition-colors ${depth > 0 ? "h-5 w-5" : "h-6 w-6"} ${open === e.id ? "ring-2 ring-thread/60" : ""} ${
                   e.choiceKind ? "bg-thread-soft text-thread" : "border border-line text-muted/70"
                 }`}
               >
-                {e.status === "extracting" ? <span className="h-2 w-2 animate-ping rounded-full bg-thread" /> : e.status === "failed" ? "!" : e.choiceKind === "own" ? "✎" : e.choiceKind ? "✓" : "·"}
+                {e.status === "extracting" ? <span className="h-2 w-2 animate-ping rounded-full bg-thread" /> : e.status === "failed" ? "!" : e.choiceKind === "branch" ? "↳" : e.choiceKind === "own" ? "✎" : e.choiceKind ? "✓" : "·"}
                 {e.questions.length > 0 && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-danger" />}
               </button>
             </li>
           ))}
         </ol>
         <div className="flex shrink-0 items-center gap-2 text-xs">
-          {questions > 0 && (
-            <button type="button" onClick={() => setOpen(entries.find((e) => e.questions.length)!.id)} className="rounded-full bg-danger/10 px-2 py-0.5 text-danger">
-              {questions} to check
-            </button>
-          )}
           <button type="button" onClick={() => setNoting(!noting)} className="text-muted hover:text-foreground" title="Log something that happened without asking Loom">
             + Note
           </button>
@@ -411,14 +505,14 @@ function Timeline({
 
       {noting && (
         <QuickNote
-          campaignId={campaignId}
+          campaignId={live.campaignId}
           onDone={async () => {
             setNoting(false);
-            await reload();
+            await live.reload();
           }}
         />
       )}
-      {shown && <EntryDetail entry={shown} onChange={reload} onClose={() => setOpen(null)} campaignId={campaignId} model={model} tone={tone} />}
+      {shown && <EntryDetail entry={shown} live={live} onClose={() => setOpen(null)} onOpen={setOpen} />}
     </section>
   );
 }
@@ -459,13 +553,14 @@ function QuickNote({ campaignId, onDone }: { campaignId: number; onDone: () => v
   );
 }
 
-function EntryDetail({ entry, onChange, onClose, campaignId, model, tone }: { entry: Entry; onChange: () => Promise<unknown>; onClose: () => void; campaignId: number; model: Model; tone: number }) {
+function EntryDetail({ entry, live, onClose, onOpen }: { entry: Entry; live: Live; onClose: () => void; onOpen: (id: number) => void }) {
   const [busy, setBusy] = useState(false);
+  const parent = live.entries.find((e) => e.id === entry.parentId);
   const takeBack = async () => {
     setBusy(true);
     try {
       await post("/api/live/clear", { entryId: entry.id });
-      await onChange();
+      await live.reload();
     } finally {
       setBusy(false);
     }
@@ -473,7 +568,18 @@ function EntryDetail({ entry, onChange, onClose, campaignId, model, tone }: { en
   return (
     <div className="rise mt-2 rounded-xl border border-line bg-surface p-3 text-sm">
       <div className="flex items-start justify-between gap-3">
-        <p className="italic text-muted">{entry.moment}</p>
+        <p className="italic text-muted">
+          {parent ? (
+            <>
+              ↳ from{" "}
+              <button type="button" onClick={() => onOpen(parent.id)} className="underline decoration-dotted underline-offset-2 hover:text-foreground">
+                {parent.choiceLabel || parent.moment}
+              </button>
+            </>
+          ) : (
+            <Linked text={entry.moment} />
+          )}
+        </p>
         <button type="button" onClick={onClose} aria-label="Close" className="text-muted hover:text-foreground">
           ×
         </button>
@@ -482,15 +588,16 @@ function EntryDetail({ entry, onChange, onClose, campaignId, model, tone }: { en
         <>
           <p className="mt-1.5">
             {entry.choiceLabel && <span className="mr-1.5 text-[12px] font-semibold uppercase tracking-wide">{entry.choiceLabel}</span>}
-            {entry.choice}
+            <Linked text={entry.choice} />
           </p>
-          <LoomStatus entry={entry} onAnswer={onChange} />
-          <div className="mt-2 flex flex-wrap gap-3 text-xs">
-            <DevelopToggle base={{ campaignId, moment: entry.moment, label: entry.choiceLabel, text: entry.choice, threadIds: [], model, tone }} />
+          <LoomStatus entry={entry} />
+          <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
+            <DevelopToggle live={live} base={{ moment: entry.moment, label: entry.choiceLabel, text: entry.choice, threadIds: [] }} parent={async () => entry.id} saved={entry.developments} />
             <button type="button" onClick={takeBack} disabled={busy} className="text-muted hover:text-foreground disabled:opacity-40">
               Take back (undo what it added)
             </button>
           </div>
+          <Branches parent={entry} live={live} onOpen={onOpen} />
         </>
       ) : (
         <p className="mt-1.5 text-xs text-muted">Asked, nothing used.</p>
@@ -499,53 +606,61 @@ function EntryDetail({ entry, onChange, onClose, campaignId, model, tone }: { en
   );
 }
 
-// What using a choice did to the loom, and anything Loom needs to check.
-function LoomStatus({ entry, onAnswer }: { entry: Entry; onAnswer: () => Promise<unknown> | void }) {
-  const [busy, setBusy] = useState<number | null>(null);
-  if (entry.status === "extracting") return <p className="mt-3 animate-pulse text-xs text-muted">Adding to the loom…</p>;
-  if (entry.status === "failed") return <p className="mt-3 text-xs text-danger">Couldn&apos;t add this to the loom. It&apos;s still in the session log for wrap-up.</p>;
-  if (entry.status !== "done") return null;
+// What grew from a choice: the branches you continued with.
+function Branches({ parent, live, onOpen }: { parent: Entry; live: Live; onOpen?: (id: number) => void }) {
+  const kids = live.entries.filter((e) => e.parentId === parent.id);
+  if (!kids.length) return null;
   return (
-    <div className="mt-3 space-y-2">
-      <p className="text-xs text-muted">
-        {entry.summary.length ? (
-          <>
-            <span className="text-thread">Added to the loom:</span> {entry.summary.join(" · ")}
-          </>
-        ) : (
-          "Logged. Nothing new for the loom."
-        )}
-      </p>
-      {entry.questions.map((q) => (
-        <div key={q.n} className="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2">
-          <p className="text-[13px]">
-            <span className="text-muted">{q.group}: </span>
-            {q.summary}
-          </p>
-          <p className="mt-0.5 text-xs text-muted">{q.reasons.join(" · ")}</p>
-          <div className="mt-1.5 flex gap-2 text-xs">
-            {[true, false].map((yes) => (
-              <button
-                key={String(yes)}
-                type="button"
-                disabled={busy !== null}
-                onClick={async () => {
-                  setBusy(q.n);
-                  try {
-                    await post("/api/live/answer", { entryId: entry.id, n: q.n, yes });
-                    await onAnswer();
-                  } finally {
-                    setBusy(null);
-                  }
-                }}
-                className={`rounded-md px-2.5 py-0.5 ${yes ? "bg-foreground text-background" : "border border-line"} disabled:opacity-40`}
-              >
-                {yes ? "Yes, record it" : "No"}
-              </button>
+    <div className="mt-3 border-l-2 border-thread/40 pl-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Continued with</p>
+      <ul className="mt-1 space-y-2">
+        {kids.map((k) => (
+          <li key={k.id} className="text-[14px]">
+            <span className="text-thread">↳ </span>
+            {k.choiceLabel && <span className="mr-1 font-medium">{k.choiceLabel}.</span>}
+            <Linked text={k.choice} />
+            <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
+              <LoomStatus entry={k} compact />
+              {onOpen ? (
+                <button type="button" onClick={() => onOpen(k.id)} className="text-muted hover:text-foreground">
+                  Open
+                </button>
+              ) : (
+                <DevelopToggle live={live} base={{ moment: parent.choice || parent.moment, label: k.choiceLabel, text: k.choice, threadIds: [] }} parent={async () => k.id} saved={k.developments} />
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// What using a choice did to the loom. Questions live in the tray above the box.
+function LoomStatus({ entry, compact = false }: { entry: Entry; compact?: boolean }) {
+  if (entry.status === "extracting") return <p className={`${compact ? "" : "mt-3"} animate-pulse text-xs text-muted`}>Adding to the loom…</p>;
+  if (entry.status === "failed") return <p className={`${compact ? "" : "mt-3"} text-xs text-danger`}>Couldn&apos;t add this to the loom. It&apos;s still in the session log for wrap-up.</p>;
+  if (entry.status !== "done") return null;
+  if (compact) return <span className="text-xs text-muted">{entry.summary.length ? `${entry.summary.length} added to the loom` : "Logged"}{entry.questions.length ? ` · ${entry.questions.length} to answer above` : ""}</span>;
+  return (
+    <div className="mt-3 text-xs text-muted">
+      {entry.summary.length ? (
+        <details>
+          <summary className="cursor-pointer">
+            <span className="text-thread">Added to the loom:</span> {entry.summary.length} change{entry.summary.length === 1 ? "" : "s"}
+            {entry.questions.length ? ` · ${entry.questions.length} waiting for your answer above` : ""}
+          </summary>
+          <ul className="mt-1 space-y-0.5 pl-3">
+            {entry.summary.map((s, i) => (
+              <li key={i}>
+                <Linked text={s} />
+              </li>
             ))}
-          </div>
-        </div>
-      ))}
+          </ul>
+        </details>
+      ) : (
+        <>Logged. Nothing new for the loom.{entry.questions.length ? ` ${entry.questions.length} waiting for your answer above.` : ""}</>
+      )}
     </div>
   );
 }
@@ -558,14 +673,20 @@ function OptionCard({
   state,
   canUse,
   onUse,
-  develop,
+  live,
+  moment,
+  parent,
+  saved,
 }: {
   card: Card;
   n: number;
   state: "open" | "used" | "other";
   canUse: boolean;
   onUse: () => void;
-  develop: { campaignId: number; moment: string; model: Model; tone: number } | null;
+  live: Live;
+  moment: string;
+  parent: () => Promise<number | null>;
+  saved?: Plan[];
 }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -590,15 +711,10 @@ function OptionCard({
           {copied ? "Copied" : "Copy"}
         </button>
       </div>
-      <p className="text-[15.5px] leading-relaxed">{card.text}</p>
-      <div className="mt-3 flex flex-wrap items-center gap-1.5">
-        {card.threads.map((t) => (
-          <span key={t.id} className="rounded-full bg-thread-soft px-2.5 py-0.5 text-xs text-thread">
-            {t.title}
-          </span>
-        ))}
-        {card.callback && <span className="rounded-full border border-thread/40 px-2.5 py-0.5 text-xs text-thread">⟲ {card.callback.title}</span>}
-      </div>
+      <p className="story leading-relaxed">
+        <Linked text={card.text} />
+      </p>
+      <RefChips refs={[...threadRefs(card.threads), ...(card.callback ? [{ kind: "moment" as const, id: card.callback.id, name: `⟲ ${card.callback.title}` }] : [])]} />
       {card.why && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
       <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
         {state !== "used" ? (
@@ -608,13 +724,13 @@ function OptionCard({
         ) : (
           <span className="text-xs text-thread">Used</span>
         )}
-        {develop && <DevelopToggle base={{ ...develop, label: card.label, text: card.text, threadIds: card.threads.map((t) => t.id) }} />}
+        <DevelopToggle live={live} base={{ moment, label: card.label, text: card.text, threadIds: card.threads.map((t) => t.id) }} parent={parent} saved={saved} />
       </div>
     </li>
   );
 }
 
-function OwnChoice({ entry, onSave }: { entry: Entry; onSave: (text: string) => Promise<void> }) {
+function OwnChoice({ entry, onSave }: { entry: Entry; onSave: (text: string) => Promise<unknown> }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState(entry.choiceKind === "own" ? entry.choice : "");
   const [busy, setBusy] = useState(false);
@@ -624,7 +740,9 @@ function OwnChoice({ entry, onSave }: { entry: Entry; onSave: (text: string) => 
         <p className="text-[13px] font-semibold uppercase tracking-wide">
           <span className="mr-2 text-thread">✎</span>Your own
         </p>
-        <p className="mt-1 text-[15.5px] leading-relaxed">{entry.choice}</p>
+        <p className="story mt-1 leading-relaxed">
+          <Linked text={entry.choice} />
+        </p>
         <button type="button" onClick={() => setOpen(true)} className="mt-2 text-xs text-muted hover:text-foreground">
           Edit
         </button>
@@ -670,36 +788,41 @@ function OwnChoice({ entry, onSave }: { entry: Entry; onSave: (text: string) => 
   );
 }
 
-// ---------- develop ----------
+// ---------- develop: a branch you can keep following ----------
 
-interface Plan {
-  reach: string;
-  intro: string;
-  setups: { title: string; text: string; threads: { id: number; title: string }[] }[];
-  directions: { title: string; text: string; threads: { id: number; title: string }[] }[];
-  llm: { model: string; seconds: number; costUsd: number };
-}
-
-function DevelopToggle({ base }: { base: { campaignId: number; moment: string; label: string; text: string; threadIds: number[]; model: Model; tone: number } }) {
+function DevelopToggle({
+  live,
+  base,
+  parent,
+  saved,
+  depth = 0,
+}: {
+  live: Live;
+  base: { moment: string; label: string; text: string; threadIds: number[] };
+  parent: () => Promise<number | null>; // the logged entry this grows from (logging it first if needed)
+  saved?: Plan[];
+  depth?: number;
+}) {
   const [open, setOpen] = useState(false);
   const [reach, setReach] = useState(() => {
-    const saved = Number(store.get("loom.reach"));
-    return saved >= 0 && saved <= 3 ? saved : 1;
+    const s = Number(store.get("loom.reach"));
+    return s >= 0 && s <= 3 ? s : 1;
   });
-  const [plan, setPlan] = useState<Plan | null>(null);
+  const [fresh, setFresh] = useState<Plan | null>(null);
+  const plan = fresh ?? saved?.at(-1) ?? null;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const elapsed = useElapsed(busy);
   if (!open)
     return (
       <button type="button" onClick={() => setOpen(true)} className="text-xs text-muted hover:text-foreground sm:text-sm">
-        Develop ↳
+        Develop ↳{saved?.length ? <span className="ml-1 text-thread">·</span> : null}
       </button>
     );
   return (
     <div className="rise mt-1 w-full basis-full rounded-xl border border-line bg-background p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <Slider
+        <Steps
           label="How far ahead"
           steps={REACH}
           value={reach}
@@ -719,7 +842,9 @@ function DevelopToggle({ base }: { base: { campaignId: number; moment: string; l
               setBusy(true);
               setError("");
               try {
-                setPlan(await post<Plan>("/api/develop", { ...base, model: undefined, reach }));
+                const entryId = await parent();
+                setFresh(await post<Plan>("/api/develop", { campaignId: live.campaignId, ...base, reach, tone: live.tone, entryId: entryId ?? undefined }));
+                await live.reload();
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Something went wrong.");
               } finally {
@@ -728,16 +853,16 @@ function DevelopToggle({ base }: { base: { campaignId: number; moment: string; l
             }}
             className="rounded-lg bg-foreground px-3 py-1 text-background disabled:opacity-40"
           >
-            {busy ? `Planning… ${elapsed} s` : plan ? "Again" : "Develop"}
+            {busy ? `Planning… ${elapsed} s` : plan ? "Develop again" : "Develop"}
           </button>
         </div>
       </div>
       {error && <p className="mt-2 text-xs text-danger">{error}</p>}
       {plan && (
         <div className="mt-3 space-y-3 text-[14.5px]">
-          <blockquote className="border-l-2 border-thread pl-3 leading-relaxed">{plan.intro}</blockquote>
-          <PlanList title="Set up" items={plan.setups} />
-          <PlanList title="Where it could lead" items={plan.directions} />
+          <PlanItem live={live} parent={parent} depth={depth} from={base} item={{ title: "Opening", text: plan.intro, threads: [] }} quote />
+          <PlanList title="Set up" items={plan.setups} live={live} parent={parent} depth={depth} from={base} />
+          <PlanList title="Where it could lead" items={plan.directions} live={live} parent={parent} depth={depth} from={base} />
           <p className="text-xs text-muted">
             {plan.reach} · {plan.llm.model.replace(/^claude-/, "")} · {plan.llm.seconds.toFixed(0)} s · ${plan.llm.costUsd.toFixed(3)}
           </p>
@@ -747,18 +872,80 @@ function DevelopToggle({ base }: { base: { campaignId: number; moment: string; l
   );
 }
 
-function PlanList({ title, items }: { title: string; items: Plan["setups"] }) {
+function PlanList({ title, items, ...rest }: { title: string; items: Plan["setups"]; live: Live; parent: () => Promise<number | null>; depth: number; from: { moment: string; text: string } }) {
   return (
     <div>
       <h3 className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-muted">{title}</h3>
-      <ul className="space-y-2">
+      <div className="space-y-3">
         {items.map((s) => (
-          <li key={s.title}>
-            <span className="font-medium">{s.title}.</span> {s.text}
-            <Chips threads={s.threads} />
-          </li>
+          <PlanItem key={s.title} item={s} {...rest} />
         ))}
-      </ul>
+      </div>
+    </div>
+  );
+}
+
+// One piece of a development: use it (it joins the session as a branch) or keep developing from it.
+function PlanItem({
+  item,
+  live,
+  parent,
+  depth,
+  from,
+  quote = false,
+}: {
+  item: Plan["setups"][number];
+  live: Live;
+  parent: () => Promise<number | null>;
+  depth: number;
+  from: { moment: string; text: string };
+  quote?: boolean;
+}) {
+  const [branchId, setBranchId] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const branch = live.entries.find((e) => e.id === branchId);
+  const continueWith = async () => {
+    setBusy(true);
+    try {
+      const p = await parent();
+      if (!p) return null;
+      const r = await post<{ entry: Entry }>("/api/live/branch", { parentId: p, label: item.title, text: item.text });
+      setBranchId(r.entry.id);
+      await live.reload();
+      live.focusBox("What happened next?");
+      return r.entry.id;
+    } finally {
+      setBusy(false);
+    }
+  };
+  const Body = (
+    <>
+      {!quote && <span className="font-medium">{item.title}. </span>}
+      <Linked text={item.text} />
+    </>
+  );
+  return (
+    <div>
+      {quote ? <blockquote className="story border-l-2 border-thread pl-3 leading-relaxed">{Body}</blockquote> : <p className="story leading-relaxed">{Body}</p>}
+      <RefChips refs={threadRefs(item.threads)} />
+      <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs">
+        {branch ? (
+          <span className="text-thread">↳ Continued with this{branch.status === "extracting" ? " · adding to the loom…" : ""}</span>
+        ) : (
+          <button type="button" disabled={busy} onClick={continueWith} className="rounded-md border border-line px-2.5 py-0.5 font-medium hover:border-thread/60 disabled:opacity-40">
+            {busy ? "Logging…" : "Use this ↳"}
+          </button>
+        )}
+        {depth < 4 && (
+          <DevelopToggle
+            live={live}
+            base={{ moment: from.text, label: item.title, text: item.text, threadIds: item.threads.map((t) => t.id) }}
+            parent={async () => branchId ?? (await continueWith())}
+            saved={branch?.developments}
+            depth={depth + 1}
+          />
+        )}
+      </div>
     </div>
   );
 }

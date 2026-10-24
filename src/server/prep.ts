@@ -3,7 +3,7 @@ import { and, desc, eq, isNull } from "drizzle-orm";
 import { db, schema } from "@/core/db/client";
 import { applyProposal, newBatch, proposeRecapChanges, type ProposalFile } from "@/core/recap";
 import { reviewProposal, splitRisky } from "@/core/review";
-import { draftNotes, liveEntries, wrapLiveSession } from "@/core/live";
+import { draftNotes, liveEntries, NOTED, wrapLiveSession } from "@/core/live";
 import { suggest } from "@/core/suggest";
 import { recentBatches, undoBatch } from "@/core/undo";
 
@@ -39,6 +39,10 @@ export async function liveSummary(campaignId: number) {
     used: used.length,
     changes: used.reduce((n, e) => n + e.summary.length, 0),
     openQuestions: entries.reduce((n, e) => n + e.questions.filter((q) => !q.answer).length, 0),
+    // Asked first at wrap-up: a session shouldn't close with risky changes still undecided.
+    questions: entries.flatMap((e) =>
+      e.questions.filter((q) => !q.answer).map((q) => ({ entryId: e.id, from: e.choiceLabel || (e.moment === NOTED ? "your note" : e.moment), n: q.n, group: q.group, summary: q.summary, reasons: q.reasons, evidence: q.evidence })),
+    ),
     draft: await draftNotes(campaignId),
   };
 }
@@ -47,6 +51,7 @@ export async function proposeRecap(campaignId: number, recap: string, sessionNum
   const live = await liveSummary(campaignId);
   const number = sessionNumber ?? live?.session ?? (await nextSessionNumber(campaignId));
   const wrapping = live && live.session === number && live.used > 0;
+  if (wrapping && live.openQuestions) throw new Error(`Answer the ${live.openQuestions} open question${live.openQuestions === 1 ? "" : "s"} first.`);
   // Wrapping up a session played with Loom: only what wasn't logged is extracted, and the stored
   // notes are the log plus these additions.
   const res = await proposeRecapChanges(campaignId, recap, undefined, wrapping ? { alreadyRecorded: live.draft } : {});
@@ -86,6 +91,7 @@ export async function applyRecap(campaignId: number, sessionNumber: number, skip
 export async function wrapWithoutAdding(campaignId: number) {
   const live = await liveSummary(campaignId);
   if (!live) throw new Error("There's no session in progress to wrap up.");
+  if (live.openQuestions) throw new Error(`Answer the ${live.openQuestions} open question${live.openQuestions === 1 ? "" : "s"} first.`);
   const notes = `At the table (logged by Loom):\n${live.draft}`;
   const [existing] = await db
     .select()

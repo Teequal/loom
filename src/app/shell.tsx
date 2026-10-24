@@ -124,7 +124,7 @@ export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
       ) : (
         <select
           aria-label="Campaign"
-          className="max-w-[60%] truncate rounded-md border border-line bg-surface px-2 py-1 text-sm text-muted"
+          className="quiet max-w-[60%] truncate rounded-md border border-line bg-surface py-1 pl-2.5 text-sm text-muted outline-none hover:text-foreground focus:border-thread/60"
           value={c.campaignId ?? ""}
           onChange={(e) => (e.target.value === "new" ? setNaming(true) : c.select(Number(e.target.value)))}
         >
@@ -140,21 +140,20 @@ export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
   );
 }
 
-export function Note({ children, tone = "muted" }: { children: React.ReactNode; tone?: "muted" | "danger" }) {
-  return <p className={`mb-2 rounded-lg border border-line bg-surface px-3 py-2 text-[13px] ${tone === "danger" ? "text-danger" : "text-muted"}`}>{children}</p>;
+// A change batch's label ("recap s3 2026-10-24 12:51 #e4") as a person would say it.
+export function batchLabel(batch: string) {
+  const m = batch.match(/^(recap|live|enrich)(?: s(\d+))? (?:(\d{4})-(\d\d)-(\d\d) )?(\d\d:\d\d)/);
+  if (!m) return batch;
+  const [, kind, session, , month, day, time] = m;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const when = day ? `${Number(day)} ${months[Number(month) - 1]}, ${time}` : time;
+  if (kind === "live") return `At the table, session ${session} · ${when}`;
+  if (kind === "enrich") return `Details read from all notes · ${when}`;
+  return `Session ${session} notes · ${when}`;
 }
 
-export function Chips({ threads }: { threads: { id: number; title: string }[] }) {
-  if (!threads.length) return null;
-  return (
-    <div className="mt-3 flex flex-wrap gap-1.5">
-      {threads.map((t) => (
-        <span key={t.id} className="rounded-full bg-thread-soft px-2.5 py-0.5 text-xs text-thread">
-          {t.title}
-        </span>
-      ))}
-    </div>
-  );
+export function Note({ children, tone = "muted" }: { children: React.ReactNode; tone?: "muted" | "danger" }) {
+  return <p className={`mb-2 rounded-lg border border-line bg-surface px-3 py-2 text-[13px] ${tone === "danger" ? "text-danger" : "text-muted"}`}>{children}</p>;
 }
 
 // Seconds since `running` became true: long model calls say how long they've been going.

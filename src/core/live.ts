@@ -11,6 +11,7 @@ import { undoBatch } from "./undo";
 // wait as questions. Wrap-up turns the log into the session's notes.
 
 type Entry = typeof schema.liveEntries.$inferSelect;
+export const NOTED = "(noted by the GM)"; // the moment of a note logged without asking Loom
 
 // The session being played: the one with unwrapped entries, or the next one.
 export async function liveSessionNumber(campaignId: number) {
@@ -59,10 +60,55 @@ export async function sessionSoFar(campaignId: number, limit = 8) {
     .join("\n");
 }
 
-// The session's notes as drafted from the log: what the players did and what happened.
+// The session's notes as drafted from the log: what the players did and what happened, with
+// anything developed from a choice indented under it (the session as a tree).
 export async function draftNotes(campaignId: number) {
   const entries = (await liveEntries(campaignId)).filter((e) => e.choiceKind);
-  return entries.map((e) => `- ${e.moment}\n  What happened: ${e.choice}`).join("\n");
+  const ids = new Set(entries.map((e) => e.id));
+  const children = new Map<number, Entry[]>();
+  for (const e of entries) if (e.parentId != null && ids.has(e.parentId)) children.set(e.parentId, [...(children.get(e.parentId) ?? []), e]);
+  const lines: string[] = [];
+  const walk = (e: Entry, depth: number) => {
+    const pad = "  ".repeat(depth);
+    lines.push(
+      e.choiceKind === "branch"
+        ? `${pad}- Then: ${e.choice}`
+        : e.moment === NOTED
+          ? `${pad}- ${e.choice}`
+          : `${pad}- ${e.moment}\n${pad}  What happened: ${e.choice}`,
+    );
+    for (const c of children.get(e.id) ?? []) walk(c, depth + 1);
+  };
+  for (const e of entries) if (e.parentId == null || !ids.has(e.parentId)) walk(e, 0);
+  return lines.join("\n");
+}
+
+// A development the GM picked to continue from: logged as a child of the choice it grew from,
+// then extracted like any other choice.
+export async function logBranch(parentId: number, choice: { label: string; text: string }) {
+  const [parent] = await db.select().from(schema.liveEntries).where(eq(schema.liveEntries.id, parentId));
+  if (!parent) throw new Error("That moment isn't in the log any more.");
+  const [e] = await db
+    .insert(schema.liveEntries)
+    .values({
+      campaignId: parent.campaignId,
+      sessionNumber: parent.sessionNumber,
+      parentId,
+      moment: `Continuing from “${parent.choiceLabel || clip(parent.choice || parent.moment, 60)}”`,
+      choiceKind: "branch",
+      choiceLabel: choice.label,
+      choice: choice.text,
+      status: "extracting",
+    })
+    .returning();
+  return e;
+}
+
+// Develop results are kept on the entry they grew from, so the tree survives a reload.
+export async function saveDevelopment(entryId: number, plan: unknown) {
+  const [e] = await db.select().from(schema.liveEntries).where(eq(schema.liveEntries.id, entryId));
+  if (!e) return;
+  await db.update(schema.liveEntries).set({ developments: [...e.developments, plan].slice(-5) }).where(eq(schema.liveEntries.id, entryId));
 }
 
 const proposalPath = (e: Entry) => `data/proposals/live-c${e.campaignId}-e${e.id}.json`;
@@ -109,17 +155,21 @@ async function runExtraction(e: Entry) {
     mkdirSync("data/proposals", { recursive: true });
     writeFileSync(proposalPath(e), JSON.stringify(file, null, 2));
     const reviewed = await reviewProposal(file);
-    const must = reviewed.filter((r) => r.tier === "must");
+    // With auto-approve on, risky changes go in too, as the GM's own entries (still undoable).
+    const [camp] = await db.select({ auto: schema.campaigns.autoApprove }).from(schema.campaigns).where(eq(schema.campaigns.id, e.campaignId));
+    const auto = !!camp?.auto;
+    const must = auto ? [] : reviewed.filter((r) => r.tier === "must");
     const batch = `live s${e.sessionNumber} ${stamp()} #e${e.id}`;
-    const applied = reviewed.filter((r) => r.tier !== "must");
-    if (applied.length) await applyProposal(file, new Set(must.map((r) => r.item.n)), batch);
+    const applied = reviewed.filter((r) => auto || r.tier !== "must");
+    const confirmed = new Set(auto ? reviewed.filter((r) => r.tier === "must").map((r) => r.item.n) : []);
+    if (applied.length) await applyProposal(file, new Set(must.map((r) => r.item.n)), batch, confirmed);
     await db
       .update(schema.liveEntries)
       .set({
         status: "done",
         batch,
         // "Threads" items already say which thread; details need to say whose.
-        summary: applied.map((r) => (r.group === "Threads" ? r.summary : `${r.group}: ${r.summary}`)),
+        summary: applied.map((r) => `${r.group === "Threads" ? "" : `${r.group}: `}${r.summary}${confirmed.has(r.item.n) ? " (auto-approved)" : ""}`),
         questions: must.map((r) => ({ n: r.item.n, group: r.group, summary: r.summary, reasons: r.reasons, evidence: r.evidence, answer: null })),
       })
       .where(eq(schema.liveEntries.id, e.id));
