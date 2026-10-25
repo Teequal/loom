@@ -39,6 +39,34 @@ export async function post<T>(url: string, body: unknown): Promise<T> {
   return json as T;
 }
 
+/**
+ * POSTs and reads a newline-JSON stream, calling onEvent for each line as it arrives. Resolves with
+ * the closing {type:"done"} event; an {type:"error"} line throws its message.
+ */
+export async function stream<T = Record<string, unknown>>(url: string, body: unknown, onEvent: (e: { type: string } & Record<string, unknown>) => void, signal?: AbortSignal): Promise<T> {
+  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
+  if (!res.ok || !res.body) throw new Error((await res.json().catch(() => ({}))).error ?? "Something went wrong.");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let done: T | null = null;
+  for (;;) {
+    const { value, done: finished } = await reader.read();
+    if (finished) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines.filter(Boolean)) {
+      const event = JSON.parse(line);
+      if (event.type === "error") throw new Error(event.message);
+      if (event.type === "done") done = event as T;
+      else onEvent(event);
+    }
+  }
+  if (!done) throw new Error("Something went wrong.");
+  return done;
+}
+
 export function useCampaigns() {
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignId, setId] = useState<number | null>(null);

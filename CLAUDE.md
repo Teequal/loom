@@ -498,7 +498,22 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - `streamRoute` in `src/server/route.ts` is the shared newline-JSON route helper.
         - **Tested through the API (sample campaign):** develop, darker, lighter, swap from step 2, own words, Back, another take (a different move: a collision). 184/184 checks.
         - **Seen:** on Quick, darker and lighter change little, and the model can copy the old wording; Balanced may suit reworks better (to try on the page).
-      - [ ] Step 3: the page. [ ] Step 4: measure with Jacob's ticks. [ ] Step 5: docs.
+      - [x] **Step 3: the page** (`src/app/develop.tsx`, `Develop`; replaces `DevelopToggle` on option cards, logged choices and branches).
+        - **Steer first:** "How do you want to take this?" with six chips and a line for your own words. Nothing is written until you pick. Once the entry is logged, Loom's suggestion is ringed (`/api/develop/suggest`). Developing an unused option uses it first, as before.
+        - **The chain:** numbered steps on one line, each with its joining words ("On a success", "If they push the vial back…") in small caps above it, streamed in as they're written. Then the threads, the why, and one refine row: Shorter · Darker · Lighter · Bring in… · Say how · Back. Under that, "Another take", then model, time and cost.
+        - **Each step:** **Use this step** (later steps read "Use steps 1–N" and log the earlier ones first, each a child of the last); **Swap from here**; once used, ✓ Used, **Develop** from that step (nested up to 5), and the fight panel on a fight step.
+        - The chosen steer folds to one line ("A heartfelt moment · Change · Close"). Chains survive a reload. Older plans show read-only under "Developed before (older layout)".
+        - **Settings:** "Develop writes 1 / 2 / 3 takes" (`developOptions`, default 1) replaces Develop's starting reach.
+        - **Removed:** the Open / Set up / Lead to picker, the reach slider, per-piece rework, and `src/core/develop.ts` with its routes (`/api/develop`, `/ideas`, `/keep`, `/rework`) and model entries.
+        - `stream()` in `shell.tsx` reads any newline-JSON route.
+        - **Tested in the browser (sample campaign):**
+          - From an unused option: heartfelt, a 2-step chain in 5.7 s ($0.001). Darker replaced it in place, with Back.
+          - "Use steps 1–2" logged both steps in order. A reload brought everything back.
+          - A nested Develop from step 2 ringed "An epic scene"; own words ("while they wait for the cure to brew overnight") gave a chain that follows step 2's choice.
+          - Two takes: the first chain at 2.9 s, both by 5.9 s ($0.0014).
+          - Phone width fits. 184/184 checks.
+        - **Seen:** after using steps, the "Continued with" list under the card repeats the first step. On Quick, darker and lighter change little.
+      - [ ] Step 4: measure with Jacob's ticks. [ ] Step 5: docs.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

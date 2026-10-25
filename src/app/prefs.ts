@@ -17,22 +17,22 @@ export interface Prefs {
   tone: number; // 0 grounded … 4 theatrical
   mix: MixId; // the kinds of option
   why: boolean; // show the "why this fits" line on options
-  reach: number; // Develop's default reach: 0 next few minutes … 3 the arc
+  developOptions: number; // how many chains Develop writes (1-3)
 }
 
-export const DEFAULT_PREFS: Prefs = { chips: "chips", model: "haiku", tone: 1, mix: "mix", why: true, reach: 1 };
+export const DEFAULT_PREFS: Prefs = { chips: "chips", model: "haiku", tone: 1, mix: "mix", why: true, developOptions: 1 };
 
 export function resetPrefs() {
   for (const k of Object.keys(DEFAULT_PREFS) as (keyof Prefs)[]) setPref(k, DEFAULT_PREFS[k]);
 }
 
-const KEYS: { [K in keyof Prefs]: string } = { chips: "loom.chips", model: "loom.model", tone: "loom.tone", mix: "loom.mix", why: "loom.why", reach: "loom.reach" };
+const KEYS: { [K in keyof Prefs]: string } = { chips: "loom.chips", model: "loom.model", tone: "loom.tone", mix: "loom.mix", why: "loom.why", developOptions: "loom.developOptions" };
 
 export function readPrefs(): Prefs {
   const get = (k: keyof Prefs) => store.get(KEYS[k]);
-  const num = (k: "tone" | "reach", max: number) => {
+  const num = (k: "tone" | "developOptions", max: number, min = 0) => {
     const v = Number(get(k));
-    return get(k) !== null && Number.isInteger(v) && v >= 0 && v <= max ? v : DEFAULT_PREFS[k];
+    return get(k) !== null && Number.isInteger(v) && v >= min && v <= max ? v : DEFAULT_PREFS[k];
   };
   const oneOf = <T extends string>(k: keyof Prefs, allowed: readonly T[], d: T) => (allowed.includes(get(k) as T) ? (get(k) as T) : d);
   return {
@@ -41,7 +41,7 @@ export function readPrefs(): Prefs {
     tone: num("tone", 4),
     mix: oneOf("mix", ["mix", "fights", "mystery", "light", "character"] as const, DEFAULT_PREFS.mix),
     why: get("why") === null ? DEFAULT_PREFS.why : get("why") === "1",
-    reach: num("reach", 3),
+    developOptions: num("developOptions", 3, 1),
   };
 }
 

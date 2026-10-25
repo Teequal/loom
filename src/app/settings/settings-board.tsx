@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Choice, Field, Steps, Switch } from "../controls";
 import { Icon } from "../icons";
-import { MIXES, MODELS, REACH, TONES } from "../improv-box";
+import { MIXES, MODELS, TONES } from "../improv-box";
 import { type ChipsMode, resetPrefs, setPref, usePrefs } from "../prefs";
 import { Header, Note, useCampaigns } from "../shell";
 
@@ -79,8 +79,18 @@ export function SettingsBoard() {
         </Section>
 
         <Section title="Planning ahead">
-          <Field label="Develop starts at">
-            <Steps label="Develop starts at" steps={REACH} value={p.reach} onChange={(v) => setPref("reach", v)} />
+          <Field label="Develop writes">
+            <Choice
+              label="Develop writes"
+              options={[
+                { id: "1", label: "1 take" },
+                { id: "2", label: "2 takes" },
+                { id: "3", label: "3 takes" },
+              ]}
+              value={String(p.developOptions)}
+              onChange={(v) => setPref("developOptions", Number(v))}
+            />
+            <p className="mt-1 text-xs text-muted">How many versions Develop offers at once. You can always ask for another take.</p>
           </Field>
         </Section>
 
