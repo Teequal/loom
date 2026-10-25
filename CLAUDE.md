@@ -513,7 +513,20 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
           - Two takes: the first chain at 2.9 s, both by 5.9 s ($0.0014).
           - Phone width fits. 184/184 checks.
         - **Seen:** after using steps, the "Continued with" list under the card repeats the first step. On Quick, darker and lighter change little.
-      - [ ] Step 4: measure with Jacob's ticks. [ ] Step 5: docs.
+      - [ ] **Step 4: measure.** Blind run 1, Claude's own ticks (26 Oct; `data/runs/2026-10-26-develop-blind-1.md`, chains for Jacob's ticks in `…-chains.md`). 46 chains: 5 moments × 3 steers × 3 models, plus 1 more. Planned 72; the API credit ran out.
+
+        | Model | Would use | Cost per chain | Time (first step) | No chain |
+        |---|---|---|---|---|
+        | Haiku | 3/16 (19%) | $0.0012 | 4.6 s (3.4 s) | 0 |
+        | Sonnet | 14/15 (93%) | $0.027 | 8.1 s (4.7 s) | 0 |
+        | Opus | 12/15 (80%) | $0.051 | 9.2 s (5.6 s) | 2 (stream cut off) |
+
+        - Haiku's chains are thin: 7 of 16 have a step that's only a sensation and a question, and 3 miss the steer. Unlike improv, Haiku isn't good enough for Develop.
+        - 5 calls stalled 6–16 minutes while the Mac slept (left out of the times). **`callLlm` has no stall timeout**, so a dropped connection hangs indefinitely.
+        - Faults that got past the checks: a PC's feelings narrated in world sentences (3), a wrong possessive reference (1), continuity (4), an undeclared roll (1).
+        - **Proposed:** Develop on Sonnet by default (Opus when the table is on Best); a stall timeout with one retry on every call.
+        - Waiting for Jacob's own ticks.
+      - [ ] Step 5: docs.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 
