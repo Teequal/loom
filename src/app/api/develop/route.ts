@@ -14,6 +14,7 @@ export const POST = jsonRoute(
     tone: z.number().int().min(0).max(4).optional(),
     model: z.enum(["haiku", "sonnet", "opus"]).optional(),
     entryId: z.number().int().positive().optional(), // the logged choice this develops; the result is kept on it
+    picks: z.array(z.object({ part: z.enum(["open", "setup", "lead"]), headline: z.string().max(200) })).max(6).optional(),
   }),
   async ({ campaignId, model, entryId, ...input }) => {
     const plan = await develop(campaignId, input, model);

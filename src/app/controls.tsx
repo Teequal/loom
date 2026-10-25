@@ -39,7 +39,7 @@ export function Steps({ label, steps, value, onChange, marked }: { label: string
 // A choice of a few words: text tabs, the chosen one quietly raised.
 export function Choice<T extends string>({ label, options, value, onChange }: { label: string; options: readonly { id: T; label: string; hint?: string }[]; value: T; onChange: (v: T) => void }) {
   return (
-    <div role="radiogroup" aria-label={label} className="flex gap-0.5 rounded-lg bg-background p-0.5 text-[13px]">
+    <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-0.5 rounded-lg bg-background p-0.5 text-[13px]">
       {options.map((o) => (
         <button
           key={o.id}

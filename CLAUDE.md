@@ -319,6 +319,80 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - Results no longer repeat their outcome ("Partly. Partly.").
   - A roll instruction that colours the PC's effort ("Bram makes a death save as he tries to rise", in the sample campaign) is fine by Jacob; not a slip to fix.
 
+- [x] **Step 15: Less to read at the table, more to steer** (25 Oct; from a friend's test: "a little much reading all the scenarios").
+  - **Headlines first:** each option comes with a `headline` (under 12 words) and a `flavour` (payoff / twist / callback / character / tense / funny / mystery / fight). The table shows headline rows; tap one to read it in full. Swipe sideways, or use ‹ n/3 ›, to move between options; × goes back to the headlines. A headline that decides for the players falls back to the label.
+  - **The mix** (`MIXES` in `improv.ts`, "Kinds of option" in the tune panel): the default asks for one payoff, one twist, and one callback or character beat. Action / Mystery / Light / Character lean it.
+  - **Steering chips:** "Not quite?" darker · funnier · smaller stakes · bring in <someone from the threads in play>. One tap re-weaves the same moment (`steer`).
+  - **Develop in two steps** (Jacob's design: three sections, mix and match):
+    - `developIdeas` (Sonnet) gives three headlines each for Open, Set up and Lead to. The GM picks one per section (or skips a section).
+    - `develop` with `picks` writes only those out, in a readable layout: the opening as a large read-aloud quote, then Set up and Lead to.
+    - Each piece has **Rework** (More grounded / More dramatic / Darker / Funnier / Shorter, or "say how"; `reworkPiece`, Sonnet). A rework replaces that piece in the saved entry (`replaceLatestDevelopment`).
+  - **Start from a random hook** (`hook.ts`, Opus writes it, Sonnet reads it in): on an empty campaign's welcome, with optional fields for who's playing and any flavour (the button then reads "Invent the hook"). It writes a small premise as session 0 notes, reads it into the loom with everything applied, and shows the opening to read aloud, then Begin. After Begin the opening stays in view, quieter, until the first moment. Meant for non-DM testers standing in for brand-new DMs.
+  - **Out of credit:** a plain "Loom's AI credit has run out. Top up at console.anthropic.com…" everywhere, instead of "no options got past the checks". Improv stops retrying when this happens.
+  - **Live fixes:**
+    - Headlines sometimes narrated PCs ("Bram sings himself into danger", sample campaign). Prompt rule: a headline's subject is the world or an NPC. The fallback is now the first scaffold beat.
+    - `planSlips` catches pronoun clauses whose nearest named character is a PC ("…, and he tries to climb the toll gate").
+    - "Bring in <NPC>" was ignored, so the steer is now binding (every option brings them in, by arrival or from afar).
+    - Leaned mixes ask for three of four options in that flavour; streaming and ranking prefer options that fit. Still partly scene-dependent.
+    - The hook took 53 s and $0.15. With Sonnet reading it in, it takes ~28 s and ~$0.06.
+    - Duradan names ("Iresia…") were in the UI hint text for every campaign; replaced with generic wording.
+  - **Verified live** (throwaway campaigns, since deleted; desktop and phone width):
+    - The first headline arrives in ~3 s, all three by ~6–7 s. The default mix gave payoff, twist and character.
+    - Tap to open; ‹ n/3 › and swipe move between options. Darker and bring-in steers work.
+    - Develop ideas take ~5 s; writing out the picks ~7 s (~$0.017); a rework ~4 s, saved back.
+    - Hook start from the welcome: "The Lantern Fair Debt" (random) and "The Camel Who Knew Too Much" (desert caravan flavour).
+  - **Seen, not fixed:**
+    - One phone improv call took 13 s (retries).
+    - On a phone, a long headline title wraps to three lines beside the ‹ › controls.
+    - Entity names starting "The" keep the capital mid-sentence ("of The Ledger").
+  - **Review on the sample campaign (8 moments, before → after):**
+    - Headlines drifted from their option in ~6 of 22 (a "street mime" headline over a scribe offering a pen; "a stall-keeper" over a fishmonger). The cause: the headline was written before the option. It's now written after the hand-off, as a summary using the option's own characters and objects. After: 0 of 24 drifted, and every moment had 3 options (2 had only 2 before).
+    - `planSlips` catches contractions with an -ing word ("…, and he's already moving"); headlines can't say "walk-on".
+    - The fallback headline is never cut off with "…": it's the first beat, its first clause or the label, whichever fits in 13 words.
+    - Speed and cost unchanged: first option 2.3–5.1 s, all ~5–7 s, ~$0.0009 per call.
+    - **Hand-offs leave the choice to the player** (`checkHandOff` in `improv.ts`, plus a prompt line). Rejected: a roll that says what the PC does for it ("makes a reckless grab for the merchant's arm"); a roll or question that narrates the reaction ("; he feels no pain and keeps pushing", "…as he surfaces, grinning"); a question asking the players what an NPC does ("whether the guard asks…"). 13 crafted cases. Live rerun: none of these appeared, and the check dropped one option.
+    - **Extras render properly:** a beat whose actor is "world" or "walk-on" is treated as the world or an extra, whatever kind it says. Before, it rendered with no subject ("Ambles along the bank…") or was dropped as "a player character (world)". "A walk-on merchant" reads "A merchant".
+    - **Still open:**
+      - A roll's purpose can still decide for a PC the moment isn't about ("Bram makes a Strength contest against Ysolde to block her grab", in Kira's theft).
+      - One garbled hand-off ("Ask Bram whether he surfaces, but nobody has to decide yet").
+      - Rolls asked for NPCs' perception ("Roll a dice to see if the bandits notice").
+      - 2 of 8 moments still came back with 2 options, mostly from the older checks: an absent Ysolde acting, or a PC used as an NPC.
+    - The nearest-name pronoun rule misreads "she" after a male PC's name and "he" meaning an unnamed extra; the cost is a stand-in headline or a dropped plan sentence.
+  - 119/119 crafted checks and 25/25 adversarial cases pass; lint and types are clean. The checks reseed the sample campaign.
+
+- [ ] **Step 16: Scaffold v2** (25 Oct; Jacob: "look deeper at our controls system and scaffolding"). Make the wrong option impossible to write instead of catching it afterwards. Awaiting Jacob's blind ticks.
+  - **Root cause found:** the Anthropic SDK helper we used (`betaZodOutputFormat`, SDK 1.1) turns every `enum` and `const` into a hint in the description. So none of the per-request lists (who may act, which threads, hand-off targets, relationship types in recaps…) were ever enforced while the model wrote. They were only checked afterwards, and a value outside a list made the whole answer unparseable. `outputFormat` in `src/core/llm/anthropic.ts` now sends them as real constraints, for every feature. All feature formats compile; fights weren't reachable in the smoke test. On its own this cut rejections from ~1.0 to 0.63 per call.
+  - **Rejection log** (`option_rejections`, migration `0010`): every option the checks drop, with its reason, model, moment and how many options the call kept. Never blocks the call.
+  - **A separate list per beat kind:** each kind of beat is its own shape with only its own actors. `npc`: NPCs here; `arrival`/`remote`: absent, living NPCs (or a walk-on); `outcome`: the PCs whose action the moment is; `world`/`walk_on`: no named actor. An absent NPC acting here, or a PC as an NPC, can no longer be chosen. A beat whose actor is "world" or "walk-on" is treated as the world or an extra, whatever kind it says.
+  - **Structured hand-offs** (`Hand`, `handText` in `improv.ts`): the model picks a kind and fills a few fields; code writes the sentence.
+    - Kinds: `question` ("Ask Kira's player: what do you do about the heckling patron?"), `choice` ("…: do you write a note, or wave him off?"), `check`/`contest`/`attack` (only for the PC whose declared action it is, or the table when the moment is the whole party), `notice` (perception or knowledge, for anyone; "to notice / to read / to work out / to recall what they know about…"), `save` (anyone facing a danger), `rule` (a house rule's roll), `death_save` (only someone dying).
+    - Rolls are for PCs only. The skill sets the ability (Athletics → Strength).
+    - The few words the model writes (what they face, the two choices, the target) are checked for a PC acting. The flavour pass keeps Loom's hand-off sentence.
+    - One flat shape, with code checking who each kind may go to: a union per kind made the format too big for the API to compile ("compiled grammar is too large").
+  - **Other fixes:**
+    - Past-tense verbs after a name are back-references, not acting ("the potion {Mother Ysolde} sold him").
+    - More PC-body slips are caught ("Kira's hand shoots out", "…is already on the railing", "eyes go wide").
+    - Empty beats are rejected ("The Red Hand nothing.").
+    - Headlines that open with a PC fall back.
+    - The prompt says who checks may go to.
+  - **Measured, sample campaign (16 calls each):**
+
+    | | Rejected per call | Options shown | Calls under 3 | First / all |
+    |---|---|---|---|---|
+    | Before (4 earlier runs, hand-counted) | ~1.0 | 2.75 | 2 of 8 | 2.4 / 5.6 s |
+    | Enforced lists | 0.63 | 3.00 | 0 | 2.4 / 5.6 s |
+    | + per-kind actors | 0.44 | 2.88 | 2 | 3.1 / 6.3 s |
+    | + structured hand-offs | 0.50 | 2.94 | 1 | 3.1 / 6.3 s |
+
+    No live hand-off decided for a PC, narrated a reaction, or asked for an NPC's roll. Most remaining rejections are a check asked of a PC who didn't declare it, which the code now catches.
+  - **Duradan blind run 4** (`data/runs/2026-10-25-04-00-duradan-blind.md`, waiting for Jacob's ticks): expected threads 10/10 for all three models. Haiku 8.2 s avg (6.6 s in a Haiku-only rerun), $0.019; Sonnet 10.9 s, $0.37; Opus 13.2 s, $0.75. Dropped: 11 / 7 / 4.
+  - **Speed:** enforcing the lists isn't slower (A/B on Duradan Haiku: 6.6 s enforced, 7.2 s loose, and the loose run lost 3 moments to unusable answers). The full answer is ~1.3 s slower than run 3 because of the extra fields (titles, kinds, the hand-off parts). The first option still shows in ~3 s on the page.
+  - **Still open:**
+    - `on_fail` may still move a PC for a failed social roll ("his fingers close around the figurine and he pockets it").
+    - Investigation is the go-to notice skill.
+    - PCs acting inside the model's own sentences still rely on the text checks.
+  - 132/132 crafted checks and 25/25 adversarial cases pass; lint and types are clean.
+
 ## Entity model build (docs/entity-model.md)
 
 - [x] Step 1: Schema with provenance (migration `drizzle/0001`):

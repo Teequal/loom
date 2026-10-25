@@ -30,6 +30,9 @@ const FEATURE_MODELS: Record<string, string> = {
   encounter: "claude-sonnet-5-5", // fight setup: stat blocks need a careful model, but it's at the table
   rules: "claude-sonnet-5-5", // rules questions: accuracy matters, the answer is short
   fresh: "claude-opus-5-5", // new material between sessions: invention needs the strongest model
+  "develop-ideas": "claude-sonnet-5-5", // headlines to pick from before writing the plan: quick
+  rework: "claude-sonnet-5-5", // rewording one piece of a plan as the GM asks
+  hook: "claude-opus-5-5", // a starter campaign from a random hook, for someone brand new
   suggest: "claude-opus-5-5", // between-session prep: quality over speed
   enrich: "claude-opus-5-5", // one-off backfill of entity details from stored recaps
   flavor: "claude-opus-5-5", // read-aloud polish of the one option the GM picked
@@ -87,6 +90,10 @@ export async function callLlm<T>(req: LlmRequest<T>): Promise<LlmResult<T>> {
       ok: false,
       error: err instanceof Error ? err.message : String(err),
     });
+    // Out of API credit is the GM's to fix, not a glitch: say so plainly everywhere.
+    if (err instanceof Error && /credit balance is too low/i.test(err.message)) {
+      throw new Error("Loom's AI credit has run out. Top up at console.anthropic.com (Plans & Billing), then try again.");
+    }
     throw err;
   }
 }

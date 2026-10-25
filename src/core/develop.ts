@@ -43,11 +43,12 @@ Rules:
 - Refer to threads by name in the text, never by number.
 - new_thread: only at REACH "the arc", and only if it earns its place: one genuinely new thread this could open (title, one-line summary). Otherwise null.`;
 
-export async function develop(
-  campaignId: number,
-  input: { moment: string; label: string; text: string; threadIds: number[]; reach: number; tone?: number },
-  model?: string,
-) {
+type DevelopInput = { moment: string; label: string; text: string; threadIds: number[]; reach: number; tone?: number };
+export type Pick = { part: "open" | "setup" | "lead"; headline: string };
+
+// Everything a plan is written from: the scene, the threads, the direction, the session so far,
+// and the choice being developed.
+async function developContext(campaignId: number, input: DevelopInput) {
   const threads = await loadThreadContexts(campaignId);
   const entities = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
   const [camp] = await db.select().from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
@@ -84,6 +85,64 @@ ${input.text}
 
 ${REACH_TEXT[reach]}
 TONE: ${tone}.`;
+  return { prompt, pcs, threads, reach };
+}
+
+const IdeasSchema = z.object({
+  ideas: z.array(z.object({ part: z.enum(["open", "setup", "lead"]), headline: z.string(), flavour: z.string() })),
+});
+
+// Develop, step one: a handful of headlines to choose from (cheap and quick). The GM picks up to
+// three, and only those get written out in full.
+export async function developIdeas(campaignId: number, input: DevelopInput) {
+  const { prompt, pcs } = await developContext(campaignId, input);
+  const res = await callLlm({
+    feature: "develop-ideas",
+    campaignId,
+    system: `${SYSTEM}
+
+For now, don't write the plan. Offer 9 headlines in three sections, so the GM can mix and match one from each: 3 openings (part "open": how the next scene could begin), 3 setups (part "setup": what to prepare or what's in play), and 3 directions (part "lead": where it could go). The three in each section should differ in feel, so any combination works. Each headline is under 12 words, concrete and distinct. flavour is one word for its feel (tense, funny, eerie, tragic, mysterious, warm, brutal…). Write openings and directions as what the world does or offers, never as what the party does.`,
+    prompt,
+    schema: IdeasSchema,
+    maxTokens: 1500,
+    effort: "low",
+  });
+  const party = pcs.map((p) => ({ name: p.name, aliases: p.aliases }));
+  return {
+    ideas: res.data.ideas.filter((i) => i.headline.trim() && !planSlips(i.headline, party).length).slice(0, 9),
+    llm: { model: res.model, seconds: res.latencyMs / 1000, costUsd: res.costUsd },
+  };
+}
+
+// Reworks one piece of a plan the way the GM asks ("darker", "shorter", "more for Iresia"),
+// keeping its facts and its ties.
+export async function reworkPiece(campaignId: number, input: { text: string; how: string; context: string }) {
+  const entities = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
+  const pcs = entities.filter((e) => e.type === "pc").map((p) => ({ name: p.name, aliases: p.aliases }));
+  const res = await callLlm({
+    feature: "rework",
+    campaignId,
+    system: `You rework one piece of a game master's prep, exactly as they ask, and nothing else. Keep the same facts, names and threads; change only what they asked (tone, length, focus). Never decide what player characters do: write what the world offers, or "if the party…". Return only the reworked text.`,
+    prompt: `WHAT IT'S PART OF\n${input.context}\n\nTHE PIECE\n${input.text}\n\nHOW TO REWORK IT\n${input.how}`,
+    schema: z.object({ text: z.string() }),
+    maxTokens: 800,
+    effort: "low",
+  });
+  return { text: withoutSlips(res.data.text, pcs) || input.text, llm: { model: res.model, seconds: res.latencyMs / 1000, costUsd: res.costUsd } };
+}
+
+export async function develop(campaignId: number, input: DevelopInput & { picks?: Pick[] }, model?: string) {
+  const ctx = await developContext(campaignId, input);
+  const { pcs, threads, reach } = ctx;
+  // Step two: only what the GM picked, written out in full.
+  const picks = input.picks ?? [];
+  const prompt = picks.length
+    ? `${ctx.prompt}
+
+BUILD ONLY FROM THE GM'S PICKS, in this order, and nothing else:
+${picks.map((p) => `- ${p.part === "open" ? "Opening" : p.part === "setup" ? "Setup" : "Direction"}: ${p.headline}`).join("\n")}
+An "Opening" pick becomes the intro (otherwise intro is ""). Each "Setup" pick becomes one setup, each "Direction" pick one direction, titled after it.`
+    : ctx.prompt;
 
   let res = await callLlm({ feature: "develop", campaignId, system: SYSTEM, prompt, schema: DevelopSchema, maxTokens: 6000, effort: "low", model });
   // Prose can't be scaffolded, so it's read: a line where the party or a PC acts goes back once

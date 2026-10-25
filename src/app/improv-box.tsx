@@ -15,6 +15,8 @@ import { Header, Note, post, store, useCampaigns, useElapsed } from "./shell";
 // the session grows as a tree, shown in the timeline. Every name links into the loom.
 
 interface Card {
+  headline: string;
+  flavour: string | null;
   label: string;
   text: string;
   why: string;
@@ -32,6 +34,7 @@ interface Done {
   entryId: number;
   count: number;
   fixes: RecordFix[];
+  steers: string[];
   safetyNote: string | null;
   llm: { model: string; seconds: number; costUsd: number; attempts: number };
 }
@@ -75,6 +78,16 @@ const MODELS = [
 ] as const;
 type Model = (typeof MODELS)[number]["id"];
 const TONES = ["Grounded", "Restrained", "Balanced", "Dramatic", "Theatrical"];
+// Which kinds of option to offer. Most DMs never change the default mix.
+const MIXES = [
+  { id: "mix", label: "Mix", hint: "One payoff, one twist, one callback or character beat" },
+  { id: "fights", label: "Action", hint: "More fights and danger" },
+  { id: "mystery", label: "Mystery", hint: "Reveal and deepen mysteries" },
+  { id: "light", label: "Light", hint: "Funny and warm" },
+  { id: "character", label: "Character", hint: "Moments for the player characters" },
+] as const;
+type MixId = (typeof MIXES)[number]["id"];
+const FLAVOUR_LABEL: Record<string, string> = { payoff: "Payoff", twist: "Twist", callback: "Callback", character: "Character", tense: "Tense", funny: "Funny", mystery: "Mystery", fight: "Fight" };
 const REACH = ["Next few minutes", "This scene", "Next session", "The arc"];
 const threadRefs = (ts: { id: number; title: string }[]) => ts.map((t) => ({ kind: "thread" as const, id: t.id, name: t.title }));
 
@@ -128,7 +141,15 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const [entries, setEntries] = useState<Entry[]>([]);
   const [autoApprove, setAutoApprove] = useState(false);
   const [empty, setEmpty] = useState(false);
+  const [opening, setOpening] = useState<{ title: string; opening: string } | null>(null); // a hook just started
+  const [begun, setBegun] = useState<{ title: string; opening: string } | null>(null); // its opening, kept in view until the first moment
   const [showOthers, setShowOthers] = useState(false);
+  const [openCard, setOpenCard] = useState<number | null>(null);
+  const [steered, setSteered] = useState(""); // the option read in full; the rest are headlines
+  const [mix, setMix] = useState<MixId>(() => {
+    const m = store.get("loom.mix");
+    return MIXES.some((x) => x.id === m) ? (m as MixId) : "mix";
+  });
   const [sample, setSample] = useState(false);
   const [open, setOpen] = useState<number | null>(null); // timeline entry shown in detail
   const box = useRef<HTMLTextAreaElement>(null);
@@ -232,14 +253,17 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   }, []);
   const live: Live = { campaignId, entries, reload, model, tone, focusBox };
 
-  async function ask() {
-    const text = moment.trim();
+  async function ask(again?: { steer: string }) {
+    // A steer re-weaves the same moment; otherwise it's whatever is in the box.
+    const text = again ? asked : moment.trim();
     if (!text || status === "running") return;
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
     setAsked(text);
-    setMoment("");
+    if (!again) setMoment("");
+    setOpenCard(null);
+    setSteered(again?.steer ?? "");
     setPlaceholder("What did the players just do?");
     setCards([]);
     setDone(null);
@@ -252,7 +276,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       const res = await fetch("/api/improv", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaignId, moment: text, model, tone }),
+        body: JSON.stringify({ campaignId, moment: text, model, tone, mix, steer: again?.steer }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -368,7 +392,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           />
           <div className={`items-center justify-between gap-3 px-2 pb-2 pt-0.5 ${shrunk ? "hidden" : "flex"}`}>
             {/* Everything you might tune lives behind one quiet control, out of the way of the box. */}
-            <Tune label="Tune suggestions" summary={`${MODELS.find((m) => m.id === model)?.label} · ${TONES[tone]}`}>
+            <Tune label="Tune suggestions" summary={`${MODELS.find((m) => m.id === model)?.label} · ${TONES[tone]}${mix !== "mix" ? ` · ${MIXES.find((m) => m.id === mix)?.label}` : ""}`}>
               <Field label="Model">
                 <Choice
                   label="Model"
@@ -380,6 +404,17 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                   }}
                 />
                 <p className="mt-1 text-xs text-muted">{MODELS.find((m) => m.id === model)?.hint}</p>
+              </Field>
+              <Field label="Kinds of option">
+                <Choice
+                  label="Kinds of option"
+                  options={MIXES}
+                  value={mix}
+                  onChange={(v) => {
+                    setMix(v);
+                    store.set("loom.mix", v);
+                  }}
+                />
               </Field>
               <Field label="Tone">
                 <Steps
@@ -431,7 +466,31 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           Ask as a rules question
         </button>
       )}
-      {!asked && empty && <Welcome name={name} trySample={trySample} />}
+      {!asked && (empty || opening) && (
+        <Welcome
+          name={name}
+          trySample={trySample}
+          campaignId={campaignId}
+          opening={opening}
+          onStarted={async (o) => {
+            setOpening(o);
+            await reload();
+          }}
+          onBegin={() => {
+            setBegun(opening);
+            setOpening(null);
+            focusBox("What do the players do?");
+          }}
+        />
+      )}
+      {!asked && begun && !opening && (
+        <div className="rise mt-5">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">{begun.title} · the opening</p>
+          <blockquote className="story mt-1.5 border-l-2 border-line pl-3 text-[15px] leading-relaxed text-muted">
+            <Linked text={begun.opening} />
+          </blockquote>
+        </div>
+      )}
       {!asked && sample && !entries.length && (
         <div className="rise mt-5">
           <p className="mb-2 text-[13px] text-muted">This is the sample campaign: two players drank mystery potions. Try one of these, or type your own.</p>
@@ -466,11 +525,17 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
               const state = !current?.choiceKind ? "open" : current.choiceKind === "option" && current.choice === card.text ? "used" : "other";
               // Once you've chosen, the rest fold away so the page follows the story, not the menu.
               if (state === "other" && !showOthers) return null;
+              // Headlines first: only the one you open (or the one you used) is shown in full.
+              if (state === "open" && openCard !== i)
+                return <Headline key={`${card.label}-${i}`} card={card} n={i + 1} onOpen={() => setOpenCard(i)} />;
               return (
                 <OptionCard
                   key={`${card.label}-${i}`}
                   card={card}
                   n={i + 1}
+                  of={cards.length}
+                  onMove={state === "open" ? (d) => setOpenCard((i + d + cards.length) % cards.length) : undefined}
+                  onFold={state === "open" ? () => setOpenCard(null) : undefined}
                   state={state}
                   canUse={!!current}
                   onUse={() => use({ kind: "option", label: card.label, text: card.text, awaiting: card.needs })}
@@ -483,7 +548,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
               );
             })}
             {Array.from({ length: pending }, (_, i) => (
-              <li key={`pending-${i}`} aria-hidden className="h-32 animate-pulse rounded-xl border border-line bg-surface/60" />
+              <li key={`pending-${i}`} aria-hidden className="h-12 animate-pulse rounded-xl border border-line bg-surface/60" />
             ))}
           </ol>
           {current?.choiceKind && cards.some((c) => !(current.choiceKind === "option" && current.choice === c.text)) && (
@@ -491,6 +556,18 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
               {showOthers ? "Fold the other options" : `${cards.filter((c) => !(current.choiceKind === "option" && current.choice === c.text)).length} other options`}
               <Icon name="arrow" size={12} className={`transition-transform ${showOthers ? "-rotate-90" : "rotate-90"}`} />
             </button>
+          )}
+
+          {/* One tap re-weaves the options: no typing. */}
+          {status === "done" && !current?.choiceKind && !!done?.steers.length && (
+            <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[13px]">
+              <span className="mr-1 text-xs text-muted">{steered ? `Re-woven: ${steered}. Again:` : "Not quite?"}</span>
+              {done.steers.map((st) => (
+                <button key={st} type="button" onClick={() => ask({ steer: st })} className="rounded-full border border-line bg-surface px-3 py-0.5 text-foreground/80 hover:border-thread/60">
+                  {st}
+                </button>
+              ))}
+            </div>
           )}
 
           {status === "done" && current && <OwnChoice entry={current} onSave={(text) => use({ kind: "own", label: "", text })} />}
@@ -605,8 +682,43 @@ function Toasts({ toasts, onOpen, onClose }: { toasts: { id: number; entryId: nu
 // ---------- first run ----------
 
 // An empty campaign: three ways in, each one tap.
-function Welcome({ name, trySample }: { name: string; trySample: () => Promise<void> }) {
-  const [busy, setBusy] = useState(false);
+function Welcome({
+  name,
+  trySample,
+  campaignId,
+  opening,
+  onStarted,
+  onBegin,
+}: {
+  name: string;
+  trySample: () => Promise<void>;
+  campaignId: number;
+  opening: { title: string; opening: string } | null;
+  onStarted: (o: { title: string; opening: string }) => Promise<void>;
+  onBegin: () => void;
+}) {
+  const [busy, setBusy] = useState<"" | "hook" | "sample">("");
+  const [party, setParty] = useState("");
+  const [theme, setTheme] = useState("");
+  const [error, setError] = useState("");
+  const elapsed = useElapsed(busy === "hook");
+
+  // Just started from a hook: the opening, to read aloud, then straight to the table.
+  if (opening)
+    return (
+      <section className="rise mt-8 rounded-2xl border border-line bg-surface p-6">
+        <p className="text-[12px] font-semibold uppercase tracking-wide text-thread">{opening.title}</p>
+        <h2 className="mt-1 text-lg font-semibold tracking-tight">Read this to your players</h2>
+        <blockquote className="story mt-3 border-l-2 border-thread pl-4 text-[18px] leading-relaxed">
+          <Linked text={opening.opening} />
+        </blockquote>
+        <p className="mt-3 text-sm text-muted">The world is in the loom: its characters, places and threads. When the players do something, type it in the box above.</p>
+        <button type="button" onClick={onBegin} className="btn-primary mt-4 text-sm">
+          Begin <Icon name="arrow" size={12} />
+        </button>
+      </section>
+    );
+
   return (
     <section className="rise mt-8 rounded-2xl border border-line bg-surface p-6">
       <p className="text-[12px] font-semibold uppercase tracking-wide text-thread">New campaign</p>
@@ -614,47 +726,85 @@ function Welcome({ name, trySample }: { name: string; trySample: () => Promise<v
       <p className="story mt-2 max-w-prose leading-relaxed text-foreground/85">
         When your players go off-script, Loom finds the threads already in play and shows you how to tie the moment back to them. To do that it needs something to remember.
       </p>
+
+      <div className="mt-5 rounded-xl border border-thread/40 bg-thread-soft/30 p-4">
+        <p className="font-medium">Start from a hook</p>
+        <p className="text-sm text-muted">Never run a game before? Loom invents a small world to begin in: a place, a few characters, and threads that tangle together.</p>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <input
+            value={party}
+            onChange={(e) => setParty(e.target.value)}
+            placeholder="Who's playing? (optional) e.g. Mira the rogue, Tobb the cleric"
+            className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm outline-none focus:border-thread/60"
+          />
+          <input
+            value={theme}
+            onChange={(e) => setTheme(e.target.value)}
+            placeholder="Any flavour? (optional) e.g. haunted harbour"
+            className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm outline-none focus:border-thread/60"
+          />
+        </div>
+        <button
+          type="button"
+          disabled={!!busy}
+          onClick={async () => {
+            setBusy("hook");
+            setError("");
+            try {
+              const r = await post<{ title: string; opening: string }>("/api/campaigns/hook", { campaignId, party, theme });
+              await onStarted({ title: r.title, opening: r.opening });
+            } catch (e) {
+              setError(e instanceof Error ? e.message : "Something went wrong.");
+            } finally {
+              setBusy("");
+            }
+          }}
+          className="btn-primary mt-3 text-sm"
+        >
+          <Icon name="sparkle" /> {busy === "hook" ? `Inventing a world… ${elapsed} s` : party.trim() || theme.trim() ? "Invent the hook" : "Start from a random hook"}
+        </button>
+        {busy === "hook" && <p className="mt-1.5 text-xs text-muted">Usually under a minute. It writes the world, then reads it into the loom.</p>}
+        {error && <p className="mt-1.5 text-xs text-danger">{error}</p>}
+      </div>
+
       <ol className="mt-5 space-y-4">
         <li className="flex gap-3">
-          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-thread-soft text-xs font-semibold text-thread">1</span>
+          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-thread-soft text-xs font-semibold text-thread">
+            <Icon name="save" size={12} />
+          </span>
           <div>
-            <p className="font-medium">Paste your last session&apos;s notes</p>
+            <p className="font-medium">Already playing? Paste your last session&apos;s notes</p>
             <p className="text-sm text-muted">However rough. Loom picks out the threads, characters and places, and you confirm them.</p>
-            <Link href="/prep" className="btn-primary mt-2 text-sm">
+            <Link href="/prep" className="btn-secondary mt-2 text-sm">
               Add notes <Icon name="arrow" size={12} />
             </Link>
           </div>
         </li>
         <li className="flex gap-3">
-          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-thread-soft text-xs font-semibold text-thread">2</span>
+          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-thread-soft text-xs font-semibold text-thread">
+            <Icon name="pen" size={12} />
+          </span>
           <div>
             <p className="font-medium">Or start at the table</p>
             <p className="text-sm text-muted">Type the first thing that happens in the box above. Everything you use is remembered as you go.</p>
           </div>
         </li>
-        <li className="flex gap-3">
-          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-thread-soft text-xs font-semibold text-thread">3</span>
-          <div>
-            <p className="font-medium">Just looking?</p>
-            <p className="text-sm text-muted">Try a small sample campaign with a few threads already woven.</p>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await trySample();
-                } finally {
-                  setBusy(false);
-                }
-              }}
-              className="btn-secondary mt-2 text-sm"
-            >
-              <Icon name="sparkle" /> Open the sample
-            </button>
-          </div>
-        </li>
       </ol>
+      <button
+        type="button"
+        disabled={!!busy}
+        onClick={async () => {
+          setBusy("sample");
+          try {
+            await trySample();
+          } finally {
+            setBusy("");
+          }
+        }}
+        className="btn-tertiary mt-5 text-xs"
+      >
+        Just looking? Open the sample campaign <Icon name="arrow" size={11} />
+      </button>
     </section>
   );
 }
@@ -824,7 +974,7 @@ function QuickNote({ campaignId, onDone }: { campaignId: number; onDone: () => v
         autoFocus
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="Something that happened, e.g. “Iresia bought the lockpicks off Hoder”"
+        placeholder="Something that happened, e.g. “they bought the lockpicks off the fence”"
         className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm outline-none focus:border-thread/60"
       />
       <button disabled={busy || text.trim().length < 2} className="btn-primary text-sm">
@@ -955,9 +1105,25 @@ function LoomStatus({ entry, compact = false }: { entry: Entry; compact?: boolea
 
 // ---------- the options ----------
 
+// An option as one line: its flavour and its hook. Tap to read it in full.
+function Headline({ card, n, onOpen }: { card: Card; n: number; onOpen: () => void }) {
+  return (
+    <li className="rise">
+      <button type="button" onClick={onOpen} className="group flex w-full items-baseline gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-left shadow-sm transition-colors hover:border-thread/60">
+        <span className="w-4 shrink-0 text-[13px] text-muted">{n}</span>
+        <span className="story min-w-0 flex-1 leading-snug">{card.headline}</span>
+        {card.flavour && <span className="shrink-0 rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
+      </button>
+    </li>
+  );
+}
+
 function OptionCard({
   card,
   n,
+  of,
+  onMove,
+  onFold,
   state,
   canUse,
   onUse,
@@ -968,6 +1134,9 @@ function OptionCard({
 }: {
   card: Card;
   n: number;
+  of: number;
+  onMove?: (d: 1 | -1) => void; // to the next or previous option, while choosing
+  onFold?: () => void;
   state: "open" | "used" | "other";
   canUse: boolean;
   onUse: () => void;
@@ -977,16 +1146,40 @@ function OptionCard({
   saved?: Plan[];
 }) {
   const [copied, setCopied] = useState(false);
+  // Swipe sideways between options on a phone.
+  const touch = useRef<number | null>(null);
   return (
     <li
+      onTouchStart={(e) => (touch.current = e.touches[0].clientX)}
+      onTouchEnd={(e) => {
+        if (touch.current == null || !onMove) return;
+        const dx = e.changedTouches[0].clientX - touch.current;
+        if (Math.abs(dx) > 60) onMove(dx < 0 ? 1 : -1);
+        touch.current = null;
+      }}
       id={state === "used" ? "chosen" : undefined}
       className={`rise group scroll-mt-40 rounded-xl border bg-surface p-4 shadow-sm transition-opacity ${state === "used" ? "border-thread/60" : "border-line"} ${state === "other" ? "opacity-55 hover:opacity-100" : ""}`}
     >
       <div className="mb-1.5 flex items-baseline justify-between gap-3">
-        <h2 className="text-[13px] font-semibold uppercase tracking-wide">
+        <h2 className="min-w-0 text-[13px] font-semibold uppercase tracking-wide">
           <span className="mr-2 text-muted">{state === "used" ? <Icon name="check" className="text-thread" /> : n}</span>
           {card.label}
+          {card.flavour && <span className="ml-2 rounded-full bg-thread-soft px-2 py-0.5 text-[11px] font-normal normal-case tracking-normal text-thread">{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
         </h2>
+        {onMove && (
+          <span className="flex shrink-0 items-center gap-1 text-xs text-muted">
+            <button type="button" onClick={() => onMove(-1)} aria-label="Previous option" className="btn-tertiary px-1">
+              <Icon name="arrow" size={12} className="rotate-180" />
+            </button>
+            {n}/{of}
+            <button type="button" onClick={() => onMove(1)} aria-label="Next option" className="btn-tertiary px-1">
+              <Icon name="arrow" size={12} />
+            </button>
+            <button type="button" onClick={onFold} aria-label="Back to the headlines" className="btn-tertiary ml-1 px-1">
+              <Icon name="close" size={12} />
+            </button>
+          </span>
+        )}
         <button
           type="button"
           onClick={() => {
@@ -1079,6 +1272,20 @@ function OwnChoice({ entry, onSave }: { entry: Entry; onSave: (text: string) => 
 
 // ---------- develop: a branch you can keep following ----------
 
+type Part = "open" | "setup" | "lead";
+interface Idea {
+  part: Part;
+  headline: string;
+  flavour: string;
+}
+const PARTS: { id: Part; label: string; hint: string }[] = [
+  { id: "open", label: "Open", hint: "how the next scene begins" },
+  { id: "setup", label: "Set up", hint: "what's in play" },
+  { id: "lead", label: "Lead to", hint: "where it could go" },
+];
+
+// Develop in two steps. First, quick headlines in three sections: pick one from each (or skip a
+// section). Then Loom writes just those out in full, in a form that's easy to read at a glance.
 function DevelopToggle({
   live,
   base,
@@ -1097,17 +1304,72 @@ function DevelopToggle({
     const s = Number(store.get("loom.reach"));
     return s >= 0 && s <= 3 ? s : 1;
   });
+  const [ideas, setIdeas] = useState<Idea[] | null>(null);
+  const [picked, setPicked] = useState<Partial<Record<Part, string>>>({});
   const [fresh, setFresh] = useState<Plan | null>(null);
-  const plan = fresh ?? saved?.at(-1) ?? null;
-  const [busy, setBusy] = useState(false);
+  const [entryId, setEntryId] = useState<number | null>(null); // where this plan is kept
+  const [choosing, setChoosing] = useState(!saved?.length);
+  const plan = choosing ? null : (fresh ?? saved?.at(-1) ?? null);
+  const [busy, setBusy] = useState<"" | "ideas" | "plan">("");
   const [error, setError] = useState("");
-  const elapsed = useElapsed(busy);
+  const elapsed = useElapsed(!!busy);
+  const body = { campaignId: live.campaignId, ...base, reach, tone: live.tone };
+
+  const getIdeas = async (r = reach) => {
+    setBusy("ideas");
+    setError("");
+    setPicked({});
+    try {
+      const res = await post<{ ideas: Idea[] }>("/api/develop/ideas", { ...body, reach: r });
+      setIdeas(res.ideas);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setBusy("");
+    }
+  };
+  const weave = async () => {
+    setBusy("plan");
+    setError("");
+    try {
+      const id = await parent();
+      setEntryId(id);
+      const picks = PARTS.filter((p) => picked[p.id]).map((p) => ({ part: p.id, headline: picked[p.id]! }));
+      setFresh(await post<Plan>("/api/develop", { ...body, picks, entryId: id ?? undefined }));
+      setChoosing(false);
+      await live.reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  // A reworked piece updates the plan, and the plan kept on the entry.
+  const reworked = async (part: "intro" | "setups" | "directions", i: number, text: string) => {
+    if (!plan) return;
+    const next: Plan = part === "intro" ? { ...plan, intro: text } : { ...plan, [part]: plan[part].map((x, j) => (j === i ? { ...x, text } : x)) };
+    setFresh(next);
+    const id = entryId ?? (await parent());
+    if (id) await post("/api/develop/keep", { entryId: id, plan: next }).catch(() => {});
+  };
+
   if (!open)
     return (
-      <button type="button" onClick={() => setOpen(true)} className="btn-tertiary text-sm" title={saved?.length ? "Developed before: open to see it" : "Plan ahead from this"}>
+      <button
+        type="button"
+        onClick={() => {
+          setOpen(true);
+          if (choosing && !ideas) void getIdeas();
+        }}
+        className="btn-tertiary text-sm"
+        title={saved?.length ? "Developed before: open to see it" : "Plan ahead from this"}
+      >
         <Icon name="branch" /> Develop{saved?.length ? <span className="h-1.5 w-1.5 rounded-full bg-thread" /> : null}
       </button>
     );
+
+  const count = Object.values(picked).filter(Boolean).length;
   return (
     <div className={`rise mt-1 w-full basis-full ${depth > 0 ? "border-l-2 border-thread/30 py-1 pl-3" : "rounded-xl border border-line bg-background p-3"}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1118,46 +1380,144 @@ function DevelopToggle({
           onChange={(v) => {
             setReach(v);
             store.set("loom.reach", String(v));
+            if (choosing) void getIdeas(v);
           }}
         />
         <div className="flex items-center gap-3 text-sm">
+          {!choosing && (
+            <button
+              type="button"
+              onClick={() => {
+                setChoosing(true);
+                if (!ideas) void getIdeas();
+              }}
+              className="btn-tertiary text-xs"
+            >
+              Pick again
+            </button>
+          )}
           <button type="button" onClick={() => setOpen(false)} className="btn-tertiary">
             Close
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              setError("");
-              try {
-                const entryId = await parent();
-                setFresh(await post<Plan>("/api/develop", { campaignId: live.campaignId, ...base, reach, tone: live.tone, entryId: entryId ?? undefined }));
-                await live.reload();
-              } catch (e) {
-                setError(e instanceof Error ? e.message : "Something went wrong.");
-              } finally {
-                setBusy(false);
-              }
-            }}
-            className="btn-primary"
-          >
-            {busy ? `Planning… ${elapsed} s` : plan ? "Develop again" : "Develop"}
           </button>
         </div>
       </div>
       {error && <p className="mt-2 text-xs text-danger">{error}</p>}
+
+      {choosing && (
+        <div className="mt-3">
+          {busy === "ideas" && <p className="animate-pulse text-xs text-muted">Finding ideas… {elapsed} s</p>}
+          {ideas && busy !== "ideas" && (
+            <>
+              <p className="mb-2 text-xs text-muted">Pick one from each, or skip a section. Loom writes your picks out in full.</p>
+              <div className="space-y-3">
+                {PARTS.map((part) => {
+                  const row = ideas.filter((i) => i.part === part.id);
+                  if (!row.length) return null;
+                  return (
+                    <div key={part.id} role="radiogroup" aria-label={part.label}>
+                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">
+                        {part.label} <span className="font-normal normal-case tracking-normal">· {part.hint}</span>
+                      </p>
+                      <div className="grid gap-1.5">
+                        {row.map((idea) => {
+                          const on = picked[part.id] === idea.headline;
+                          return (
+                            <button
+                              key={idea.headline}
+                              type="button"
+                              role="radio"
+                              aria-checked={on}
+                              onClick={() => setPicked({ ...picked, [part.id]: on ? undefined : idea.headline })}
+                              className={`flex items-baseline gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors ${on ? "border-thread bg-thread-soft/60" : "border-line bg-surface hover:border-thread/50"}`}
+                            >
+                              <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full border ${on ? "border-thread bg-thread" : "border-muted/50"}`} />
+                              <span className="story min-w-0 flex-1 leading-snug">{idea.headline}</span>
+                              <span className="shrink-0 text-[11px] text-muted">{idea.flavour}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <button type="button" onClick={() => getIdeas()} className="btn-tertiary text-xs">
+                  Other ideas
+                </button>
+                <button type="button" disabled={!count || !!busy} onClick={weave} className="btn-primary text-sm">
+                  {busy === "plan" ? `Writing it out… ${elapsed} s` : `Write ${count === 1 ? "it" : `these ${count}`} out`}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       {plan && (
-        <div className="mt-3 space-y-3 text-[14.5px]">
-          <PlanItem live={live} parent={parent} depth={depth} from={base} item={{ title: "Opening", text: plan.intro, threads: [] }} quote />
-          <PlanList title="Set up" items={plan.setups} live={live} parent={parent} depth={depth} from={base} />
-          <PlanList title="Where it could lead" items={plan.directions} live={live} parent={parent} depth={depth} from={base} />
+        <article className="mt-3 space-y-4">
+          {plan.intro && (
+            <section>
+              <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted">Open · read aloud</h3>
+              <PlanItem live={live} parent={parent} depth={depth} from={base} item={{ title: "Opening", text: plan.intro, threads: [] }} quote onRework={(t) => reworked("intro", 0, t)} />
+            </section>
+          )}
+          <PlanList title="Set up" items={plan.setups} live={live} parent={parent} depth={depth} from={base} onRework={(i, t) => reworked("setups", i, t)} />
+          <PlanList title="Lead to" items={plan.directions} live={live} parent={parent} depth={depth} from={base} onRework={(i, t) => reworked("directions", i, t)} />
           {plan.newThread && <NewThread campaignId={live.campaignId} idea={plan.newThread} linkTo={base.threadIds} />}
           <p className="text-xs text-muted">
             {plan.reach} · {plan.llm.model.replace(/^claude-/, "")} · {plan.llm.seconds.toFixed(0)} s · ${plan.llm.costUsd.toFixed(3)}
           </p>
-        </div>
+        </article>
       )}
+    </div>
+  );
+}
+
+// Rework one piece: a few one-tap changes, or say how in a few words.
+const REWORKS = ["More grounded", "More dramatic", "Darker", "Funnier", "Shorter"];
+function Rework({ campaignId, text, context, onDone }: { campaignId: number; text: string; context: string; onDone: (t: string | null) => void }) {
+  const [how, setHow] = useState("");
+  const [busy, setBusy] = useState(false);
+  const go = async (h: string) => {
+    if (!h.trim()) return;
+    setBusy(true);
+    try {
+      const r = await post<{ text: string }>("/api/develop/rework", { campaignId, text, how: h, context });
+      onDone(r.text);
+    } catch {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="rise mt-2 rounded-lg bg-surface p-2.5">
+      <div className="flex flex-wrap gap-1.5">
+        {REWORKS.map((r) => (
+          <button key={r} type="button" disabled={busy} onClick={() => go(r)} className="rounded-full border border-line px-2.5 py-0.5 text-[12px] hover:border-thread/60 disabled:opacity-40">
+            {r}
+          </button>
+        ))}
+      </div>
+      <form
+        className="mt-2 flex gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void go(how);
+        }}
+      >
+        <input
+          value={how}
+          onChange={(e) => setHow(e.target.value)}
+          placeholder="Or say how: “give the quiet player the spotlight”"
+          className="min-w-0 flex-1 rounded-md border border-line bg-background px-2.5 py-1 text-[13px] outline-none focus:border-thread/60"
+        />
+        <button disabled={busy || !how.trim()} className="btn-secondary text-xs">
+          {busy ? "Reworking…" : "Rework"}
+        </button>
+        <button type="button" onClick={() => onDone(null)} className="btn-tertiary text-xs">
+          Cancel
+        </button>
+      </form>
     </div>
   );
 }
@@ -1191,13 +1551,27 @@ function NewThread({ campaignId, idea, linkTo }: { campaignId: number; idea: { t
   );
 }
 
-function PlanList({ title, items, ...rest }: { title: string; items: Plan["setups"]; live: Live; parent: () => Promise<number | null>; depth: number; from: { moment: string; text: string } }) {
+function PlanList({
+  title,
+  items,
+  onRework,
+  ...rest
+}: {
+  title: string;
+  items: Plan["setups"];
+  live: Live;
+  parent: () => Promise<number | null>;
+  depth: number;
+  from: { moment: string; text: string };
+  onRework: (i: number, text: string) => void;
+}) {
+  if (!items.length) return null;
   return (
     <div>
       <h3 className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-muted">{title}</h3>
       <div className="space-y-3">
-        {items.map((s) => (
-          <PlanItem key={s.title} item={s} {...rest} />
+        {items.map((s, i) => (
+          <PlanItem key={s.title} item={s} {...rest} onRework={(t) => onRework(i, t)} />
         ))}
       </div>
     </div>
@@ -1206,14 +1580,16 @@ function PlanList({ title, items, ...rest }: { title: string; items: Plan["setup
 
 // One piece of a development: use it (it joins the session as a branch) or keep developing from it.
 function PlanItem({
-  item,
+  item: given,
   live,
   parent,
   depth,
   from,
   quote = false,
+  onRework,
 }: {
   item: Plan["setups"][number];
+  onRework?: (text: string) => void;
   live: Live;
   parent: () => Promise<number | null>;
   depth: number;
@@ -1222,7 +1598,10 @@ function PlanItem({
 }) {
   const [branchId, setBranchId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [text, setText] = useState(given.text); // reworked in place
+  const [reworking, setReworking] = useState(false);
   const branch = live.entries.find((e) => e.id === branchId);
+  const item = { ...given, text };
   const continueWith = async () => {
     setBusy(true);
     try {
@@ -1237,16 +1616,23 @@ function PlanItem({
       setBusy(false);
     }
   };
-  const Body = (
-    <>
-      {!quote && <span className="font-medium">{item.title}. </span>}
-      <Linked text={item.text} />
-    </>
-  );
+  const Body = <Linked text={item.text} />;
   return (
     <div>
-      {quote ? <blockquote className="story border-l-2 border-thread pl-3 leading-relaxed">{Body}</blockquote> : <p className="story leading-relaxed">{Body}</p>}
+      {!quote && <p className="text-[14px] font-semibold">{item.title}</p>}
+      {quote ? (
+        <blockquote className="story border-l-2 border-thread pl-3 text-[17px] leading-relaxed">{Body}</blockquote>
+      ) : (
+        <p className="story mt-0.5 text-[16px] leading-relaxed">{Body}</p>
+      )}
       <RefChips refs={threadRefs(item.threads)} />
+      {reworking && <Rework campaignId={live.campaignId} text={item.text} context={from.text} onDone={(t) => {
+            if (t) {
+              setText(t);
+              onRework?.(t);
+            }
+            setReworking(false);
+          }} />}
       <div className="mt-1.5 flex flex-wrap items-center gap-3 text-xs">
         {branch ? (
           <span className="text-thread">
@@ -1255,6 +1641,11 @@ function PlanItem({
         ) : (
           <button type="button" disabled={busy} onClick={continueWith} className="btn-secondary text-xs font-medium">
             {busy ? "Logging…" : "Continue with this"}
+          </button>
+        )}
+        {!branch && !reworking && (
+          <button type="button" onClick={() => setReworking(true)} className="btn-tertiary text-xs" title="Change the tone, length or focus">
+            Rework
           </button>
         )}
         {depth < 4 && (

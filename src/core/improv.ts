@@ -7,6 +7,7 @@ import { db, schema } from "./db/client";
 import { embeddingProvider, ensureEmbeddings, searchByMeaning, type MeaningSearch } from "./embeddings";
 import { BUDGETS, distancesFrom } from "./graph";
 import { sessionSoFar } from "./live";
+import { planSlips } from "./plan-agency";
 import { listMoments, momentLine } from "./moments";
 import { personalLines, spotlightScore, tableSeats, tableText } from "./players";
 import { buildScene, type Scene } from "./scene";
@@ -23,14 +24,94 @@ export interface ScaffoldOption {
   also_ties_to: string[];
   label: string;
   setup: ScaffoldBeat[];
-  hand_off: { to: string; kind: "question" | "roll"; mechanic: string; text: string };
+  hand_off: { to: string; kind: "question" | "roll"; mechanic: string; text: string }; // the sentence code writes from `hand`
+  hand?: Hand; // what the model chose, in parts
   on_fail: { target: string; effect: string };
   why: string;
   callback?: string; // "M12" if it calls back a key moment, else "none"
   pillar?: Pillar; // what kind of play it offers: combat, social, exploration, mystery, comedy, drama
+  headline?: string; // the option in one glanceable line, read before anything else
+  flavour?: Flavour; // what kind of option it is, shown as a small tag
 }
 
+// How the players get involved, chosen in parts. Code writes the sentence, so a hand-off can't
+// decide what a PC does or feels ("makes a reckless grab for his arm"), can't answer its own
+// question, and can't ask for a roll the rules don't call for:
+// - check / contest / attack: only for a PC acting on what their player declared in this moment;
+// - notice: a perception or knowledge check, for anyone (or the table);
+// - save: anyone reacting to a danger;
+// - rule: a house rule's roll; death_save: a dying PC.
+export const ABILITIES = ["Strength", "Dexterity", "Constitution", "Intelligence", "Wisdom", "Charisma"] as const;
+export const SKILLS = ["none", "Acrobatics", "Animal Handling", "Arcana", "Athletics", "Deception", "History", "Insight", "Intimidation", "Investigation", "Medicine", "Nature", "Perception", "Performance", "Persuasion", "Religion", "Sleight of Hand", "Stealth", "Survival"] as const;
+const NOTICE_SKILLS = ["Perception", "Insight", "Investigation", "Arcana", "History", "Nature", "Religion", "Medicine", "Survival"] as const;
+const SKILL_ABILITY: Record<string, (typeof ABILITIES)[number]> = {
+  Acrobatics: "Dexterity", "Animal Handling": "Wisdom", Arcana: "Intelligence", Athletics: "Strength", Deception: "Charisma", History: "Intelligence", Insight: "Wisdom", Intimidation: "Charisma", Investigation: "Intelligence",
+  Medicine: "Wisdom", Nature: "Intelligence", Perception: "Wisdom", Performance: "Charisma", Persuasion: "Charisma", Religion: "Intelligence", "Sleight of Hand": "Dexterity", Stealth: "Dexterity", Survival: "Wisdom",
+};
+export type Hand = {
+  kind: "question" | "choice" | "check" | "contest" | "attack" | "notice" | "save" | "rule" | "death_save";
+  to: string;
+  what?: string; // what they face (question), the first choice, what they're up against, or what a notice roll is about
+  or?: string; // the second choice
+  ability?: string;
+  skill?: string;
+  mechanic?: string;
+};
+
+const an = (w: string) => (/^[aeiou]/i.test(w) ? `an ${w}` : `a ${w}`);
+const phrase = (t: string) => t.trim().replace(/[.?!]+$/, "").replace(/^(?:you\s+)/i, "");
+// The hand-off sentence, written by code. Names stay tagged; the caller renders them.
+export function handText(h: Hand): Pick<ScaffoldOption["hand_off"], "kind" | "mechanic" | "text"> {
+  const pc = h.to === "table" ? null : `{${h.to}}`;
+  const player = pc ? `${pc}'s player` : "the table";
+  const who = pc ?? "Everyone";
+  const against = (x = "") => (phrase(x) ? ` against ${phrase(x)}` : "");
+  const skill = h.skill && h.skill !== "none" ? h.skill : null;
+  const roll = (text: string, mechanic = "none") => ({ kind: "roll" as const, mechanic, text });
+  switch (h.kind) {
+    case "question":
+      return { kind: "question", mechanic: "none", text: phrase(h.what ?? "") ? `Ask ${player}: what do you do about ${phrase(h.what ?? "")}?` : `Ask ${player}: what do you do?` };
+    case "choice":
+      return { kind: "question", mechanic: "none", text: `Ask ${player}: do you ${phrase(h.what ?? "")}, or ${phrase(h.or ?? "")}?` };
+    case "check":
+    case "contest": {
+      const ability = (skill && SKILL_ABILITY[skill]) || (h.ability && h.ability !== "none" ? h.ability : "Strength");
+      return roll(`${who} makes ${an(ability)}${skill ? ` (${skill})` : ""} ${h.kind}${against(h.what)}.`);
+    }
+    case "attack":
+      return roll(`${who} makes an attack roll${against(h.what)}.`);
+    case "notice":
+      // What it's for, in Loom's words: perceiving and recalling, never doing.
+      const s2 = skill ?? "Perception";
+      const verb = s2 === "Perception" ? "to notice" : s2 === "Insight" ? "to read" : s2 === "Investigation" ? "to work out" : s2 === "Medicine" || s2 === "Survival" ? "to make sense of" : "to recall what they know about";
+      return roll(`${who} makes ${an(SKILL_ABILITY[s2] || "Wisdom")} (${s2}) check${phrase(h.what ?? "") ? ` ${verb} ${phrase(h.what ?? "")}` : ""}.`);
+    case "save":
+      return roll(`${who} makes ${an(h.ability && h.ability !== "none" ? h.ability : (skill && SKILL_ABILITY[skill]) || "Dexterity")} saving throw${against(h.what)}.`);
+    case "rule":
+      return roll(`${who} makes a {${h.mechanic}} roll.`, h.mechanic ?? "none");
+    case "death_save":
+      return roll(`${who} makes a death saving throw.`);
+  }
+}
+
+// What kind of option it is, at a glance. The default mix asks for one of each of the first three.
+export const FLAVOURS = ["payoff", "twist", "callback", "character", "tense", "funny", "mystery", "fight"] as const;
+export type Flavour = (typeof FLAVOURS)[number];
+
+// The kinds of option to offer. "mix" is the default most DMs will never change.
+export const MIXES = {
+  mix: "Offer a mix: one that pays off or advances a thread (payoff), one that turns things in an unexpected direction (twist), and one that calls back to something earlier or gives a character a moment (callback or character). The fourth is your best other idea.",
+  fights: "Lean toward action: at least three of the four options should be fights or physical danger (fight, tense), still tied to threads.",
+  mystery: "Lean toward mystery: at least three of the four options should reveal or deepen a mystery (mystery, payoff).",
+  light: "Keep it light: at least three of the four options should be funny or warm (flavour funny or character) (funny, character), without undercutting the threads.",
+  character: "Lean toward character: at least three of the four options should give a player character a moment of their own (character, callback).",
+} as const;
+export type Mix = keyof typeof MIXES;
+const MIX_FLAVOURS: Record<Mix, Flavour[]> = { mix: [], fights: ["fight", "tense"], mystery: ["mystery", "payoff"], light: ["funny", "character"], character: ["character", "callback"] };
+
 export interface ImprovOption {
+  headline: string;
+  flavour: Flavour | null;
   thread_id: number;
   also_ties_to: number[];
   label: string;
@@ -55,7 +136,7 @@ Rules:
 TAGS: write every named character, place, item and mechanic in curly braces, exactly as named in the scene, e.g. {Zara the Unbound}, {Figurine madness}. To make it read naturally, add how it should read after a bar: {Figurines of a knight and a monk|the monk figurine}, {Zara the Unbound|Zara}.
 
 Each option is a scaffold:
-- setup: short beats of what happens right now, as many and as long as LENGTH says. Each beat has a kind and an actor from the allowed list:
+- setup: short beats of what happens right now, as many and as long as LENGTH says. Each beat has a kind, and an actor from that kind's own list (the format offers each kind only who it allows):
   - "world": the environment, magic or events. actor "world". does is a full sentence; things may happen to or around a PC ("{Khayiulad}'s figurine grows warm against his palm").
   - "npc": a character who is here acts or speaks. actor is their name. does is what they do, without repeating the name ("turns the figurine over and goes pale").
   - "walk_on": an unnamed extra (a merchant, a guard). actor "walk-on", walk_on describes them ("a nervous merchant"), does is what they do.
@@ -64,8 +145,18 @@ Each option is a scaffold:
   - "outcome": the immediate physical result of what a PC just declared in this moment ("hits the cobblestones hard"). actor is that PC. No new decisions, words, thoughts or feelings.
   PCs never act in any other kind, and never act inside another beat's sentence.
   Describe what happens TO a PC (sensations, forces, what they see or feel), never how they react: no swaying, bracing, staggering, flinching, clutching, stepping back or gripping tighter. Write "The vision tears through {Khayiulad}, and the corridor tilts", not "{Khayiulad} sways as the vision tears through him, one hand braced against the wall". The player decides the reaction; only on_fail may move a PC's body.
-- hand_off: how the players get involved. to is a PC or "table". kind "question" asks the player what their character does; kind "roll" names the roll. mechanic is a rule from RULES IN PLAY if this roll is one, else "none"; a rule's roll can only go to someone it applies to right now (listed after "now"), or to "table" if it applies to everyone. text is one short sentence for the GM, e.g. "Ask {Salaena}'s player whether she reaches for him." or "{Khayiulad} makes a madness roll."
+- hand: how the players get involved, chosen in parts; code writes the sentence. to is a PC or "table". Fill only the fields its kind uses, and leave the others "" (or "none"). Pick the kind:
+  - "question": ask what they do. what is a short noun phrase for what they're facing ("the heckling patron"), or "".
+  - "choice": offer two clear choices: what and or are short verb phrases a player would say ("write a note", "wave him off").
+  - "check" or "contest": only for a PC doing what their player declared in this moment. Pick the ability and skill (or "none"); what is who or what they're up against ("the captain", "the current"), or "".
+  - "attack": only for a PC who declared an attack. what is the target.
+  - "notice": a perception or knowledge check (Perception, Insight, Investigation, Arcana, History…), for anyone or the table. what is a noun phrase for what it's about ("what's bobbing in the current", "the sigil on the crates").
+  - "save": a saving throw against a danger that hits them, for anyone. what is the danger ("the falling beam"). Only real dangers: a fall, a blast, poison, a spell, a curse.
+  - "rule": a rule from RULES IN PLAY; it can only go to someone it applies to right now (listed after "now"), or to "table" if it applies to everyone.
+  - "death_save": a PC who is dying.
+  Rolls are for player characters only; what NPCs notice or decide is the GM's call, never a roll.
 - on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. For a roll by the table, the effect says who it hits ("whoever fails…"), never "he" or "she". This is the only place a PC may act against their player's will. Otherwise target "none" and effect "".
+- headline: written after the option, as its summary in one glanceable line, under 12 words, present tense, the hook first ("The lookout bolts for the alarm bell"). Use only the characters, objects and place the setup and hand actually use, called the same thing (if the setup has a fishmonger, so does the headline). Its subject is the world or an NPC, never a player character or the party; an unnamed extra is "a merchant", "a guard", never "a walk-on". The GM reads only this before choosing. flavour: one of payoff, twist, callback, character, tense, funny, mystery, fight. MIX at the end says which kinds to offer.
 - label: 2-5 words. why: under 15 words, why this fits now; don't repeat the thread title or use thread numbers.
 - callback: if the option echoes or pays off one of the KEY MOMENTS listed, its id ("M12"); otherwise "none". Use one only when it genuinely fits.
 - pillar: the kind of play the option mostly offers: combat, social, exploration, mystery, comedy or drama.
@@ -139,14 +230,31 @@ const WHOLE_PARTY = /\b(?:the party|everyone|the group|they all|we)\b/i;
 
 const nonEmpty = (xs: string[], fallback: string): [string, ...string[]] => (xs.length ? (xs as [string, ...string[]]) : [fallback]);
 
-function optionsSchema(lists: { threads: string[]; actors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[] }) {
-  const Beat = z.object({
-    kind: z.enum(["world", "npc", "walk_on", "arrival", "remote", "outcome"]),
-    actor: z.enum(nonEmpty(["world", "walk-on", ...lists.actors], "world")),
-    walk_on: z.string(),
-    does: z.string(),
-  });
+function optionsSchema(lists: { threads: string[]; npcActors: string[]; absentActors: string[]; outcomeActors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[] }) {
+  // One shape per kind of beat, each with only the actors that kind allows. A kind with nobody to
+  // offer is left out.
+  const beat = <K extends ScaffoldBeat["kind"]>(kind: K, actors: string[]) => z.object({ kind: z.literal(kind), actor: z.enum(nonEmpty(actors, "world")), walk_on: z.string(), does: z.string() });
+  const kinds = [
+    beat("world", ["world"]),
+    beat("walk_on", ["walk-on"]),
+    ...(lists.npcActors.length ? [beat("npc", lists.npcActors)] : []),
+    beat("arrival", ["walk-on", ...lists.absentActors]),
+    beat("remote", ["walk-on", ...lists.absentActors]),
+    ...(lists.outcomeActors.length ? [beat("outcome", lists.outcomeActors)] : []),
+  ];
+  const Beat = z.union(kinds as unknown as [(typeof kinds)[number], (typeof kinds)[number], ...(typeof kinds)[number][]]);
   const thread = z.enum(nonEmpty(lists.threads, "T0"));
+  // The hand-off, in one flat shape (a union per kind made the format too large for the API to
+  // compile); code checks who each kind may go to (see Hand and checkOption).
+  const Hand = z.object({
+    kind: z.enum(["question", "choice", "check", "contest", "attack", "notice", "save", ...(lists.mechanics.length ? (["rule"] as const) : []), "death_save"]),
+    to: z.enum(nonEmpty(["table", ...lists.handOff], "table")),
+    what: z.string(),
+    or: z.string(),
+    ability: z.enum(["none", ...ABILITIES]),
+    skill: z.enum(SKILLS),
+    mechanic: z.enum(nonEmpty(["none", ...lists.mechanics], "none")),
+  });
   return z.object({
     options: z.array(
       z.object({
@@ -154,15 +262,14 @@ function optionsSchema(lists: { threads: string[]; actors: string[]; handOff: st
         also_ties_to: z.array(thread),
         label: z.string(),
         setup: z.array(Beat),
-        hand_off: z.object({
-          to: z.enum(nonEmpty(["table", ...lists.handOff], "table")),
-          kind: z.enum(["question", "roll"]),
-          mechanic: z.enum(nonEmpty(["none", ...lists.mechanics], "none")),
-          text: z.string(),
-        }),
+        hand: Hand,
         // Free text, normalised in code (normaliseHandOff): one odd target ("everyone") used to make the
         // whole answer unparseable.
         on_fail: z.object({ target: z.string(), effect: z.string() }),
+        // Written after the option, so it sums up what was written instead of a plan the option
+        // then drifts from (a "street mime" headline over a scribe).
+        headline: z.string(),
+        flavour: z.enum(FLAVOURS),
         why: z.string(),
         // Free text, checked in code: with no key moments the enum was just "none", and a model that
         // wrote anything else made the whole answer unparseable.
@@ -194,12 +301,13 @@ const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 // One beat as readable text: the actor's name is put in front by code, so the subject is
 // always the actor the scaffold named.
 export function renderBeat(b: ScaffoldBeat, tagger: Tagger) {
-  const tagged = tagger.tag(b.does).trim();
+  const tagged = tagger.tag(b.does.replace(/\b(an?\s+)?walk-on\s+/gi, "$1")).trim();
   // "Uses the tables as cover" after a name reads "Vex'ahlia uses…"; names (tagged) keep their capital.
   const does = tagger.render(b.kind === "world" || b.actor === "world" || tagged.startsWith("{") ? tagged : tagged.replace(/^([A-Z])(?=[a-z])/, (c) => c.toLowerCase())).trim();
+  const extra = b.kind === "walk_on" || b.actor === "walk-on" || (b.actor === "world" && b.kind !== "world" && b.walk_on.trim());
   // "world" as the actor of another kind of beat is still the world talking, not a character called World.
-  if (b.kind === "world" || b.actor === "world") return sentence(capitalise(does));
-  const subject = b.kind === "walk_on" || b.actor === "walk-on" ? capitalise(tagger.render(b.walk_on).trim() || "someone") : b.actor;
+  if (!extra && (b.kind === "world" || b.actor === "world")) return sentence(capitalise(does));
+  const subject = extra ? capitalise(tagger.render(b.walk_on).replace(/\bwalk-on\b\s*/gi, "").trim() || "someone") : b.actor;
   const startsWithSubject = does.toLowerCase().startsWith(subject.toLowerCase()) || does.toLowerCase().startsWith(subject.split(/[\s,]+/)[0].toLowerCase());
   return sentence(startsWithSubject ? capitalise(does) : `${subject} ${does}`);
 }
@@ -224,9 +332,22 @@ export function renderOnFail(target: string, effect: string, tagger: Tagger) {
 // The table notes (who's been quiet, what players enjoy) steer ranking; they must never show.
 const TABLE_TALK = /\b(?:spotlight|quiet (?:soul|one|player|lately|this session)|hasn'?t had (?:a|the|their) (?:moment|turn)|(?:their|the) player enjoys|player'?s? (?:preference|taste)s?)\b/i;
 
+// The model's hand-off parts become the sentence the rest of Loom reads (checks, rendering, the page).
+export function adoptHand(o: ScaffoldOption): ScaffoldOption {
+  if (!o.hand) return o;
+  return { ...o, hand_off: { to: o.hand.to, ...handText(o.hand) } };
+}
+
 // A hand-off to "the table" whose text names exactly one PC is really to that PC.
 export function normaliseHandOff(o: ScaffoldOption, c: CheckContext) {
-  if (o.hand_off.to === "table") {
+  // A beat whose actor is "world" or "walk-on" is the world or an extra, whatever kind it says.
+  for (const b of o.setup) {
+    if (b.kind === "world") continue;
+    if (b.actor === "walk-on" || (b.actor === "world" && b.walk_on.trim())) b.kind = "walk_on";
+    else if (b.actor === "world") b.kind = "world";
+  }
+
+  if (o.hand_off.to === "table" && !o.hand) {
     const named = [...new Set(c.tagger.tagsIn(c.tagger.tag(o.hand_off.text)).filter((n) => c.tagger.entityOf(n)?.type === "pc"))];
     if (named.length === 1) o.hand_off.to = named[0];
   }
@@ -236,11 +357,45 @@ export function normaliseHandOff(o: ScaffoldOption, c: CheckContext) {
   if (!o.on_fail.effect.trim()) o.on_fail.target = "none";
 }
 
+// The hand-off gives the choice to the player, so it can't make it for them: a roll names the
+// roll, not what the PC does for it ("makes a reckless grab for his arm"); neither narrates how
+// they feel or react ("; he feels no pain and keeps pushing", "…as he surfaces, grinning"); and
+// a question never asks the players to decide what an NPC does ("whether the guard asks…").
+const ROLL_NOUN = /\b(?:roll|check|save|saving throw|contest|test)s?\b|\brolls\b/i;
+const NPC_DOES = "asks|says|tells|lets|agrees|accepts|attacks|follows|believes|wants|decides|gives|takes|leaves|helps|answers|reacts|responds|notices|chooses|refuses";
+export function checkHandOff(o: ScaffoldOption, c: CheckContext): string | null {
+  const tagged = c.tagger.tag(o.hand_off.text);
+  const text = c.tagger.render(tagged);
+  const pcNames = c.scene.pcs.flatMap((p) => [p.name, p.name.split(/\s+/)[0], ...(p.aliases ?? [])]).filter((n) => n.length >= 3);
+  const esc = (n: string) => n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const who = `(?:${[...pcNames.map(esc), "he", "she", "they"].join("|")})`;
+  if (o.hand_off.kind === "roll") {
+    const tries = new RegExp(`\\b${who}\\s+(?:makes|attempts|tries)\\s+(?:a|an|to)\\s+((?:\\S+\\s+){0,4}\\S+)`, "i").exec(text);
+    if (tries && !ROLL_NOUN.test(tries[1])) return "the roll decides what the character does";
+    const noun = ROLL_NOUN.exec(text);
+    const after = noun ? text.slice(noun.index + noun[0].length) : text;
+    if (new RegExp(`[;,]\\s*(?:and\\s+|then\\s+)?${who}\\s+(?!can|could|may|might|must|needs?|has|have|is|are)[a-z]+`, "i").test(after)) return "the roll narrates how the character reacts";
+  } else {
+    const ask = text.replace(/^.*?\b(?:what|whether|if|how)\b/i, "");
+    if (/,\s*(?:still\s+)?(?!using|including|according)[a-z]+ing\b/i.test(ask)) return "the question answers itself (how the character reacts)";
+  }
+  if (new RegExp(`\\b(?:whether|if)\\s+(?:the|a|an)\\s+[a-z-]+\\s+(?:${NPC_DOES})\\b`, "i").test(text)) return "asks the players to decide what an NPC does";
+  for (const [, n, read] of tagged.matchAll(/\{([^}|]+)(?:\|([^}]+))?\}/g)) {
+    const e = c.tagger.entityOf(n.trim());
+    if (e?.type !== "npc") continue;
+    const shown = (read ?? n).trim();
+    if (new RegExp(`\\b(?:whether|if)\\s+${esc(shown)}\\s+(?:${NPC_DOES})\\b`, "i").test(text)) return `asks the players to decide what ${e.name} does`;
+  }
+  return null;
+}
+
 export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
   if (!o.setup.length) return "has no setup";
-  if ([o.hand_off.text, o.why, o.on_fail.effect, ...o.setup.map((b) => b.does)].some((t) => TABLE_TALK.test(t))) return "mentions the table notes";
+  // "The Red Hand nothing.": a beat whose text is one lowercase word after its actor says nothing.
+  if (o.setup.some((b) => !b.does.trim() || (b.kind !== "world" && /^[a-z]+[.!]?$/.test(b.does.trim())))) return "a beat has no real content";
+  if ([o.headline ?? "", o.hand_off.text, o.why, o.on_fail.effect, ...o.setup.map((b) => b.does)].some((t) => TABLE_TALK.test(t))) return "mentions the table notes";
   // The real people at the table are never named, only their characters.
-  const texts = [o.label, o.hand_off.text, o.why, o.on_fail.effect, ...o.setup.map((b) => b.does), ...o.setup.map((b) => b.walk_on)];
+  const texts = [o.label, o.headline ?? "", o.hand_off.text, o.why, o.on_fail.effect, ...o.setup.map((b) => b.does), ...o.setup.map((b) => b.walk_on)];
   const real = c.scene.realNames.find((n) => texts.some((t) => new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(t)));
   if (real) return `names a real player (${real})`;
   for (const b of o.setup) {
@@ -250,6 +405,29 @@ export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
   // Items are used or held only by whoever has them; hand-overs in the beats count from then on.
   const poss = checkPossession(o.setup, c);
   if (poss.problem) return poss.problem;
+  const hand = checkHandOff(o, c);
+  if (hand) return hand;
+  // The few words the model still writes in a hand-off (what they face, the two choices, what
+  // they're up against) can't have a PC doing something either.
+  if (o.hand) {
+    const h = o.hand as Record<string, string>;
+    const used: Record<string, string[]> = { question: ["what"], choice: ["what", "or"], check: ["what"], contest: ["what"], attack: ["what"], save: ["what"], notice: ["what"] };
+    for (const field of used[o.hand.kind] ?? []) {
+      if (!h[field]) continue;
+      const pcActs = c.tagger.actingTags(c.tagger.tag(h[field])).find((x) => x.entity.type === "pc");
+      if (pcActs) return `the hand-off has ${pcActs.entity.name} acting ("${pcActs.entity.name} ${pcActs.next}…")`;
+    }
+    const k = o.hand.kind;
+    if ((k === "check" || k === "contest" || k === "attack") && !c.checkTo.includes(o.hand.to))
+      return `${k === "attack" ? "an attack" : `a ${k}`} for ${o.hand.to === "table" ? "the whole table" : o.hand.to}, who didn't declare that action`;
+    if (k === "notice" && !NOTICE_SKILLS.includes(o.hand.skill as (typeof NOTICE_SKILLS)[number])) return `a notice roll with ${o.hand.skill ?? "no skill"}`;
+    if (k === "rule" && (!o.hand.mechanic || o.hand.mechanic === "none")) return "a rule roll without a rule";
+    if (k === "death_save" && o.hand.to === "table") return "a death save for the whole table";
+    if (o.hand.kind === "death_save" && o.hand.to !== "table") {
+      const e = c.tagger.entityOf(o.hand.to);
+      if (e && capabilitiesOf(e).aware) return `asks ${e.name} for a death save, but ${e.name} isn't dying`;
+    }
+  }
   // Who's being asked must be able to answer: a question needs someone who can act; a roll needs
   // someone aware (except death saves).
   const pc = o.hand_off.to !== "table" ? c.tagger.entityOf(o.hand_off.to) : undefined;
@@ -364,20 +542,27 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
     }
   }
 
+  // A check, contest or attack is for a PC acting on what their player declared; the whole table
+  // when the moment is about the whole party.
+  const checkTo = [...outcomePcs].filter((n) => scene.pcs.some((p) => p.name === n && p.status !== "dead")).concat(WHOLE_PARTY.test(moment) ? ["table"] : []);
+  const inReach = (n: string) => {
+    const e = scene.entities.find((x) => x.name === n);
+    return !reach || mentioned.has(n) || (e != null && reach.has(e.id));
+  };
   return {
     tagger,
     notes,
     fixes,
     stated,
-    check: { scene, tagger, present, remoteOk, outcomePcs, possession } satisfies CheckContext,
-    // Actors on offer: those within reach of the moment (and anyone it names), plus the PCs. A
-    // shorter list is cheaper to send and more reliable for the model to choose from.
-    actors: [...present, ...absentNpcs]
-      .filter((n) => {
-        const e = scene.entities.find((x) => x.name === n);
-        return !reach || mentioned.has(n) || (e != null && reach.has(e.id));
-      })
-      .concat(scene.pcs.map((p) => p.name)),
+    check: { scene, tagger, present, remoteOk, outcomePcs, checkTo, possession } satisfies CheckContext,
+    // Who each kind of beat may name, within reach of the moment (and anyone it names). The answer
+    // format offers each kind only its own list, so an absent NPC can't be written acting here and a
+    // PC can't be written as an NPC: the model can't choose them, rather than code catching it.
+    npcActors: [...present].filter(inReach),
+    absentActors: absentNpcs.filter(inReach),
+    outcomeActors: [...outcomePcs],
+    checkTo,
+    actors: [...present, ...absentNpcs].filter(inReach).concat(scene.pcs.map((p) => p.name)),
     // Every living PC stays on the list: a name the model insists on (an unconscious PC) then fails
     // one option's check instead of making the whole answer unparseable.
     handOff: scene.pcs.filter((p) => p.status !== "dead").map((p) => p.name),
@@ -418,6 +603,8 @@ const TONE_TEXT = [
 
 export interface ImprovOptions {
   tone?: number; // 0 grounded … 4 theatrical (default 1: Jacob found the default a bit theatrical)
+  mix?: Mix; // which kinds of option to offer; default a mix
+  steer?: string; // a one-tap nudge from the GM: "darker", "bring in Zara"
   focused?: boolean; // a tighter scene and fewer threads (cheapest); the default is wide
   threads?: number; // send exactly this many threads (plus any tied to what the moment names)
   embeddings?: string; // "local" | "voyage" | "off"; default from LOOM_EMBEDDINGS (local)
@@ -535,18 +722,26 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   const [campaignRow] = await db.select({ direction: schema.campaigns.direction }).from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
   const direction = campaignRow?.direction.trim() ?? "";
   const soFar = await sessionSoFar(campaignId);
-  const OptionsSchema = optionsSchema({ threads: threads.map((t) => `T${t.id}`), actors: lists.actors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`) });
+  const OptionsSchema = optionsSchema({ threads: threads.map((t) => `T${t.id}`), npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`) });
   const prompt = `${scene.text}
 
 WHO MAY ACT
 - Here now (kind "npc"): ${[...lists.check.present].filter((n) => typeOf.get(n) === "npc").join(", ") || "nobody named; use walk-ons"}
 - Not here (only kind "arrival" or "remote"): ${lists.actors.filter((n) => typeOf.get(n) === "npc" && !lists.check.present.has(n)).join(", ") || "nobody"}. Bring one in only when it pays off their thread, at most one per option; otherwise use walk-ons.
+- Checks, contests and attacks only for: ${lists.check.checkTo.map((n) => (n === "table" ? "the table" : n)).join(", ") || "nobody (use a question, a choice, a notice roll or a save)"}
 ${lists.stated.length ? `- As of this moment: ${lists.stated.join("; ")}\n` : ""}${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 OPEN THREADS
 ${threads.map((t) => (t.detail === "full" ? threadBlock(t, titleOf, typeOf) : `T${t.id} [${t.kind}] ${t.title}: ${t.summary}`)).join("\n")}
 ${sceneBlock}${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callbacks.map(momentLine).join("\n")}\n` : ""}${tableBlock ? `\n${tableBlock}\n` : ""}
 ${direction ? `\nWHERE THE GM WANTS THE STORY TO GO\n${direction}\n` : ""}${soFar ? `\nTHIS SESSION SO FAR (what already happened at the table, oldest first)\n${soFar}\n` : ""}
 ${lengthFor(moment)}
+MIX: ${MIXES[opts.mix ?? "mix"]}${
+    opts.steer
+      ? /^bring in /i.test(opts.steer)
+        ? `\nSTEER (the GM asked for this; follow it): every option brings in ${opts.steer.replace(/^bring in /i, "")}, as kind "arrival" or "remote" if they aren't here, tied to their threads.`
+        : `\nSTEER (the GM asked for this; follow it): make every option ${opts.steer}, still tied to threads.`
+      : ""
+  }
 ${TONE_TEXT[Math.max(0, Math.min(4, opts.tone ?? 1))]}
 
 WHAT JUST HAPPENED AT THE TABLE
@@ -554,6 +749,22 @@ ${moment}`;
 
   const idOf = (ref: string) => Number(ref.replace(/^T/, ""));
   const toOption = (o: ScaffoldOption): ImprovOption => ({
+    // A headline that decides for the players falls back to the option's first beat (which the
+    // scaffold already guarantees is the world or an NPC), shortened.
+    headline: (() => {
+      // A headline is about the world or an NPC: one that opens with a PC ("Kira must signal Bram…")
+      // is about what the player does, so it falls back.
+      const pcLed = (t: string) => scene.pcs.some((p) => new RegExp(`^${p.name.split(/\s+/)[0]}\\b(?!['’]s)`, "i").test(t));
+      const fine = (t: string) => !!t && t.split(/\s+/).length <= 13 && !planSlips(t, scene.pcs).length && !/\bwalk-on\b/i.test(t) && !pcLed(t);
+      const h = lists.tagger.render(lists.tagger.tag(o.headline ?? ""));
+      if (fine(h)) return h;
+      // Otherwise the first beat, or its first clause, or the label: whole words, never cut off.
+      const first = o.setup[0] ? renderBeat(o.setup[0], lists.tagger).replace(/[.!?]$/, "") : "";
+      const clause = first.split(/[,;:—]\s*/)[0];
+      const label = lists.tagger.render(lists.tagger.tag(o.label));
+      return [first, clause.split(/\s+/).length >= 4 ? clause : "", label].find(fine) ?? label;
+    })(),
+    flavour: o.flavour ?? null,
     thread_id: idOf(o.thread),
     also_ties_to: [...new Set(o.also_ties_to.map(idOf))].filter((id) => titleOf.has(id) && id !== idOf(o.thread)),
     label: o.label,
@@ -573,6 +784,7 @@ ${moment}`;
   const shown: ScaffoldOption[] = [];
   const rejected: { label: string; reason: string }[] = [];
   const OptionSchema = OptionsSchema.shape.options.element;
+  const wanted = MIX_FLAVOURS[opts.mix ?? "mix"];
   const showEarly = opts.onOption && !lines.length;
   for (let attempt = 0; attempt < 2 && accepted.length < 2; attempt++) {
     let seen = 0;
@@ -582,12 +794,13 @@ ${moment}`;
         rejected.push({ label: (raw as { label?: string })?.label ?? "an option", reason: "unusable answer (a value outside the allowed lists)" });
         return;
       }
-      const o = parsed.data as ScaffoldOption;
+      const o = adoptHand(parsed.data as unknown as ScaffoldOption);
       normaliseHandOff(o, lists.check);
       const reason = checkOption(o, lists.check);
       if (reason) return rejected.push({ label: o.label, reason });
       accepted.push(o);
-      if (showEarly && shown.length < 3) {
+      const fits = !wanted.length || (!!o.flavour && wanted.includes(o.flavour));
+      if (showEarly && shown.length < 3 && fits) {
         shown.push(o);
         opts.onOption!(toOption(o));
       }
@@ -608,16 +821,19 @@ ${moment}`;
     try {
       res = await callLlm({ feature: "improv", campaignId, system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true, onText });
     } catch (err) {
+      if (err instanceof Error && /credit has run out/.test(err.message)) throw err; // retrying won't help
       rejected.push({ label: `attempt ${attempt + 1}`, reason: `unusable answer (${err instanceof Error ? err.message.slice(0, 60) : "error"}…)` });
       continue;
     }
     calls.push(res);
-    for (const o of (res.data.options as ScaffoldOption[]).slice(seen)) take(o);
+    for (const o of res.data.options.slice(seen)) take(o);
   }
 
   // Ranking: whoever the moment is about comes first; the quiet-player nudge is smaller than that.
   // Options already on screen keep their place.
-  const score = (o: ScaffoldOption) => spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama") + (mentioned.has(o.hand_off.to) ? 0.7 : 0);
+  // A leaned mix (action, light…) keeps the options of that kind first.
+  const score = (o: ScaffoldOption) =>
+    spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama") + (mentioned.has(o.hand_off.to) ? 0.7 : 0) + (wanted.length && o.flavour && wanted.includes(o.flavour) ? 2 : 0);
   let kept = [...shown, ...accepted.filter((o) => !shown.includes(o)).sort((a, b) => score(b) - score(a))].slice(0, 3);
   const safety = await safetyCheck(lines, kept.map((o) => renderOption(o, lists.tagger)));
   if (safety.call) calls.push(safety.call);
@@ -634,7 +850,7 @@ ${moment}`;
 IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}. Every option must steer away from it: keep it off-screen, redirect the danger elsewhere (often onto the party or the villain's plans), or resolve it without depicting or threatening it.`;
     const res = await callLlm({ feature: "improv", campaignId, system: SYSTEM, prompt: steer, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
     calls.push(res);
-    const fresh = (res.data.options as ScaffoldOption[]).filter((o) => {
+    const fresh = (res.data.options as unknown as ScaffoldOption[]).map(adoptHand).filter((o) => {
       normaliseHandOff(o, lists.check);
       const reason = checkOption(o, lists.check);
       if (reason) rejected.push({ label: o.label, reason });
@@ -658,5 +874,20 @@ IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}
     costUsd: calls.reduce((s, c) => s + c.costUsd, 0),
     attempts: calls.filter((c) => c.model !== "safety" && c !== safety.call).length,
   };
-  return { options, dropped: rejected.length, rejected, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes, fixes: lists.fixes, quiet: new Map(seats.map((x) => [x.pc.name, x.quietFor])), meaning: meaningSummary(meaning, base.entities, sessionNumber, provider?.model ?? null, meaningNote) };
+  if (rejected.length) {
+    await db
+      .insert(schema.optionRejections)
+      .values(rejected.map((r) => ({ campaignId, model: llm.model, moment, label: r.label, reason: r.reason, kept: options.length })))
+      .catch(() => {}); // the log must never cost the GM their options
+  }
+  // One-tap steering: a few nudges, plus up to two characters from the threads in play who could
+  // be brought in (alive, not already in the moment or the options).
+  const optionText = options.map((o) => o.option).join(" ");
+  const bring = [...new Set(threads.slice(0, 6).flatMap((t) => t.entities))]
+    .map((n) => base.entities.find((e) => e.name === n))
+    .filter((e): e is NonNullable<typeof e> => !!e && e.type === "npc" && e.status !== "dead" && !mentioned.has(e.name) && !optionText.includes(e.name.split(/[\s,]+/)[0]))
+    .slice(0, 2)
+    .map((e) => `bring in ${e.name.split(",")[0]}`);
+  const steers = ["darker", "funnier", "smaller stakes", ...bring];
+  return { options, steers, dropped: rejected.length, rejected, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes, fixes: lists.fixes, quiet: new Map(seats.map((x) => [x.pc.name, x.quietFor])), meaning: meaningSummary(meaning, base.entities, sessionNumber, provider?.model ?? null, meaningNote) };
 }

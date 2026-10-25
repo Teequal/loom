@@ -21,9 +21,25 @@ export function planSlips(text: string, pcs: { name: string; aliases?: string[] 
   const subject = `(?:the party|the group|the heroes|the adventurers|the players|everyone in the party|${names.map(escape).join("|") || "(?!)"})`;
   // The subject at the start of a sentence or clause ("…, and the party slips away").
   const at = new RegExp(`(?:^|[;:]\\s+|,\\s+(?:and|then|so)\\s+|\\band then\\s+|—\\s*)${subject}(?:\\s+and\\s+${subject})?\\s+(?:[a-z]+ly\\s+)?([a-z][a-z'’-]*)`, "gi");
+  // "…, and he tries to climb the gate": a pronoun whose nearest named character before it is a PC.
+  // "he's already moving" counts too: a contraction followed by an -ing word.
+  const pronoun = /(?:,\s+(?:and|then|so)\s+|\band then\s+|;\s+)(he|she|they)(['’](?:s|re))?\s+(?:(?:already|still|now|just|[a-z]+ly)\s+)?([a-z][a-z'’-]*)/gi;
+  const named = new RegExp(`\\b(${names.map(escape).join("|") || "(?!)"}|[A-Z][a-z]+(?: [A-Z][a-z]+)*)\\b`, "g");
+  const pcNames = new Set(names.map((n) => n.toLowerCase()));
   const slips: string[] = [];
   for (const sentence of text.split(/(?<=[.!?])\s+/)) {
     if (CONDITIONAL.test(sentence)) continue;
+    let flagged = false;
+    for (const m of sentence.matchAll(pronoun)) {
+      if (m[2] ? !/ing$/i.test(m[3]) : ALLOWED_NEXT.has(m[3].toLowerCase())) continue;
+      const before = [...sentence.slice(0, m.index).matchAll(named)].map((x) => x[1]).filter((x) => !/^(The|A|An|If|When|And|But)$/.test(x));
+      if (before.length && pcNames.has(before[before.length - 1].toLowerCase())) {
+        slips.push(sentence.trim());
+        flagged = true;
+        break;
+      }
+    }
+    if (flagged) continue;
     for (const m of sentence.matchAll(at)) {
       const next = m[1].toLowerCase();
       if (/^['’]s$/.test(next) || ALLOWED_NEXT.has(next)) continue;

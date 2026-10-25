@@ -254,6 +254,19 @@ export const llmCalls = sqliteTable("llm_calls", {
   createdAt: createdAt(),
 });
 
+// Every improv option the checks threw away, and why, so changes to the answer format and the
+// checks can be measured against how often the model breaks them (and at the table, not just in tests).
+export const optionRejections = sqliteTable("option_rejections", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  campaignId: integer("campaign_id"),
+  model: text("model").notNull(),
+  moment: text("moment").notNull(),
+  label: text("label").notNull(),
+  reason: text("reason").notNull(),
+  kept: integer("kept").notNull(), // how many options the call ended up showing
+  createdAt: createdAt(),
+});
+
 // The session in progress, as it happens at the table: every moment the GM asked about, the option
 // they used (or their own), and what extracting it added to the loom. Each logged choice is
 // extracted straight away so later suggestions see it; risky changes wait as questions.

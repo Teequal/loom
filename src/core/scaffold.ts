@@ -25,6 +25,10 @@ const TAG = /\{([^{}]+)\}/g;
 // Words that can follow a character's tag without that character choosing to do something:
 // possessives, conjunctions, prepositions, articles, states of being, and things that happen
 // to someone involuntarily (shimmering, freezing, trembling).
+// Beats are written in the present tense, so a past-tense verb after a name points back at
+// something already established ("the potion {Mother Ysolde} sold him", "the vial {Bram} drank"),
+// not at someone acting now.
+const PAST = /^(?:[a-z]+(?:ed|ied)|sold|drank|gave|made|took|wrote|brought|left|stole|bought|told|said|sent|found|lost|hid|kept|broke|swore|promised|owed|won|paid|spoke|fought|met|knew|saw|heard|ate|drew|threw|tore|was|were|had)$/;
 const PASSIVE_NEXT = new Set(
   (
     "'s ’s and or but nor with to from in on at by for of as into onto toward towards over under before after behind beside near while who whom whose which that is was are were remains remain lies lay has had a an the his her their its " +
@@ -37,7 +41,7 @@ const PRONOUN_START = /^\s*(?:he|she|they|it|him|her|them)\b/i;
 // "{Name}'s <limb> <deliberate motion>": hands grabbing, legs carrying. Eyes glazing or a body
 // shimmering under a spell are effects, not actions, so they pass.
 const FORCED_BODY =
-  /\{([^{}|]+)(?:\|[^{}]*)?\}['’]s\s+(?:\w+\s+)?(?:hands?|fingers?|grip|arms?|legs?|feet|foot|body|mouth|jaw|knees?)\s+(?:\w+ly\s+)?(?:grab|seize|tighten|clench|close|open|reach|move|carry|carries|drag|pull|push|lift|raise|point|strike|swing|draw|lock|refuse|walk|step|run|speak|say|shout|turn)\w*/gi;
+  /\{([^{}|]+)(?:\|[^{}]*)?\}['’]s\s+(?:\w+\s+)?(?:hands?|fingers?|grip|arms?|legs?|feet|foot|body|mouth|jaw|knees?|eyes)\s+(?:\w+ly\s+)?(?:(?:is|are)\s+already\s+|already\s+)?(?:grab|seize|tighten|clench|close|open|reach|move|carry|carries|drag|pull|push|lift|raise|point|strike|swing|draw|lock|refuse|walk|step|run|speak|say|shout|turn|shoot|dart|fly|flies|go wide|goes? to|on\b|scrawl|write|snatch)\w*/gi;
 
 // A PC's response to what's happening (swaying, bracing, flinching) is the player's to describe.
 // Before the hand-off, beats describe sensations and forces on a PC ("the corridor tilts around
@@ -137,7 +141,7 @@ export function makeTagger(scene: Scene) {
       const e = entityOf(m[1]);
       if (!e || m[2]) continue; // possessive: an object, not an actor
       const next = (m[3] ?? "").toLowerCase();
-      if (next && !PASSIVE_NEXT.has(next)) out.push({ entity: e, next });
+      if (next && !PASSIVE_NEXT.has(next) && !PAST.test(next)) out.push({ entity: e, next });
     }
     return out;
   };
@@ -161,6 +165,7 @@ export interface CheckContext {
   present: Set<string>; // NPCs, factions and items that may act directly
   remoteOk: Set<string>; // absent NPCs the moment itself put in contact
   outcomePcs: Set<string>; // PCs whose declared action this moment is about
+  checkTo: string[]; // who a check, contest or attack may go to: those PCs, or "table" for the whole party
   possession: Possession;
 }
 

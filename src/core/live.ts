@@ -109,6 +109,13 @@ export async function logBranch(parentId: number, choice: { label: string; text:
   return e;
 }
 
+// A reworked piece replaces the latest development on the entry, so the change survives a reload.
+export async function replaceLatestDevelopment(entryId: number, plan: unknown) {
+  const [e] = await db.select().from(schema.liveEntries).where(eq(schema.liveEntries.id, entryId));
+  if (!e) return;
+  await db.update(schema.liveEntries).set({ developments: [...e.developments.slice(0, -1), plan] }).where(eq(schema.liveEntries.id, entryId));
+}
+
 // Develop results are kept on the entry they grew from, so the tree survives a reload.
 export async function saveDevelopment(entryId: number, plan: unknown) {
   const [e] = await db.select().from(schema.liveEntries).where(eq(schema.liveEntries.id, entryId));

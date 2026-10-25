@@ -9,12 +9,16 @@ const Body = z.object({
   moment: z.string().trim().min(3).max(1000),
   model: z.enum(["haiku", "sonnet", "opus"]).optional(),
   tone: z.number().int().min(0).max(4).optional(),
+  mix: z.enum(["mix", "fights", "mystery", "light", "character"]).optional(),
+  steer: z.string().trim().max(80).optional(),
 });
 
 // What the page gets for each option: the readable text and the threads it ties back to.
 // The scaffold stays on the server.
 function card(o: ImprovOption, titleOf: Map<number, string>) {
   return {
+    headline: o.headline,
+    flavour: o.flavour,
     label: o.label,
     text: o.option,
     why: o.why,
@@ -31,7 +35,7 @@ function card(o: ImprovOption, titleOf: Map<number, string>) {
 export async function POST(request: Request) {
   const parsed = Body.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Type what the players just did." }, { status: 400 });
-  const { campaignId, moment, model, tone } = parsed.data;
+  const { campaignId, moment, model, tone, mix, steer } = parsed.data;
   await dbReady();
   const titleOf = new Map((await loadThreadContexts(campaignId)).map((t) => [t.id, t.title]));
 
@@ -40,7 +44,7 @@ export async function POST(request: Request) {
     async start(controller) {
       const send = (event: object) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
       try {
-        const result = await improv(campaignId, moment, "ranked", model, { tone, onOption: (o) => send({ type: "option", option: card(o, titleOf) }) });
+        const result = await improv(campaignId, moment, "ranked", model, { tone, mix, steer, onOption: (o) => send({ type: "option", option: card(o, titleOf) }) });
         // Every moment asked about goes in the session log; using an option is a separate step.
         const entry = await logAsk(
           campaignId,
@@ -53,12 +57,13 @@ export async function POST(request: Request) {
           count: result.options.length,
           // Where the moment and the records disagree: what Loom did, and a fix the page can apply.
           fixes: result.fixes,
+          steers: result.steers,
           safetyNote: result.safetyNote,
           llm: { model: result.llm.model, seconds: result.llm.latencyMs / 1000, costUsd: result.llm.costUsd, attempts: result.llm.attempts },
         });
       } catch (err) {
         console.error(err);
-        send({ type: "error", message: "Loom couldn't come up with options this time. Try again." });
+        send({ type: "error", message: err instanceof Error && /credit has run out/.test(err.message) ? err.message : "Loom couldn't come up with options this time. Try again." });
       } finally {
         controller.close();
       }

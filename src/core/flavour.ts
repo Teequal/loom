@@ -107,6 +107,7 @@ On a failure [${scaffold.on_fail.target}]: ${scaffold.on_fail.effect ? t.render(
       ? ""
       : renderOnFail(scaffold.on_fail.target, onFailProblem || !res.data.on_fail.trim() ? scaffold.on_fail.effect : res.data.on_fail, t);
 
-  const handOff = res.data.hand_off.trim() ? t.render(t.tag(res.data.hand_off)) : t.render(t.tag(scaffold.hand_off.text));
+  // A hand-off built from parts keeps Loom's own sentence: rewording it could decide for the player.
+  const handOff = res.data.hand_off.trim() && !scaffold.hand ? t.render(t.tag(res.data.hand_off)) : t.render(t.tag(scaffold.hand_off.text));
   return { beats, handOff, onFail, mechanic: mechanic?.name ?? null, fallbacks, llm: res };
 }
