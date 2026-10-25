@@ -11,6 +11,7 @@ import { planSlips } from "./plan-agency";
 import { listMoments, momentLine } from "./moments";
 import { personalLines, spotlightScore, tableSeats } from "./players";
 import { buildScene, type Scene } from "./scene";
+import { findMoves, movesBlock } from "./moves";
 import { BODY_PARTS, expand, fillSlots, pcOpensClause, SENSATIONS, type Ref } from "./slots";
 import type { Overrides, RecordFix } from "./situation";
 export type { RecordFix };
@@ -30,6 +31,7 @@ export interface ScaffoldOption {
   hand_off: { to: string; kind: "question" | "roll"; mechanic: string; text: string }; // the sentence code writes from `hand`
   hand?: Hand; // what the model chose, in parts
   refs?: Ref[]; // who and what the sentences name, with the part each plays ({1}, {2} in the text)
+  move?: string; // the engine's move it builds on ("M2"), from moves.ts
   on_fail: { target: string; effect: string };
   why: string;
   callback?: string; // "M12" if it calls back a key moment, else "none"
@@ -130,7 +132,7 @@ export interface ImprovOption {
 const SYSTEM = `You are Loom, a game master's assistant used live at the table. The players just did something unexpected. Offer 4 short, playable options that tie the moment back to threads already in the campaign, instead of inventing new material.
 
 Rules:
-- Every option builds on one of the listed threads (thread). Prefer options that pay off, complicate or collide existing threads. also_ties_to lists other threads the option genuinely uses; one strong tie beats three loose ones.
+- Every option builds on one of the engine's MOVES (move), a different one for each option. Its main thread is thread; also_ties_to lists the move's other threads it genuinely uses. Only the move's cast may be named as actors: those "here" in npc beats, those who "can arrive or send word" in arrival or remote beats. Anyone else is a walk-on.
 - Get the facts right: who did what to whom must match the threads and cards exactly.
 - Match the energy of the moment: comedic stays comedic, tense stays tense. LENGTH and TONE at the end say how much to write and how dramatic to be.
 - Serve where the story is going: when the GM has said where they want it to head, options should move toward that, not away from it. Build on what this session has already established.
@@ -139,7 +141,7 @@ Rules:
 - Small table-level details (a sound, a line of dialogue, an unnamed extra) are fine; new plots, factions or major NPCs are not. Never include anything on the safety lines.
 - Make the options genuinely different from each other.
 
-REFERENCES: never write a name inside your sentences. List the characters, places and items an option names in refs, in order, and write {1}, {2}… where they go, as "object" (something happens to it, it's seen, given or talked about) or "possessor" (it owns what follows: "{2}'s seal is broken"). Player characters are only ever objects or owners of things ("the guard eyes {1}'s pack"); no sentence or clause starts with one.
+REFERENCES: list the characters, places and items an option names in refs, and write each in braces exactly as listed where it goes ("{Iresia}", "{Shard of Azarath's Mirror|the Shard}"), as "object" (something happens to it, it's seen, given or talked about) or "possessor" (it owns what follows: "{2}'s seal is broken"). Player characters are only ever objects or owners of things ("the guard eyes {1}'s pack"); no sentence or clause starts with one.
 
 Each option is a scaffold:
 - setup: short beats of what happens next, as many and as long as LENGTH says. What the players declared isn't narrated: the world responds to it, and the hand settles how it turns out. Each beat has a kind:
@@ -161,14 +163,14 @@ Each option is a scaffold:
   Rolls are for player characters only; what NPCs notice or decide is the GM's call, never a roll.
 - on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. For a roll by the table, the effect says who it hits ("whoever fails…"), never "he" or "she". This is the only place a PC may act against their player's will. Otherwise target "none" and effect "".
 - headline: plain words (names as words here, no braces), written after the option, as its summary in one glanceable line, under 12 words, present tense, the hook first ("The lookout bolts for the alarm bell"). Use only the characters, objects and place the setup and hand actually use, called the same thing (if the setup has a fishmonger, so does the headline). Its subject is the world or an NPC, never a player character or the party; an unnamed extra is "a merchant", "a guard", never "a walk-on". The GM reads only this before choosing. flavour: one of payoff, twist, callback, character, tense, funny, mystery, fight. MIX at the end says which kinds to offer.
-- label: 2-5 words. why: under 15 words, why this fits now; don't repeat the thread title or use thread numbers.
+- label: 2-5 words. why: the move's "because", in your own words, under 15 words; don't repeat the thread title or use thread numbers.
 - callback: if the option echoes or pays off one of the KEY MOMENTS listed, its id ("M12"); otherwise "none". Use one only when it genuinely fits.
 - pillar: the kind of play the option mostly offers: combat, social, exploration, mystery, comedy or drama.
 - Hand-offs mostly go to whoever the moment is about. HAND ONE OPTION TO, when given, names one PC to give one option to, if it fits. Never mention players.`;
 
 const nonEmpty = (xs: string[], fallback: string): [string, ...string[]] => (xs.length ? (xs as [string, ...string[]]) : [fallback]);
 
-function optionsSchema(lists: { threads: string[]; nameable: string[]; npcActors: string[]; absentActors: string[]; outcomeActors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[] }) {
+function optionsSchema(lists: { moves: string[]; threads: string[]; nameable: string[]; npcActors: string[]; absentActors: string[]; outcomeActors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[] }) {
   // One shape per kind of beat, each with only the actors that kind allows. A kind with nobody to
   // offer is left out.
   const beat = <K extends ScaffoldBeat["kind"]>(kind: K, actors: string[]) => z.object({ kind: z.literal(kind), actor: z.enum(nonEmpty(actors, "world")), walk_on: z.string(), does: z.string() });
@@ -198,6 +200,7 @@ function optionsSchema(lists: { threads: string[]; nameable: string[]; npcActors
   return z.object({
     options: z.array(
       z.object({
+        move: z.enum(nonEmpty(lists.moves, "M1")),
         thread,
         also_ties_to: z.array(thread),
         label: z.string(),
@@ -254,6 +257,8 @@ export function renderBeat(b: ScaffoldBeat, tagger: Tagger) {
   if (!extra && (b.kind === "world" || b.actor === "world")) return sentence(capitalise(/^[a-z]+s\b/.test(does) && !/^(?:this|its|has|is|was)\b/.test(does) ? `someone ${does}` : does));
   const subject = extra ? capitalise(tagger.render(b.walk_on).replace(/\bwalk-on\b\s*/gi, "").trim() || "someone") : b.actor;
   const startsWithSubject = does.toLowerCase().startsWith(subject.toLowerCase()) || does.toLowerCase().startsWith(subject.split(/[\s,]+/)[0].toLowerCase());
+  // "a voice rasps through the murmur…" after a named actor: their part, set off with a dash.
+  if (!startsWithSubject && !extra && /^(?:a|an|the|some)\b/i.test(does)) return sentence(`${subject}: ${does}`);
   return sentence(startsWithSubject ? capitalise(does) : `${subject} ${does}`);
 }
 
@@ -316,6 +321,9 @@ export function normaliseHandOff(o: ScaffoldOption, c: CheckContext) {
       const notice = h.skill && NOTICE_SKILLS.includes(h.skill as (typeof NOTICE_SKILLS)[number]);
       o.hand = notice ? { ...h, kind: "notice" } : { ...h, kind: "save", ability: h.skill && h.skill !== "none" ? (SKILL_ABILITY[h.skill] ?? h.ability) : h.ability, skill: "none" };
     }
+    // A choice is something the player would do: a phrase that starts with someone's name ("Tomas
+    // proposes a tavern…") isn't one, so it becomes a question.
+    if (o.hand.kind === "choice" && [o.hand.what, o.hand.or].some((x) => /^\s*\{?[A-Z][\w'’-]+/.test(x ?? "") && c.tagger.entityOf((x ?? "").replace(/^\s*\{?/, "").split(/[|}\s]/)[0]))) o.hand = { ...o.hand, kind: "question", what: "" };
     // A rule roll with no rule named is a question about what they face.
     if (o.hand.kind === "rule" && (!o.hand.mechanic || o.hand.mechanic === "none")) o.hand = { ...o.hand, kind: "question" };
     if (o.hand.kind === "death_save" && o.hand.to !== "table") {
@@ -669,7 +677,12 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   const [campaignRow] = await db.select({ direction: schema.campaigns.direction }).from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
   const direction = campaignRow?.direction.trim() ?? "";
   const soFar = await sessionSoFar(campaignId);
-  const OptionsSchema = optionsSchema({ threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`) });
+  // The engine's moves for this moment: what could happen, on which threads, with whom (moves.ts).
+  const moves = findMoves(scene.situation.view, threads, {
+    callbacks,
+    liveRules: scene.situation.effects.filter((e) => e.live).map((e) => ({ name: e.effect.name, why: e.why, sourceName: e.sourceName })),
+  });
+  const OptionsSchema = optionsSchema({ moves: moves.map((m) => m.id), threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`) });
   const prompt = `${scene.text}
 
 WHO MAY ACT
@@ -680,6 +693,9 @@ WHO MAY ACT
 ${lists.stated.length ? `- As of this moment: ${lists.stated.join("; ")}\n` : ""}${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 OPEN THREADS
 ${threads.map((t) => (t.detail === "full" ? threadBlock(t, titleOf, typeOf) : `T${t.id} [${t.kind}] ${t.title}: ${t.summary}`)).join("\n")}
+
+MOVES (the engine's picks for this moment: build each option on a different one)
+${movesBlock(moves, titleOf)}
 ${sceneBlock}${callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${callbacks.map(momentLine).join("\n")}\n` : ""}${tableBlock ? `\n${tableBlock}\n` : ""}
 ${direction ? `\nWHERE THE GM WANTS THE STORY TO GO\n${direction}\n` : ""}${soFar ? `\nTHIS SESSION SO FAR (what already happened at the table, oldest first)\n${soFar}\n` : ""}
 ${lengthFor(moment)}
@@ -731,6 +747,7 @@ ${moment}`;
   const accepted: ScaffoldOption[] = [];
   const shown: ScaffoldOption[] = [];
   const rejected: { label: string; reason: string }[] = [];
+  const droppedSentences: { label: string; reason: string }[] = []; // logged, but the option survived
   const OptionSchema = OptionsSchema.shape.options.element;
   const wanted = MIX_FLAVOURS[opts.mix ?? "mix"];
   const showEarly = opts.onOption && !lines.length;
@@ -743,9 +760,28 @@ ${moment}`;
         return;
       }
       const filled = fillSlots(adoptHand(parsed.data as unknown as ScaffoldOption), lists.tagger);
+      for (const d of filled.dropped) droppedSentences.push({ label: (parsed.data as { label: string }).label, reason: `sentence dropped: ${d}` });
       if (filled.problem) return rejected.push({ label: (parsed.data as { label: string }).label, reason: filled.problem });
       const o = filled.option;
       normaliseHandOff(o, lists.check);
+      // The option's move sets its thread and its cast: a named character outside the cast is
+      // dropped with their sentence (anyone else is a walk-on).
+      const move = moves.find((m) => m.id === o.move);
+      if (move && !move.threads.includes(idOf(o.thread))) o.thread = `T${move.threads[0]}`;
+      const outsideCast = (b: ScaffoldBeat) => {
+        if (!move || (b.kind !== "npc" && b.kind !== "arrival" && b.kind !== "remote") || b.actor === "walk-on" || b.actor === "world") return null;
+        const c = move.cast.find((x) => x.name === b.actor);
+        if (!c) return `${b.actor} isn't in this move's cast`;
+        if (b.kind === "npc" && c.can !== "act") return `${b.actor} isn't here; in this move they can only arrive or send word`;
+        return null;
+      };
+      // The same for the world-model checks: a sentence that breaks one goes, the option stays.
+      const kept = o.setup.filter((b) => {
+        const r = outsideCast(b) ?? checkBeat(b, lists.check);
+        if (r) droppedSentences.push({ label: o.label, reason: `sentence dropped: ${r}` });
+        return !r;
+      });
+      if (kept.length) o.setup = kept;
       const reason = checkOption(o, lists.check);
       if (reason) return rejected.push({ label: o.label, reason });
       accepted.push(o);
@@ -827,10 +863,10 @@ IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}
     costUsd: calls.reduce((s, c) => s + c.costUsd, 0),
     attempts: calls.filter((c) => c.model !== "safety" && c !== safety.call).length,
   };
-  if (rejected.length) {
+  if (rejected.length || droppedSentences.length) {
     await db
       .insert(schema.optionRejections)
-      .values(rejected.map((r) => ({ campaignId, model: llm.model, moment, label: r.label, reason: r.reason, kept: options.length })))
+      .values([...rejected, ...droppedSentences].map((r) => ({ campaignId, model: llm.model, moment, label: r.label, reason: r.reason, kept: options.length })))
       .catch(() => {}); // the log must never cost the GM their options
   }
   // One-tap steering: a few nudges, plus up to two characters from the threads in play who could

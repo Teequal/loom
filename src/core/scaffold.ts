@@ -250,7 +250,7 @@ const REFERENCE_NEXT = new Set(
     // What someone wants, knows or believes is about them, not them being here.
     "wants needs knows believes hopes fears seeks hunts plans means intends " +
     // "Zara must be told", "the figurine should be in the river": statements about them.
-    "must should would could might may can cannot will"
+    "must should would could might may can cannot will ever yet never"
   ).split(" "),
 );
 const REPORTED = /\b(?:saw|seen|see|sees|heard|hears|watched|remembers?|remembered|recalls?|recalled|dreams?|dreamt|dreamed|imagines?|swears?|swore|says?|said|claims?|claimed|tells?|told|rumou?rs?|story|stories|legends?|vision of|visions of|memory of|image of|reflection of)\b[^.!?;]*$/i;
@@ -291,7 +291,7 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
     case "walk_on":
       if (!b.walk_on.trim()) return "a walk-on beat has no description of the extra";
       // "Bhen's mother" is someone new described through a known character, not that character.
-      if (c.tagger.tagsIn(c.tagger.tag(b.walk_on).replace(/\{[^{}]+\}['’]s\b/g, "")).some((n) => { const t = c.tagger.entityOf(n)?.type; return t === "npc" || t === "pc"; })) return `a walk-on is really a known character: "${b.walk_on}"`;
+      if (c.tagger.tagsIn(c.tagger.tag(b.walk_on).replace(/\{[^{}]+\}['’]s\b|\b(?:of|for|from|to|with)\s+\{[^{}]+\}/g, "")).some((n) => { const t = c.tagger.entityOf(n)?.type; return t === "npc" || t === "pc"; })) return `a walk-on is really a known character: "${b.walk_on}"`;
       break;
     case "npc":
       if (!actor || isPc(actor)) return `a player character (${b.actor}) is used as an acting NPC`;

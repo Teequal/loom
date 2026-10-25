@@ -50,14 +50,38 @@ export function pcOpensClause(tagged: string, tagger: Tagger, except?: string): 
     if (!m[2] && /^(?:is|was|are|were|remains|remained)$/i.test(m[3] ?? "")) continue; // "{Darius} is still caged": what state they're in
     return `${e.name} opens a clause, as if doing something ("…${tagger.render(tagged.slice(m.index ?? 0, (m.index ?? 0) + 40))}…")`;
   }
-  // "…in {Khayiulad}'s palm, and he…": a pronoun opening a clause stands for the last character
-  // named before it; if that's a PC, it's the PC.
-  for (const m of tagged.matchAll(/\b(he|she|they)\b/gi)) {
-    const before = tagger.render(tagged.slice(0, m.index)).trimEnd();
-    if (!CLAUSE_START.test(before)) continue;
-    const named = [...tagged.slice(0, m.index).matchAll(/\{([^{}|]+)(?:\|[^{}]*)?\}/g)].map((x) => tagger.entityOf(x[1])).filter((e) => e?.type === "pc" || e?.type === "npc");
-    const last = named[named.length - 1];
-    if (last?.type === "pc" && last.name !== except) return `${last.name} opens a clause, as if doing something ("…${m[0]} ${tagger.render(tagged.slice((m.index ?? 0) + m[0].length, (m.index ?? 0) + 40)).trim()}…")`;
+  // A reference without a name stands for the last character named before it in the sentence,
+  // and is read as if that name were written. If it's a PC, these are the PC doing something:
+  // - "he/she/they" opening a clause ("…in {Khayiulad}'s palm, and he staggers");
+  // - "his/her/their" + a body part opening a clause ("…, and his grip tightens");
+  // - "himself/herself/themselves" anywhere ("steadies himself");
+  // - after a comma, a phrase with no subject of its own: one opening on an -ing word, or a body
+  //   part with no verb of its own ("…, one hand braced"). (A phrase opening on an -ing word
+  //   belongs to the sentence's subject, which isn't always the last name: not read.)
+  const lastBefore = (at: number) => {
+    const named = [...tagged.slice(0, at).matchAll(/\{([^{}|]+)(?:\|[^{}]*)?\}/g)].map((x) => tagger.entityOf(x[1])).filter((e) => e?.type === "pc" || e?.type === "npc");
+    return named[named.length - 1];
+  };
+  const say = (who: string, at: number) => `${who} does something, through a word standing for them ("…${tagger.render(tagged.slice(at, at + 40)).trim()}…")`;
+  const offsets = (re: RegExp) => [...tagged.matchAll(re)].map((m) => ({ m, at: m.index ?? 0 }));
+  for (const { m, at } of offsets(/\b(he|she|they)\b(?!['’])/gi)) {
+    if (!CLAUSE_START.test(tagger.render(tagged.slice(0, at)).trimEnd())) continue;
+    const who = lastBefore(at);
+    if (who?.type === "pc" && who.name !== except) return `${who.name} opens a clause, as if doing something ("…${m[0]} ${tagger.render(tagged.slice(at + m[0].length, at + 40)).trim()}…")`;
+  }
+  for (const { m, at } of offsets(/\b(?:his|her|their)\s+(\w+)(?:\s+(\w+))?/gi)) {
+    if (!(BODY.test(m[1]) || BODY.test(m[2] ?? "")) || !CLAUSE_START.test(tagger.render(tagged.slice(0, at)).trimEnd())) continue;
+    const who = lastBefore(at);
+    if (who?.type === "pc" && who.name !== except) return say(who.name, at);
+  }
+  for (const { at } of offsets(/\b(?:himself|herself|themselves|themself)\b/gi)) {
+    const who = lastBefore(at);
+    if (who?.type === "pc" && who.name !== except) return say(who.name, at);
+  }
+  for (const { m, at } of offsets(/,\s+(?:one|a|both|his|her|their)\s+(?:\w+\s+)?(\w+)\s+(\w+ed|\w+ing)\b/gi)) {
+    if (!BODY.test(m[1])) continue;
+    const who = lastBefore(at);
+    if (who?.type === "pc" && who.name !== except) return say(who.name, at + 1);
   }
   return null;
 }
@@ -81,8 +105,16 @@ export function expand(text: string, refs: Ref[], tagger: Tagger): { tagged: str
     const owns = owned || (ref.as === "possessor" && canOwn && next && !/^[.,;:!?—]|^(?:with|and|or|but|to|at|in|on|as|from|for|of|by|who|which|that|the|a|an)$/.test(next));
     return owns ? `{${ref.name}}'s` : `{${ref.name}}`;
   });
+  // A reference written by name in braces ("{Iresia}'s hands") is the same reference: numbers are
+  // easy to mix up, names aren't. Its part comes from the list.
+  const byName = tagged.replace(/\{([^{}|\d][^{}|]*)\}(?!['’]s\b)(\s+\w+)?/g, (whole, name: string, next: string | undefined) => {
+    const ref = refs.find((r) => r.name.toLowerCase() === name.trim().toLowerCase());
+    const kind = tagger.entityOf(name.trim())?.type;
+    const owns = ref?.as === "possessor" && (kind === "pc" || kind === "npc" || kind === "faction") && next && !/^\s+(?:with|and|or|but|to|at|in|on|as|from|for|of|by|who|which|that|the|a|an)$/i.test(next);
+    return owns ? `{${name}}'s${next}` : whole;
+  });
   // Names written as words are tagged too, and read the same way as references.
-  const named = tagger.tag(tagged);
+  const named = tagger.tag(byName);
   problem ??= pcOpensClause(named, tagger);
   return { tagged: named, problem };
 }
@@ -104,22 +136,26 @@ export interface SlotOption {
 }
 
 /** The option with its slots filled: names in place, "happens" beats written as sentences. */
-export function fillSlots<O extends SlotOption>(o: O, tagger: Tagger): { option: O & { setup: ScaffoldBeat[] }; problem: string | null } {
+export function fillSlots<O extends SlotOption>(o: O, tagger: Tagger): { option: O & { setup: ScaffoldBeat[] }; problem: string | null; dropped: string[] } {
   const refs = o.refs ?? [];
   let problem: string | null = null;
   const setup: ScaffoldBeat[] = [];
+  const dropped: string[] = [];
+  // A sentence that breaks a rule is dropped, not the whole option; only an option left with
+  // nothing is.
   for (const b of o.setup) {
     if (b.kind === "happens") {
       setup.push({ kind: "world", actor: "world", walk_on: "", does: renderHappens(b, refs, tagger), byCode: true });
       continue;
     }
     const r = expand(b.does, refs, tagger);
-    problem ??= r.problem;
-    setup.push({ ...b, does: r.tagged });
+    if (r.problem) dropped.push(r.problem);
+    else setup.push({ ...b, does: r.tagged });
   }
+  if (!setup.length && dropped.length) problem = dropped[0];
   // A failure may move the PC who rolled; nobody else's PC.
   const fail = expand(o.on_fail.effect, refs, tagger);
   const otherPc = pcOpensClause(fail.tagged, tagger, o.on_fail.target);
   if (otherPc && o.on_fail.effect.trim()) problem ??= `on a failure, ${otherPc}`;
-  return { option: { ...o, setup, on_fail: { ...o.on_fail, effect: fail.tagged } }, problem };
+  return { option: { ...o, setup, on_fail: { ...o.on_fail, effect: fail.tagged } }, problem, dropped };
 }
