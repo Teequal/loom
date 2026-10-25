@@ -13,7 +13,7 @@ import { personalLines, spotlightScore, tableSeats, tableText } from "./players"
 import { buildScene, type Scene } from "./scene";
 import type { Overrides, RecordFix } from "./situation";
 export type { RecordFix };
-import { capabilitiesOf, checkBeat, checkOnFail, checkPossession, makeTagger, type CheckContext, type Possession, type ScaffoldBeat, type Tagger } from "./scaffold";
+import { capabilitiesOf, checkBeat, checkOnFail, checkPossession, makeTagger, notInScene, pcBodyActs, type CheckContext, type Possession, type ScaffoldBeat, type Tagger } from "./scaffold";
 
 // The improv box answers with a scaffold, not free prose. The answer format is built for each
 // request: the "who acts" slot only offers characters allowed to act right now, the thread slot
@@ -271,7 +271,12 @@ const TABLE_TALK = /\b(?:spotlight|quiet (?:soul|one|player|lately|this session)
 // The model's hand-off parts become the sentence the rest of Loom reads (checks, rendering, the page).
 export function adoptHand(o: ScaffoldOption): ScaffoldOption {
   if (!o.hand) return o;
-  return { ...o, hand_off: { to: o.hand.to, ...handText(o.hand) } };
+  // What the engine knows fills a gap rather than failing the option: a notice roll without a
+  // skill is Perception; a check whose skill isn't a notice skill but was asked as "notice" keeps
+  // its skill as a check of that kind.
+  const hand = { ...o.hand };
+  if (hand.kind === "notice" && (!hand.skill || hand.skill === "none")) hand.skill = "Perception";
+  return { ...o, hand, hand_off: { to: hand.to, ...handText(hand) } };
 }
 
 // A hand-off to "the table" whose text names exactly one PC is really to that PC.
@@ -653,7 +658,7 @@ ${moment}`;
       // A headline is about the world or an NPC: one that opens with a PC ("Kira must signal Bram…")
       // is about what the player does, so it falls back.
       const pcLed = (t: string) => scene.pcs.some((p) => new RegExp(`^${p.name.split(/\s+/)[0]}\\b(?!['’]s)`, "i").test(t));
-      const fine = (t: string) => !!t && t.split(/\s+/).length <= 13 && !planSlips(t, scene.pcs).length && !/\bwalk-on\b/i.test(t) && !pcLed(t);
+      const fine = (t: string) => !!t && t.split(/\s+/).length <= 13 && !planSlips(t, scene.pcs).length && !/\bwalk-on\b/i.test(t) && !pcLed(t) && !notInScene(lists.tagger.tag(t), lists.check) && !pcBodyActs(lists.tagger.tag(t), lists.check);
       const h = lists.tagger.render(lists.tagger.tag(o.headline ?? ""));
       if (fine(h)) return h;
       // Otherwise the first beat, or its first clause, or the label: whole words, never cut off.

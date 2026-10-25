@@ -40,8 +40,30 @@ const PRONOUN_START = /^\s*(?:he|she|they|it|him|her|them)\b/i;
 
 // "{Name}'s <limb> <deliberate motion>": hands grabbing, legs carrying. Eyes glazing or a body
 // shimmering under a spell are effects, not actions, so they pass.
-const FORCED_BODY =
-  /\{([^{}|]+)(?:\|[^{}]*)?\}['’]s\s+(?:\w+\s+)?(?:hands?|fingers?|grip|arms?|legs?|feet|foot|body|mouth|jaw|knees?|eyes)\s+(?:\w+ly\s+)?(?:(?:is|are)\s+already\s+|already\s+)?(?:grab|seize|tighten|clench|close|open|reach|move|carry|carries|drag|pull|push|lift|raise|point|strike|swing|draw|lock|refuse|walk|step|run|speak|say|shout|turn|shoot|dart|fly|flies|go wide|goes? to|on\b|scrawl|write|snatch)\w*/gi;
+// A PC's body is the player's. When a PC's body part is the subject ("{Khayiulad}'s eyes…"),
+// only what happens TO them may follow: sensations (tingles, burns, goes cold, swims). Anything
+// else is the body doing something, which only a failed roll can make it do. Listing what's
+// allowed, rather than every reaction that isn't, is what makes this hold.
+const BODY = "hands?|fingers?|grip|arms?|legs?|feet|foot|body|mouth|jaw|knees?|eyes?|head|face|shoulders?|chest|heart|breath|voice|skin|scales|horns?|tail|lips|teeth|stomach|back|spine|muscles|throat|pulse|blood|vision|ears?|nose|neck|wrists?|palms?|thoughts|mind";
+const PC_BODY = new RegExp(`\\{([^{}|]+)(?:\\|[^{}]*)?\\}['’]s\\s+(?:(?:left|right|own|bandaged|injured|wounded|scaled|clawed|bare|cold|trembling)\\s+)?(?:${BODY})\\s+(?:\\w+ly\\s+)?([a-z]+)(?:\\s+([a-z]+))?`, "gi");
+const SENSATION = /^(?:tingles?|burns?|aches?|throbs?|stings?|itch(?:es)?|prickles?|pounds?|races?|hammers?|flutters?|feels?|is|are|was|were|has|have|had|catches|hitches|swims?|blurs?|doubles?|fills?|darkens?|spins?|rings?|hums?|buzz(?:es)?|crawls?)$/;
+const BECOMES = /^(?:go|goes|grow|grows|turn|turns|run|runs)$/;
+const STATE = /^(?:cold|numb|warm|hot|pale|heavy|slick|stiff|dry|white|still|tight|weak|clammy|icy)$/;
+// The body part is only the subject when nothing puts it in a phrase ("in {Khayiulad}'s hand",
+// "against her palm"), and only acts when a verb follows ("…hand like a…" isn't one).
+const PREPOSITION_BEFORE = /\b(?:in|on|against|into|onto|from|at|over|under|through|around|across|beside|by|between|of|with|within|toward|towards|to|inside|behind)\s+(?:the\s+)?$/i;
+const NOT_A_VERB = /^(?:like|as|and|or|but|with|while|when|to|of|in|on|at|for|from|that|which|so|than|the|a|an)$/;
+export function pcBodyActs(tagged: string, c: CheckContext): string | null {
+  for (const m of tagged.matchAll(PC_BODY)) {
+    const e = c.tagger.entityOf(m[1]);
+    if (!e || !isPc(e)) continue;
+    if (PREPOSITION_BEFORE.test(tagged.slice(Math.max(0, (m.index ?? 0) - 25), m.index)) || NOT_A_VERB.test(m[2].toLowerCase())) continue;
+    const [verb, after] = [m[2].toLowerCase(), (m[3] ?? "").toLowerCase()];
+    if (SENSATION.test(verb) || (BECOMES.test(verb) && STATE.test(after)) || PAST.test(verb)) continue;
+    return `has ${e.name}'s body act before any roll ("…${m[0].replace(/\{([^{}|]+)(?:\|([^{}]*))?\}/g, (_, n, r) => r || n)}…"); only what happens to them can be described`;
+  }
+  return null;
+}
 
 // A PC's response to what's happening (swaying, bracing, flinching) is the player's to describe.
 // Before the hand-off, beats describe sensations and forces on a PC ("the corridor tilts around
@@ -212,7 +234,12 @@ export function checkPossession(beats: ScaffoldBeat[], c: CheckContext): { probl
   const holds = (who: string, item: string) => {
     if (lostNow(item)) return false;
     const h = holdersOf(item, c.possession, gained);
-    return h.size === 0 || h.has(who); // nobody recorded as holding it: can't judge
+    // Nobody recorded as holding it: anyone may, if it's here; if it isn't, nobody here has it.
+    if (h.size === 0) {
+      const e = c.tagger.entityOf(item);
+      return !e || roleOf(e, c)?.role !== "reachable" || !!gained.get(item)?.size;
+    }
+    return h.has(who);
   };
   const recorded = (item: string) => (lostNow(item) ? "nobody (it's lost)" : [...holdersOf(item, c.possession, gained)].join(", ") || "nobody");
 
@@ -247,9 +274,37 @@ export function checkPossession(beats: ScaffoldBeat[], c: CheckContext): { probl
 }
 
 const isPc = (e: Entity) => e.type === "pc";
-// Only characters can be somewhere they shouldn't be; places and items don't "act" in that sense.
-const unavailable = (e: Entity, c: CheckContext) =>
-  e.type !== "npc" ? null : e.status === "dead" ? "dead" : !c.present.has(e.name) && !c.remoteOk.has(e.name) ? "absent" : null;
+// The role law, for every kind of entity: something can only do what its role in this moment
+// allows (profiles.ts). Here: it may act. Reachable: it may arrive or send word, nothing more.
+// Remembered (dead, lost, destroyed): it may only be recalled or talked about. What follows a
+// name that isn't here has to read as a reference ("the knight figurine lies in the Morrow", "the
+// note Zara sent", "Gary, who…"), never as it doing or being something now.
+const REFERENCE_NEXT = new Set(
+  (
+    "and or but nor with to from in on at by for of as into onto toward towards over under before after behind beside near who whom whose which that " +
+    "is was were are be been lies lay remains remained rests rested sank had has once still"
+  ).split(" "),
+);
+const REPORTED = /\b(?:saw|seen|see|sees|heard|hears|watched|remembers?|remembered|recalls?|recalled|dreams?|dreamt|dreamed|imagines?|swears?|swore|says?|said|claims?|claimed|tells?|told|rumou?rs?|story|stories|legends?|vision of|visions of|memory of|image of|reflection of)\b[^.!?;]*$/i;
+const roleOf = (e: Entity, c: CheckContext) => c.scene.situation.profiles.get(e.name);
+export function notInScene(tagged: string, c: CheckContext, own?: { actor?: Entity; kind?: BeatKind }): string | null {
+  for (const m of tagged.matchAll(new RegExp(`${TAG_RE}(['’]s)?\\s*([\\w'’-]*)`, "g"))) {
+    const e = c.tagger.entityOf(m[1]);
+    if (!e || isPc(e) || e.type === "location" || m[2]) continue; // PCs have their own checks; possessives are objects
+    const p = roleOf(e, c);
+    if (!p || p.role === "here") continue;
+    if (own?.actor?.name === e.name && (own.kind === "arrival" || own.kind === "remote")) continue;
+    if (own?.kind === "remote" && c.remoteOk.has(e.name)) continue;
+    // Inside a memory, a report or a vision, it isn't here: "swears he saw the figurine sink".
+    if (REPORTED.test(tagged.slice(Math.max(0, (m.index ?? 0) - 60), m.index))) continue;
+    const next = (m[3] ?? "").toLowerCase();
+    if (!next || REFERENCE_NEXT.has(next) || PAST.test(next)) continue;
+    return p.role === "remembered"
+      ? `${e.name} can only be remembered here (${p.standing}), but "${e.name} ${next}…" has it here now`
+      : `${e.name} isn't here (${p.standing}), but "${e.name} ${next}…" has it here; it can only arrive or send word`;
+  }
+  return null;
+}
 
 // Checks one beat. The actor slot is already restricted by the schema; this checks the
 // combinations and the free text for characters acting where they can't.
@@ -304,10 +359,8 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
   // A PC's body acting on its own ("{Darius}'s legs carry him…") is a forced action: only an
   // outcome of their own declared action, or a failed roll, can do that.
   if (b.kind !== "outcome") {
-    for (const m of does.matchAll(FORCED_BODY)) {
-      const e = c.tagger.entityOf(m[1]);
-      if (e && isPc(e)) return `forces ${e.name}'s body to act before any roll: "${c.tagger.render(does)}"`;
-    }
+    const r = pcBodyActs(does, c);
+    if (r) return r;
   }
 
   {
@@ -319,10 +372,11 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
   for (const { entity, next } of c.tagger.actingTags(does)) {
     if (actor && entity.name === actor.name) continue; // the beat's own actor
     if (isPc(entity)) return `${entity.name} acts mid-sentence ("${entity.name} ${next}…")`;
-    if (!capabilitiesOf(entity).act && entity.status !== "dead") return `${entity.name} can't act right now (${capabilitiesOf(entity).causes?.join(", ") || "incapacitated"}) but does ("${entity.name} ${next}…")`;
-    const why = unavailable(entity, c);
-    if (why === "dead") return `${entity.name} is dead but acts ("${entity.name} ${next}…")`;
-    if (why === "absent" && b.kind !== "arrival" && b.kind !== "remote") return `${entity.name} isn't here but acts ("${entity.name} ${next}…")`;
+    if (!capabilitiesOf(entity).act && entity.status !== "dead" && roleOf(entity, c)?.role === "here") return `${entity.name} can't act right now (${capabilitiesOf(entity).causes?.join(", ") || "incapacitated"}) but does ("${entity.name} ${next}…")`;
+  }
+  {
+    const r = notInScene(does, c, { actor, kind: b.kind });
+    if (r) return r;
   }
   // A world beat that opens with a character is that character acting.
   if (b.kind === "world") {
@@ -331,8 +385,9 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
     const e = lead ? c.tagger.entityOf(lead) : undefined;
     if (e && first.startsWith(e.name) && !/^['’]s/.test(first.slice(e.name.length))) {
       if (isPc(e)) return `${e.name} acts in a world beat`;
-      const why = unavailable(e, c);
-      if (why) return `${e.name} is ${why === "dead" ? "dead" : "not here"} but acts in a world beat`;
+      // The sentence's subject is doing or being something now, whatever words come next.
+      const p = roleOf(e, c);
+      if (p && p.role !== "here" && e.type !== "location") return `${e.name} ${p.role === "remembered" ? "can only be remembered" : "isn't here"} (${p.standing}), but opens a sentence as its subject`;
     }
   }
   return null;
@@ -389,11 +444,9 @@ export function checkOnFail(target: string, effect: string, c: CheckContext): st
       if (entity.name !== target) return `on a failure, ${entity.name} (not the one who rolled) acts ("${entity.name} ${next}…")`;
       continue;
     }
-    const why = unavailable(entity, c);
-    if (why === "dead") return `on a failure, ${entity.name} is dead but acts`;
-    if (why === "absent") return `on a failure, ${entity.name} isn't here but acts`;
   }
-  return null;
+  const r = notInScene(tagged, c);
+  return r ? `on a failure, ${r}` : null;
 }
 
 const SPEECH = /\b(?:says?|said|whispers?|shouts?|asks?|tells?|mutters?|calls?|answers?|replies|warns?|murmurs?|laughs?|sings?|speaks?)\b/i;

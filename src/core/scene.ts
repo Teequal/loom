@@ -4,6 +4,7 @@ import type { EffectInPlay } from "./effects";
 import type { EntityTraits } from "./entity-fields";
 import type { Budget } from "./graph";
 import { capabilitiesOf, RELATION_LAWS, togglesText } from "./rules";
+import { profileLine } from "./profiles";
 import { buildSituation, loadWorld, type Overrides, type Presence, type Situation } from "./situation";
 
 // The scene: where the party is, who's here, the party roster and compact cards for the
@@ -146,25 +147,28 @@ export async function buildScene(
     for (const e of cardEntities) levels.set(e.id, "full");
   }
 
-  const npcsWhere = (p: Presence) => entities.filter((e) => e.type === "npc" && e.status !== "dead" && presence(e) === p).map((e) => e.name);
-  const withParty = npcsWhere("with-party");
-  const broughtIn = npcsWhere("here");
-  const around = npcsWhere("nearby");
-  const onlyNamed = [...situation.reading.referred].filter((n) => entities.find((e) => e.name === n)?.status !== "dead");
-  const dead = entities.filter((e) => e.type === "npc" && e.status === "dead").map((e) => e.name);
+  // Who and what can play which part in this moment, from the entity profiles (profiles.ts): the
+  // model sees each one's standing before it writes ("Knight figurine: lost, last seen at the
+  // River Morrow"), grouped by what they can do.
+  const relevant = (e: Entity) =>
+    opts.mentioned.has(e.name) || threadNames.has(e.name) || situation.reading.mentions.some((m) => m.entity.name === e.name) || (dist?.get(e.id) ?? 99) <= 1 || (!dist && e.importance === "major");
+  const group = (role: string, filter: (e: Entity) => boolean, cap: number) =>
+    [...situation.profiles.values()]
+      .filter((p) => p.role === role && p.entity.type !== "pc" && filter(p.entity))
+      .sort((a, b) => Number(relevant(b.entity)) - Number(relevant(a.entity)))
+      .slice(0, cap)
+      .map((p) => `  - ${profileLine(p)}`);
+  const inScene = group("here", (e) => e.type !== "location", 12);
+  const canCome = group("reachable", (e) => e.type !== "location" && relevant(e), 12);
+  const remembered = group("remembered", (e) => relevant(e) || e.type === "npc", 10);
 
   const lines: string[] = [];
   lines.push("THE SCENE");
   lines.push(party ? `- The party is at: ${chain(party.id)}` : "- The party's location is not recorded.");
-  if (party) {
-    lines.push(`- With the party: ${withParty.length ? withParty.join(", ") : "no NPCs"}`);
-    if (broughtIn.length) lines.push(`- Here now, because of this moment: ${broughtIn.join(", ")}`);
-    if (around.length) lines.push(`- Recorded somewhere around here, not with the party (they can turn up): ${around.join(", ")}`);
-  }
-  if (onlyNamed.length) lines.push(`- Only mentioned, not here (they can only arrive or send word): ${onlyNamed.join(", ")}`);
+  lines.push(`- IN THE SCENE (can act, be used or be seen now):${inScene.length ? `\n${inScene.join("\n")}` : " nobody named; use walk-ons"}`);
+  if (canCome.length) lines.push(`- NOT HERE, BUT CAN ARRIVE, SEND WORD OR BE SOUGHT (never just present):\n${canCome.join("\n")}`);
+  if (remembered.length) lines.push(`- ONLY REMEMBERED (talked about, recalled or sought; they never act, appear or get used):\n${remembered.join("\n")}`);
   if (situation.contacted.size) lines.push(`- Reached from afar by the players (may answer remotely): ${[...situation.contacted].join(", ")}`);
-  if (situation.lost.size) lines.push(`- Lost (nobody has them): ${[...situation.lost].join(", ")}`);
-  if (dead.length) lines.push(`- Dead (can't act): ${dead.join(", ")}`);
   if (campaign?.tone) lines.push(`- Tone: ${campaign.tone}`);
   if (campaign?.safetyLines.length) lines.push(`- Safety lines (never include): ${campaign.safetyLines.join("; ")}`);
 
@@ -179,7 +183,7 @@ export async function buildScene(
     for (const e of shown) lines.push(`- ${e.text}${situation.effects.find((x) => x.effect.id === e.effect.id)?.live === false && e.targets.length ? ` (not triggered in this moment: ${situation.effects.find((x) => x.effect.id === e.effect.id)!.why}; don't call its roll)` : ""}`);
   }
 
-  lines.push("", "THE PARTY (player characters, controlled by the players)");
+  lines.push("", "THE PARTY (player characters: the players decide everything they do, say, think and feel, and how their bodies react. Write what happens to them and around them, then hand it to their player.)");
   for (const p of pcs) {
     const story = opts.storyConditions?.get(p.name) ?? [];
     // PCs in the moment get everything; the rest of the party a brief line.

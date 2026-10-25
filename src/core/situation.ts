@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import { effectsInPlay, type EffectInPlay } from "./effects";
 import { readMoment, type MomentReading } from "./moment-reading";
+import { buildProfiles, type Profile } from "./profiles";
 
 // The scene model: what is true right now, decided by code. Built once per moment from the
 // records and the moment (read in moment-reading.ts), plus the GM's corrections. Every feature
@@ -40,18 +41,24 @@ export interface World {
   entities: Entity[];
   relations: Relation[];
   effects: Effect[];
-  threads: { id: number; title: string }[];
+  threads: { id: number; title: string; status: string }[];
+  threadEntities: { threadId: number; entityId: number }[];
 }
 
 export async function loadWorld(campaignId: number): Promise<World> {
-  const [[campaign], entities, relations, effects, threads] = await Promise.all([
+  const [[campaign], entities, relations, effects, threads, threadEntities] = await Promise.all([
     db.select().from(schema.campaigns).where(eq(schema.campaigns.id, campaignId)),
     db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId)),
     db.select().from(schema.entityRelations).where(eq(schema.entityRelations.campaignId, campaignId)),
     db.select().from(schema.effects).where(eq(schema.effects.campaignId, campaignId)),
-    db.select({ id: schema.threads.id, title: schema.threads.title }).from(schema.threads).where(eq(schema.threads.campaignId, campaignId)),
+    db.select({ id: schema.threads.id, title: schema.threads.title, status: schema.threads.status }).from(schema.threads).where(eq(schema.threads.campaignId, campaignId)),
+    db
+      .select({ threadId: schema.threadEntities.threadId, entityId: schema.threadEntities.entityId })
+      .from(schema.threadEntities)
+      .innerJoin(schema.threads, eq(schema.threads.id, schema.threadEntities.threadId))
+      .where(eq(schema.threads.campaignId, campaignId)),
   ]);
-  return { campaign: campaign ?? null, entities, relations, effects, threads };
+  return { campaign: campaign ?? null, entities, relations, effects, threads, threadEntities };
 }
 
 export interface LiveEffect extends EffectInPlay {
@@ -68,7 +75,8 @@ export interface Situation {
   party: Entity | null; // where the party is for this moment
   presence: (e: Entity) => Presence;
   why: (e: Entity) => string; // why they're where they are, for the chips and the prompt
-  here: Set<string>; // NPCs, factions and items that may act directly
+  profiles: Map<string, Profile>; // each entity's role in this moment, where it stands, and what matters about it
+  here: Set<string>; // NPCs, factions and items that may act directly (role "here")
   contacted: Set<string>; // absent NPCs the players reached; they may answer from afar
   acting: Set<string>; // PCs whose declared action this moment is
   holders: Map<string, Set<string>>; // item → who has it now (records, the moment, the GM)
@@ -180,15 +188,6 @@ export function buildSituation(world: World, moment: string, overrides: Override
   }
   const lost = new Set(entities.filter((e) => lostIds.has(e.id) && !holders.get(e.name)?.size).map((e) => e.name));
 
-  // Who may act directly: NPCs here or with the party, factions, and items that aren't lost.
-  // Captured or missing NPCs only act by getting free or getting word out.
-  const free = (e: Entity) => e.status !== "dead" && e.status !== "captured" && e.status !== "missing";
-  const here = new Set(
-    entities
-      .filter((e) => free(e))
-      .filter((e) => (e.type === "npc" ? ["here", "with-party"].includes(presence(e)) : e.type === "faction" || (e.type === "item" && !lost.has(e.name))))
-      .map((e) => e.name),
-  );
   const contacted = new Set([...reading.contacted].filter((n) => byName.get(n)?.status !== "dead"));
   const acting = new Set(reading.wholeParty ? pcs.map((p) => p.name) : [...reading.acting]);
 
@@ -208,7 +207,12 @@ export function buildSituation(world: World, moment: string, overrides: Override
     return { ...e, live: true, why: `it reaches ${e.targets.join(", ")}` };
   });
 
-  return { world, moment, reading, entities, pcs, party, presence, why, here, contacted, acting, holders, parentOf, lost, effects, notes, fixes, stated };
+  // Each entity's role in this moment, from everything the records say about it (profiles.ts).
+  // Who may act directly follows: NPCs, factions and items that are here and free to act.
+  const profiles = buildProfiles({ entities, relations: world.relations, party, presence, holders, parentOf, reading, away, effects, threads: world.threads, threadEntities: world.threadEntities });
+  const here = new Set([...profiles.values()].filter((p) => p.role === "here" && p.entity.type !== "location" && p.entity.status !== "captured" && p.entity.status !== "missing").map((p) => p.entity.name));
+
+  return { world, moment, reading, entities, pcs, party, presence, why, profiles, here, contacted, acting, holders, parentOf, lost, effects, notes, fixes, stated };
 }
 
 // What the page shows under the box: only what this moment involves, each with why and whether

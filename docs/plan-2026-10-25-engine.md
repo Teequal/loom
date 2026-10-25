@@ -50,54 +50,38 @@ Situation
 - The interim presence rule is gone.
 - Every reading rule has test moments. The current crafted checks, plus the blind run 4 faults (Bhen, the lost Knight figurine), are reproduced as tests and pass.
 
-## Phase B: laws declared once
+## Phase B: entity profiles (revised 25 Oct, Jacob's focus)
 
-**What:** `src/core/laws/`, a registry where each law is one entry, with these fields:
+**Jacob:** strong doesn't mean more restrictions; it means more effective ones. Put more context on every entity type, and use more of it when the code runs.
 
-```
-id        "lost-item-no-holder"
-layer     L0 rules / L2 state / L3 relationships…
-says      the plain-words line the prompt gets (generated, never hand-written in improv.ts)
-slots     which answer slots it narrows, as a function of the Situation
-          (e.g. hand.to for kind "check" = PCs acting on their declared action)
-check     the validator for whatever the format can't enforce
-examples  passing and failing cases, run as tests automatically
-```
+**What Phase A showed:** the records held the answer and the engine didn't use it. The Knight figurine is recorded as lost and last seen at the River Morrow, but the engine read only "lost", and treated every item without a holder (11 of Duradan's 13) as present in any scene. Each slip came from a fact the engine had and ignored, not from a missing rule.
 
-**Three outputs, generated from the registry:**
-1. The answer format's lists: actor per beat kind, hand-off targets, live rules, threads.
-2. The validators.
-3. The prompt's rules block.
+**B1. A profile per entity, built in code** (`src/core/profiles.ts`). It's built from everything the loom holds: fields, traits, relationships, holders, places, open threads and their summaries, house rules, and the latest recorded change. Each profile has:
+- **A role in this moment**, decided by code from the type and its state:
+  - **here:** can act, be used or be seen now;
+  - **reachable:** can arrive or send word;
+  - **remembered:** can only be recalled, sought or talked about (dead, lost, destroyed, far away with no means to get here);
+  - PCs are always **player** (the players decide everything they do).
+- **Where it stands**, in words: "held by Salaena", "lost: last seen at the River Morrow", "with the party", "last seen at the Northern Gate Outpost", "whereabouts unknown".
+- **The facts that matter for its type:**
+  - Items: holder or whereabouts, set or pieces, properties, cost of use, rules from it.
+  - NPCs: attitude, goal, ties to PCs, abilities, what they know.
+  - Places: what's there, hazards, rules bound to it.
+  - Factions: leader, members nearby.
+  - PCs: health, conditions, abilities, what they hold.
+- **Its open threads** (titles), so the model sees why it matters.
 
-A law can no longer be in the prompt but not checked, or checked but not offered.
+**Items get a real presence rule.** An item is **here** only if someone here holds it, it's at the party's place, or the moment names it. Otherwise it's **remembered** (lost) or **reachable** (whereabouts known). The same goes for places and factions: a faction is here through its members, otherwise it acts through agents (arrivals and messages).
 
-**What moves in:**
-- the relationship laws, opposite ties, the 5e conditions and toggles, and the possession laws (including lost ⇒ no holder);
-- the presence laws (captives act only by escaping; the dead never act);
-- rule triggers;
-- a **roll table**, one row per roll kind: who it can go to, what it's against (a noun only: "the current", never "the crowd to slip away unseen"), and what a failure may do (a failed social check can't make a PC act; a failed save or physical check can move them; a madness roll can do what the rule says).
+**B2. The scene prompt is built from the profiles,** grouped by role. "IN THE SCENE", "CAN ARRIVE OR SEND WORD" and "ONLY REMEMBERED OR SOUGHT" each list entities with their state line ("Knight figurine: lost, last seen at the River Morrow"). The model sees what can and can't happen as context, before it writes anything. The cards stay for depth, ordered by graph distance as now.
 
-**Rule triggers become laws:**
-- An "on-use" rule is live only when the situation shows its source being used (the moment, or a chip).
-- "On-exposure" is live only where its source is.
-- "Always" and "per-session" follow their own rows.
-- Only live rules are offered.
+**B3. One law from the profiles, for every type,** replacing the per-type checks: an entity may only do what its role allows. Remembered things never act, warm or appear in someone's hand; reachable ones only arrive or send word; here ones may act. The answer format's actor lists come from the same roles. The check covers beats, failure text and headlines alike.
 
-**Names through slots, and one renderer:**
-- A beat is `{ kind, actor, part, does, refs }`.
-  - `part` is something of the actor's ("boot", "divine light"), so the subject is the actor or their part: "Salaena's boot connects", never "Salaena her boot".
-  - `does` starts with a verb and names others only as `{1}`, `{2}`, filled from `refs`.
-  - `refs` come from the situation's "can be named" list: anyone or anything that exists, including the absent and the dead, but only as objects.
-- One renderer writes every sentence: articles for common-noun items ("the Monk figurine"), possessives, "Someone" for an unnamed arrival, "Whoever fails" for table rolls.
-- **One text law replaces most of the patterns:** a known name written in free text, outside a slot, makes the option invalid.
-- What stays a text check, and why: a ref used as the subject of a verb ("{1} peeks out"). Free text can't be fully structured without losing the model's voice, so this one check stays, narrow and with tests.
+**B4. A PC's body is the player's.** Instead of listing the reactions to reject (whack-a-mole), list what's allowed: when a PC's body part is the subject, only sensations (tingles, burns, aches, goes cold, goes numb) are fine. Anything else is the PC acting, unless it follows a failed roll.
 
-**Done when:**
-- Improv's format, checks and prompt rules are all generated from the registry.
-- The roll table and rule triggers are live.
-- The crafted checks pass with fewer, simpler validators. Target: ~56 reasons down to ~20, and ~38 patterns down to under 10.
-- Every law's examples run in the test bench.
-- The rejection log on the 16-call sample shows no rejections that the format could have prevented.
+**Measure:** the same sample-campaign runs and the Duradan rerun of blind run 4's faults. Then a blind run at the end of the phase.
+
+The rest of the original Phase B (a laws registry generating the format lists, validators and prompt lines; the roll table) follows once the profiles carry the context the laws read from.
 
 ## Phase C: the engine proposes the moves
 
