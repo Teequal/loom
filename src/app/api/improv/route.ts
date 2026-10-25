@@ -27,7 +27,7 @@ function card(o: ImprovOption, titleOf: Map<number, string>) {
     threads: [o.thread_id, ...o.also_ties_to].filter((id) => titleOf.has(id)).map((id) => ({ id, title: titleOf.get(id)! })),
     callback: o.callback,
     // A roll or a fight waits for its result once used.
-    needs: o.scaffold.pillar === "combat" ? "fight" : o.scaffold.hand_off.kind === "roll" ? "roll" : null,
+    needs: (o.scaffold.pillar === "combat" ? "fight" : o.scaffold.hand_off.kind === "roll" ? "roll" : null) as "roll" | "fight" | null,
     pillar: o.scaffold.pillar ?? null,
   };
 }
@@ -51,7 +51,12 @@ export async function POST(request: Request) {
         const entry = await logAsk(
           campaignId,
           moment,
-          result.options.map((o) => ({ label: o.label, text: o.option, threadIds: [o.thread_id, ...o.also_ties_to] })),
+          // Kept as the page showed them, so they can be shown again after a reload.
+          result.options.map((o) => {
+            const { threads: _t, ...shown } = card(o, titleOf);
+            void _t;
+            return { ...shown, threadIds: [o.thread_id, ...o.also_ties_to] };
+          }),
         );
         send({
           type: "done",

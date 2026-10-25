@@ -275,13 +275,25 @@ export const optionRejections = sqliteTable("option_rejections", {
 // they used (or their own), and what extracting it added to the loom. Each logged choice is
 // extracted straight away so later suggestions see it; risky changes wait as questions.
 export const LIVE_STATUS = ["asked", "extracting", "done", "failed"] as const;
+export interface LiveOption {
+  label: string;
+  text: string;
+  threadIds: number[];
+  headline?: string;
+  flavour?: string | null;
+  why?: string;
+  callback?: { id: number; title: string } | null;
+  needs?: "roll" | "fight" | null;
+  pillar?: string | null;
+}
 export const liveEntries = sqliteTable("live_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
   sessionNumber: integer("session_number").notNull(),
   parentId: integer("parent_id"), // the choice this one was developed from: the session as a branching tree
   moment: text("moment").notNull(),
-  options: text("options", { mode: "json" }).$type<{ label: string; text: string; threadIds: number[] }[]>().notNull().default([]),
+  // Each option as the page showed it (older entries have only label, text and threadIds).
+  options: text("options", { mode: "json" }).$type<LiveOption[]>().notNull().default([]),
   // null: asked, nothing used; branch: picked from a Develop result; result: how a roll or fight turned out
   choiceKind: text("choice_kind", { enum: ["option", "own", "branch", "result"] }),
   choiceLabel: text("choice_label").notNull().default(""),

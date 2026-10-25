@@ -38,7 +38,7 @@ interface Done {
   fixes: RecordFix[];
   steers: string[];
   safetyNote: string | null;
-  llm: { model: string; seconds: number; costUsd: number; attempts: number };
+  llm: { model: string; seconds: number; costUsd: number; attempts: number } | null; // null when reopened from the log
 }
 interface Question {
   n: number;
@@ -59,6 +59,7 @@ interface Entry {
   id: number;
   parentId: number | null;
   moment: string;
+  options: Card[]; // what Loom offered (empty for notes, branches and results)
   choiceKind: "option" | "own" | "branch" | "result" | null;
   choiceLabel: string;
   choice: string;
@@ -96,7 +97,7 @@ const threadRefs = (ts: { id: number; title: string }[]) => ts.map((t) => ({ kin
 export function ImprovBox() {
   const c = useCampaigns();
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 pb-24 pt-8 sm:pt-14">
+    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-24 pt-8 sm:pt-14">
       <Header c={c} />
       {c.error && <Note tone="danger">{c.error}</Note>}
       {c.campaignId && (
@@ -116,6 +117,7 @@ interface Live {
   model: Model;
   tone: number;
   focusBox: (placeholder?: string) => void;
+  reopen: (entryId: number) => void;
 }
 
 // "Can she…?", "Does that provoke…?", "How does … work": likely a rules question, not a moment.
@@ -128,6 +130,17 @@ const SAMPLE_MOMENTS = [
   "Kira writes Ysolde a note demanding the cure",
   "The party decides to rob the Red Hand's toll-house",
 ];
+
+// The moment a choice grew from: follow the parents up to the one Loom was asked about.
+function rootOf(list: Entry[], id: number) {
+  let e = list.find((x) => x.id === id);
+  while (e?.parentId != null) {
+    const up = list.find((x) => x.id === e!.parentId);
+    if (!up) break;
+    e = up;
+  }
+  return e;
+}
 
 function Table({ campaignId, name, trySample }: { campaignId: number; name: string; trySample: () => Promise<void> }) {
   // Model, tone and kinds of option are per-browser preferences (the Settings page and the tune
@@ -184,6 +197,32 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
     return r.entries;
   }, [campaignId]);
 
+  // Back to a moment from the log: its options as they were given, with what was used and what
+  // grew from it, so play carries on from there (after a reload, or from the timeline).
+  const show = useCallback((list: Entry[], id: number) => {
+    const root = rootOf(list, id);
+    if (!root?.options.length) return false;
+    abort.current?.abort();
+    setAsked(root.moment);
+    setAskedOverrides({});
+    setCards(root.options);
+    setDone({ entryId: root.id, count: root.options.length, fixes: [], steers: [], safetyNote: null, llm: null });
+    setStatus("done");
+    setError("");
+    setOpenCard(null);
+    setSteered("");
+    setShowOthers(false);
+    return true;
+  }, []);
+  const reopen = useCallback(
+    (id: number) => {
+      if (!show(entries, id)) return;
+      setOpen(null);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    },
+    [entries, show],
+  );
+
   useEffect(() => {
     post<{ session: number; autoApprove: boolean; empty: boolean; sample: boolean; entries: Entry[] }>("/api/live", { campaignId })
       .then((r) => {
@@ -192,9 +231,12 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
         setAutoApprove(r.autoApprove);
         setEmpty(r.empty);
         setSample(r.sample);
+        // After a reload, pick up where the table left off: the latest moment, with its options.
+        const latest = r.entries[r.entries.length - 1];
+        if (latest) show(r.entries, latest.id);
       })
       .catch(() => {});
-  }, [campaignId]);
+  }, [campaignId, show]);
 
   // When a choice finishes landing in the loom, say so briefly, and make its dot glow.
   const [toasts, setToasts] = useState<{ id: number; entryId: number; title: string; detail: string }[]>([]);
@@ -250,7 +292,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
     if (p) setPlaceholder(p);
     box.current?.focus({ preventScroll: true });
   }, []);
-  const live: Live = { campaignId, entries, reload, model, tone, focusBox };
+  const live: Live = { campaignId, entries, reload, model, tone, focusBox, reopen };
 
   async function ask(again?: { steer: string }) {
     // A steer re-weaves the same moment (with the same corrections); otherwise it's whatever is in the box.
@@ -600,7 +642,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
             <p className="mt-4 text-sm text-muted">No options got past the checks this time. Try rephrasing the moment, ask again, or write what happened yourself.</p>
           )}
           {error && <p className="mt-4 text-sm text-danger">{error}</p>}
-          {done && (
+          {done?.llm && (
             <p className="mt-5 text-xs text-muted">
               {done.llm.model.replace(/^claude-/, "")} · {done.llm.seconds.toFixed(1)} s · ${done.llm.costUsd.toFixed(4)}
               {done.llm.attempts > 1 ? ` · ${done.llm.attempts} attempts` : ""}
@@ -903,17 +945,19 @@ function Timeline({ session, live, open, setOpen, glowing }: { session: number; 
           Session {session}
           {entries.length > 0 && <span className="font-normal"> · {used} used</span>}
         </span>
-        <ol ref={strip} className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1 [scrollbar-width:none]">
+        <ol ref={strip} className="flex min-w-0 flex-1 items-center overflow-x-auto py-1 [scrollbar-width:none]">
           {entries.length === 0 && <li className="text-xs text-muted/70">Nothing yet. What you use at the table lands here.</li>}
-          {ordered.map(({ e, depth }) => (
+          {ordered.map(({ e, depth }, i) => (
             <li key={e.id} className="flex items-center">
-              {depth > 0 && <span aria-hidden className="mr-1 h-px w-2 bg-thread/50" />}
+              {/* Every dot sits the same distance from the last; a line fills the gap only when
+                  this one grew from the one before it (a result, or a branch). */}
+              {i > 0 && <span aria-hidden className={`mx-0.5 h-px w-2 ${depth > 0 ? "bg-thread/50" : ""}`} />}
               <button
                 type="button"
                 onClick={() => setOpen(open === e.id ? null : e.id)}
                 aria-label={`${e.choiceKind === "branch" ? "Branch: " : ""}${e.choiceLabel || e.moment}${e.choiceKind ? " (used)" : " (asked)"}`}
                 title={e.choiceKind === "branch" ? `Continued: ${e.choiceLabel || e.choice}` : e.moment}
-                className={`relative grid place-items-center rounded-full text-[11px] transition-colors ${depth > 0 ? "h-5 w-5" : "h-6 w-6"} ${glowing.has(e.id) ? "glow" : ""} ${open === e.id ? "ring-2 ring-thread/60" : ""} ${
+                className={`relative grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] transition-colors ${glowing.has(e.id) ? "glow" : ""} ${open === e.id ? "ring-2 ring-thread/60" : ""} ${
                   e.choiceKind ? "bg-thread-soft text-thread" : "border border-line text-muted/70"
                 }`}
               >
@@ -988,6 +1032,8 @@ function QuickNote({ campaignId, onDone }: { campaignId: number; onDone: () => v
 function EntryDetail({ entry, live, onClose, onOpen }: { entry: Entry; live: Live; onClose: () => void; onOpen: (id: number) => void }) {
   const [busy, setBusy] = useState(false);
   const parent = live.entries.find((e) => e.id === entry.parentId);
+  // The options of the moment this entry belongs to (its own, or its first ancestor's).
+  const rootOptions = rootOf(live.entries, entry.id)?.options.length ?? 0;
   const takeBack = async () => {
     setBusy(true);
     try {
@@ -1038,6 +1084,11 @@ function EntryDetail({ entry, live, onClose, onOpen }: { entry: Entry; live: Liv
         </>
       ) : (
         <p className="mt-1.5 text-xs text-muted">Asked, nothing used.</p>
+      )}
+      {!!rootOptions && (
+        <button type="button" onClick={() => live.reopen(entry.id)} className="btn-secondary mt-3 text-[13px]">
+          {entry.choiceKind ? "Back to this moment" : `Show the ${rootOptions} options`}
+        </button>
       )}
     </div>
   );

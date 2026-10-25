@@ -29,7 +29,7 @@ export function SettingsBoard() {
   const c = useCampaigns();
   const p = usePrefs();
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 pb-24 pt-8 sm:pt-14">
+    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-24 pt-8 sm:pt-14">
       <Header c={c} />
       <h1 className="mb-1 text-xl font-semibold tracking-tight">Settings</h1>
       <p className="mb-5 text-[13px] text-muted">Kept in this browser. Campaign settings (tone, where the story is heading, risky changes) are on the <Link href="/campaign" className="underline decoration-line underline-offset-2 hover:text-foreground">campaign page</Link>.</p>

@@ -68,7 +68,7 @@ const cost = (llm: { model: string; seconds: number; costUsd: number }) => `${ll
 export function PrepBoard() {
   const c = useCampaigns();
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 pb-20 pt-8 sm:pt-14">
+    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-20 pt-8 sm:pt-14">
       <Header c={c} />
       {c.error && <Note tone="danger">{c.error}</Note>}
       {/* Keyed by campaign, so switching campaigns starts clean. */}

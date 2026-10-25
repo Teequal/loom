@@ -476,6 +476,10 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - **Measured:** options mentioning Tomas fell from 11 of 33 (before moves) to 2–3 (copy) and 0 (real Duradan, where no thread lists him). Sentences dropped for the cast fell from 40 to 17. 0–2 options dropped per 10 moments, at about 7 s.
         - **Watch:** in real Duradan Tomas now disappears unless a moment names him. His activity fades over quiet sessions, and the very-active threshold (3.0) is the knob.
       - 169/169 crafted, 25/25 adversarial, and the world and reading tests pass.
+    - **Table fixes from Jacob's live test** (25 Oct):
+      - **Back into a moment after a reload.** The options weren't stored for the page (only label, text and threads), so a reload showed "Asked, nothing used" and the suggestions were gone. `live_entries.options` now keeps each option as the page showed it (headline, kind, why, callback, roll or fight); older entries fall back to the label. On load the table reopens the latest moment with its options, what was used, and what grew from it (results, branches). Every timeline entry has **Back to this moment** (or "Show the N options" for one only asked). Steering chips aren't restored.
+      - **Timeline spacing:** every dot is the same size and the same distance apart; a line fills the gap only when a dot grew from the one before it.
+      - **One page width** (`max-w-3xl`) for Table, Prep, Campaign and Settings, so the header is one line on desktop everywhere. On a phone it's two lines on every page.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 
