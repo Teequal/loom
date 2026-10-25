@@ -174,7 +174,7 @@ function RulesPanel({ campaignId, initial, onClose }: { campaignId: number; init
           <Icon name="close" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3 text-sm">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-3 text-sm">
         {!log.length && <p className="text-muted">Ask anything about the rules. Loom answers for this table: who&apos;s in the scene, their state, your rule settings and house rules.</p>}
         {log.map((x, i) => (
           <div key={i}>
@@ -285,7 +285,7 @@ function Palette({ index, onPick, onClose }: { index: IndexNode[]; onPick: (n: I
           <kbd className="rounded border border-line px-1.5 text-[11px] text-muted">esc</kbd>
         </div>
         {q.trim() && (
-          <ul className="max-h-[50vh] overflow-y-auto py-1.5">
+          <ul className="max-h-[50vh] overflow-y-auto overscroll-contain py-1.5">
             {!results.length && <li className="px-4 py-3 text-sm text-muted">Nothing in the loom matches “{q}”.</li>}
             {results.map((n, i) => (
               <li key={`${n.kind}:${n.id}`}>
@@ -497,7 +497,7 @@ function Inspector({ trail, setTrail }: { trail: Ref[]; setTrail: (t: Ref[]) => 
           <Icon name="close" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-sm">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 text-sm">
         {error && <p className="text-danger">{error}</p>}
         {!shown && !error && <div aria-hidden className="h-24 animate-pulse rounded-lg bg-background" />}
         {shown?.kind === "entity" && <EntityView n={shown} />}
