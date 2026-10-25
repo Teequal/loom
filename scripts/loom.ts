@@ -6,7 +6,9 @@ import { z } from "zod";
 import { costSummary } from "@/core/costs";
 import { db, initDb, schema } from "@/core/db/client";
 import { flavour } from "@/core/flavour";
+import { developChain } from "@/core/chain";
 import { improv } from "@/core/improv";
+import { STEERS, type Steer } from "@/core/moves";
 import { callLlm } from "@/core/llm";
 import { applyProposal, proposeEnrichment, proposeRecapChanges, type ProposalFile } from "@/core/recap";
 import { reviewProposal, splitRisky } from "@/core/review";
@@ -69,6 +71,8 @@ Engine
                              retrieved and why; --focused uses a tighter scene and fewer threads;
                              --threads N sends exactly N (plus threads tied to what you named);
                              --all sends every open thread (for comparison)
+  develop <entry id> | "<moment>" "<choice>" [--steer fight|heartfelt|epic|grounded|quiet|story] [--words "…"]
+          [--count 1-3] [--from step] [--model name] [--campaign id]   Develop v2: a chain of steps from a choice
   flavor <n> [--model name]  Read-aloud version of option n from the last improv (default: opus)
 
   suggest [--campaign id] [--model name]
@@ -339,6 +343,42 @@ async function main() {
         JSON.stringify({ campaignId, moment, options: r.options.map((o) => ({ label: o.label, text: o.option, threadIds: [o.thread_id, ...o.also_ties_to], threads: [o.thread_id, ...o.also_ties_to].map((id) => r.titleOf.get(id)), scaffold: o.scaffold })) }, null, 2),
       );
       if (r.options.length) console.log(`Read-aloud version of one: npm run loom -- flavor <1-${r.options.length}> · used one? npm run loom -- moment from-improv <n>`);
+      break;
+    }
+    case "develop": {
+      // From a logged entry (its moment and the choice used), or a moment and a choice typed here.
+      let base: { campaignId: number; moment: string; label: string; text: string };
+      if (/^\d+$/.test(args[0] ?? "")) {
+        const [e] = await db.select().from(schema.liveEntries).where(eq(schema.liveEntries.id, Number(args[0])));
+        if (!e) return console.log(`No entry ${args[0]}.`);
+        base = { campaignId: e.campaignId, moment: e.moment, label: e.choiceLabel, text: e.choice || e.moment };
+      } else {
+        if (!args[0] || !args[1] || args[1].startsWith("--")) return console.log(USAGE);
+        base = { campaignId: Number(flag(args, "campaign") ?? (await latestCampaignId())), moment: args[0], label: "", text: args[1] };
+      }
+      const steer = flag(args, "steer") as Steer | undefined;
+      if (steer && !STEERS.includes(steer)) return console.log(`--steer is one of: ${STEERS.join(", ")}`);
+      const started = Date.now();
+      const r = await developChain(base.campaignId, {
+        ...base,
+        steer,
+        words: flag(args, "words"),
+        count: flag(args, "count") ? Number(flag(args, "count")) : 1,
+        from: flag(args, "from") === "step" ? "step" : "option",
+        model: flag(args, "model"),
+        onChain: (c) => console.log(`  (chain "${c.label}" ready at ${((Date.now() - started) / 1000).toFixed(1)} s)`),
+      });
+      console.log(`\nSuggested steer: ${r.suggested}${steer ? ` · asked: ${steer}` : ""}`);
+      for (const [i, c] of r.chains.entries()) {
+        console.log(`\n${i + 1}. ${c.label.toUpperCase()}  [${c.flavour ?? "-"}] · ${c.move}`);
+        console.log(`   ${c.headline}`);
+        for (const [n, st] of c.steps.entries()) console.log(`   ${n + 1}  ${st.when ? `${st.when} ` : ""}${st.text}${st.needs ? `  [${st.needs}]` : ""}`);
+        console.log(`   Ties: ${c.threads.map((t) => t.title).join(" · ")}${c.callback ? ` · ⟲ ${c.callback.title}` : ""}`);
+        console.log(`   Why: ${c.why}`);
+      }
+      if (!r.chains.length) console.log("\nNo chain got past the checks.");
+      if (r.log.length) console.log(`\nDropped:\n${r.log.map((l) => `  - ${l.label}: ${l.reason}`).join("\n")}`);
+      console.log(`\n${r.llm.model} · ${(r.llm.latencyMs / 1000).toFixed(1)} s · $${r.llm.costUsd.toFixed(4)}${r.llm.attempts > 1 ? ` · ${r.llm.attempts} attempts` : ""}`);
       break;
     }
     case "flavor": {

@@ -30,6 +30,7 @@ const FEATURE_MODELS: Record<string, string> = {
   encounter: "claude-sonnet-5-5", // fight setup: stat blocks need a careful model, but it's at the table
   rules: "claude-sonnet-5-5", // rules questions: accuracy matters, the answer is short
   fresh: "claude-opus-5-5", // new material between sessions: invention needs the strongest model
+  chain: "claude-haiku-5-5", // Develop v2's chains: at the table, so the table's tier (Quick by default)
   "develop-ideas": "claude-sonnet-5-5", // headlines to pick from before writing the plan: quick
   rework: "claude-sonnet-5-5", // rewording one piece of a plan as the GM asks
   hook: "claude-opus-5-5", // a starter campaign from a random hook, for someone brand new

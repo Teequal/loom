@@ -35,6 +35,18 @@ const ARRIVING_ROLES = new Set(["seeker", "rival", "cause", "creditor", "informa
 const HINT_ROLES = new Set(["clue", "informant", "witness", "carrier", "source"]);
 const WEIGHT: Record<MoveKind, number> = { collision: 1, rule: 0.9, payoff: 0.8, arrival: 0.6, callback: 0.5, complication: 0.5, hint: 0.4, wildcard: 0 };
 
+// How the GM wants to take a Develop: each leans the move kinds (−1 or less leaves a kind out).
+export const STEERS = ["fight", "heartfelt", "epic", "grounded", "quiet", "story"] as const;
+export type Steer = (typeof STEERS)[number];
+const STEER_WEIGHT: Record<Steer, Partial<Record<MoveKind, number>>> = {
+  fight: { complication: 0.6, arrival: 0.5, collision: 0.3, hint: -0.4, callback: -0.3 },
+  heartfelt: { callback: 0.8, payoff: 0.4, hint: -0.2, arrival: -0.3, rule: -0.4 },
+  epic: { collision: 0.8, payoff: 0.5, rule: 0.4, arrival: 0.3, hint: -0.4 },
+  grounded: { hint: 0.4, complication: 0.2, collision: -0.3, rule: -0.2, arrival: -1 },
+  quiet: { hint: 0.5, callback: 0.5, complication: -0.4, rule: -0.4, collision: -0.5, arrival: -1 },
+  story: { payoff: 0.6, collision: 0.4, arrival: 0.2 },
+};
+
 interface Part {
   node: AnyNode;
   role: string;
@@ -44,7 +56,14 @@ interface Part {
 export function findMoves(
   v: View,
   threads: SelectedThread[],
-  opts: { callbacks: { id: number; title: string }[]; liveRules: { name: string; why: string; sourceName: string | null }[]; limit?: number },
+  opts: {
+    callbacks: { id: number; title: string }[];
+    liveRules: { name: string; why: string; sourceName: string | null }[];
+    limit?: number;
+    steer?: Steer;
+    toward?: Set<number>; // threads closest to where the GM wants the story to go
+    exclude?: string[]; // moves already used ("kind:thread"), for another take
+  },
 ): Move[] {
   const memo = new Map();
   const node = (k: NodeKey) => v.g.nodes.get(k);
@@ -120,6 +139,19 @@ export function findMoves(
 
   // A busy lead costs a move a little, so quieter characters get more of the stage.
   for (const m of moves) m.score -= 0.3 * m.cast.filter((c) => c.busy).length;
+  // The GM's steer leans the kinds; a heartfelt take favours a character's own condition, and
+  // "tie to the story" the threads closest to the GM's direction.
+  if (opts.steer) {
+    const w = STEER_WEIGHT[opts.steer];
+    for (const m of moves) {
+      m.score += w[m.kind] ?? 0;
+      const main = node(`thread:${m.threads[0]}` as NodeKey) as Thread | undefined;
+      if (opts.steer === "heartfelt" && main?.threadKind === "condition") m.score += 0.6;
+      if (opts.steer === "story" && m.threads.some((t) => opts.toward?.has(t))) m.score += 0.8;
+    }
+    for (let i = moves.length - 1; i >= 0; i--) if ((w[moves[i].kind] ?? 0) <= -1) moves.splice(i, 1);
+  }
+  if (opts.exclude?.length) for (let i = moves.length - 1; i >= 0; i--) if (opts.exclude.includes(moveKey(moves[i]))) moves.splice(i, 1);
   // Pick a varied set: each pick costs the rest a little for sharing its kind, main thread or cast.
   const limit = opts.limit ?? 5;
   const picked: Omit<Move, "id">[] = [];
@@ -150,6 +182,9 @@ export function findMoves(
     return { ...m, id: `M${i + 1}`, cast: [...m.cast, ...support], resting: others.filter(busy) };
   });
 }
+
+/** A move's identity across calls (ids like "M2" are per call). */
+export const moveKey = (m: Pick<Move, "kind" | "threads">) => `${m.kind}:${m.threads.join("+")}`;
 
 function dedupe(cast: CastMember[]) {
   const out = new Map<string, CastMember>();
