@@ -11,7 +11,9 @@ import { planSlips } from "./plan-agency";
 import { listMoments, momentLine } from "./moments";
 import { personalLines, spotlightScore, tableSeats, tableText } from "./players";
 import { buildScene, type Scene } from "./scene";
-import { capabilitiesOf, checkBeat, checkOnFail, checkPossession, holdersOf, makeTagger, type CheckContext, type Possession, type ScaffoldBeat, type Tagger } from "./scaffold";
+import type { Overrides, RecordFix } from "./situation";
+export type { RecordFix };
+import { capabilitiesOf, checkBeat, checkOnFail, checkPossession, makeTagger, type CheckContext, type Possession, type ScaffoldBeat, type Tagger } from "./scaffold";
 
 // The improv box answers with a scaffold, not free prose. The answer format is built for each
 // request: the "who acts" slot only offers characters allowed to act right now, the thread slot
@@ -161,72 +163,6 @@ Each option is a scaffold:
 - callback: if the option echoes or pays off one of the KEY MOMENTS listed, its id ("M12"); otherwise "none". Use one only when it genuinely fits.
 - pillar: the kind of play the option mostly offers: combat, social, exploration, mystery, comedy or drama.
 - THE TABLE says who has been quiet. Hand-offs mostly go to whoever the moment is about; at most one option goes to a quiet player instead, and only when it fits. Never mention players.`;
-
-// When the moment and the records disagree, Loom goes with the moment for that call, and offers
-// to update the records: a condition the moment states, or an item in someone else's hands.
-export type RecordFix = {
-  say: string; // what Loom did, for the page
-  apply: string; // the button that records it
-  fix: { kind: "condition"; entityId: number; condition: string } | { kind: "holds"; holderId: number; itemId: number };
-};
-
-// Conditions the moment itself states ("Iresia, at 0 HP and unconscious…"). The moment wins for
-// this call, like possession, and the GM is told the records disagree.
-const MOMENT_CONDITIONS: [RegExp, string][] = [
-  [/\b(?:unconscious|knocked out|out cold|passed out|at 0 hp|at 0 hit points|at zero hit points|dropped to 0)\b/i, "unconscious"],
-  [/\bparaly[sz]ed\b/i, "paralyzed"],
-  [/\bstunned\b/i, "stunned"],
-  [/\bpetrified\b|\bturned to stone\b/i, "petrified"],
-  [/\brestrained\b|\btied up\b|\bbound\b/i, "restrained"],
-  [/\bblinded\b/i, "blinded"],
-  [/\bdeafened\b/i, "deafened"],
-  [/\bcharmed\b/i, "charmed"],
-  [/\bfrightened\b/i, "frightened"],
-];
-
-function momentConditions(scene: Scene, moment: string, mentioned: Set<string>) {
-  const notes: string[] = [];
-  const stated: string[] = [];
-  const fixes: RecordFix[] = [];
-  const pcs = scene.pcs.filter((p) => mentioned.has(p.name));
-  if (!pcs.length) return { notes, stated, fixes };
-  for (const clause of moment.split(/[.;!?]+/)) {
-    // The condition belongs to the PC named last before it in the same sentence (or the only one named).
-    for (const [re, condition] of MOMENT_CONDITIONS) {
-      const m = clause.match(re);
-      if (!m) continue;
-      const before = clause.slice(0, m.index).toLowerCase();
-      const pc =
-        pcs.length === 1
-          ? pcs[0]
-          : pcs
-              .map((p) => ({ p, at: before.lastIndexOf(p.name.split(" ")[0].toLowerCase()) }))
-              .filter((x) => x.at >= 0)
-              .sort((a, b) => b.at - a.at)[0]?.p;
-      if (!pc) continue;
-      const t = pc.traits as { health?: string; conditions?: string[] };
-      const has = condition === "unconscious" ? t.health === "unconscious" || t.conditions?.includes("unconscious") : t.conditions?.includes(condition);
-      if (has) continue;
-      const traits = condition === "unconscious" ? { ...t, health: "unconscious" } : { ...t, conditions: [...(t.conditions ?? []), condition] };
-      for (const e of [pc, ...scene.entities.filter((x) => x.id === pc.id)]) e.traits = traits as typeof e.traits;
-      const field = condition === "unconscious" ? "health=unconscious" : `conditions="${traits.conditions!.join(", ")}"`;
-      notes.push(`This moment has ${pc.name} ${condition}; your records don't. Update with: entity set "${pc.name}" ${field}`);
-      fixes.push({
-        say: `Loom treated ${pc.name} as ${condition} for these options, because the moment says so. Your records don't have that yet.`,
-        apply: `Record ${pc.name} as ${condition}`,
-        fix: { kind: "condition", entityId: pc.id, condition },
-      });
-      stated.push(`${pc.name} is ${condition} (${condition === "unconscious" ? "can't act, speak or notice anything; death saves only" : "per the 5e condition"})`);
-    }
-  }
-  return { notes, stated, fixes };
-}
-
-// Moments where the players themselves reach someone at a distance; that NPC may then act from afar.
-const REMOTE_CONTACT =
-  /\b(?:sending|message|messenger|letter|scry|scrying|telepath\w*|dream\w*|commune|whisper\w* to|call\w* out to|contact\w*|reach(?:es|ing)? out|speak\w* with|crystal ball)\b/i;
-// Moments about the whole party, so any PC's declared action can have an outcome.
-const WHOLE_PARTY = /\b(?:the party|everyone|the group|they all|we)\b/i;
 
 const nonEmpty = (xs: string[], fallback: string): [string, ...string[]] => (xs.length ? (xs as [string, ...string[]]) : [fallback]);
 
@@ -443,6 +379,8 @@ export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
     const eff = c.scene.effects.find((e) => e.effect.name === o.hand_off.mechanic);
     if (!eff) return `uses an unknown rule "${o.hand_off.mechanic}"`;
     if (o.hand_off.kind !== "roll") return `uses "${eff.effect.name}" without a roll`;
+    const live = c.scene.situation.effects.find((e) => e.effect.id === eff.effect.id);
+    if (live && !live.live) return `"${eff.effect.name}" isn't triggered in this moment (${live.why})`;
     if (o.hand_off.to === "table") {
       if (!eff.tableWide) return `calls "${eff.effect.name}" for the whole table, but it only applies to ${eff.targets.join(", ") || "nobody right now"}`;
     } else if (!eff.targets.includes(o.hand_off.to) && !gainsSource(eff, o.hand_off.to, poss.gained, c)) {
@@ -458,11 +396,6 @@ export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
     if (r) return r;
   }
   return null;
-}
-
-function isInside(item: string, container: string, parentOf: Map<string, string>) {
-  for (let cur = parentOf.get(item), hops = 0; cur && hops < 10; cur = parentOf.get(cur), hops++) if (cur === container) return true;
-  return false;
 }
 
 // A holder- or user-bound rule also reaches someone who gains its item in this option (a beat
@@ -492,68 +425,32 @@ function meaningSummary(m: MeaningSearch | undefined, entities: Scene["entities"
 // The lists that shape the answer format, and the context the checks use.
 // `reach`: entity ids close enough to the moment to be offered as actors (see graph.ts). Without
 // it, every entity is offered.
+// The lists that shape the answer format, and the context the checks use, all read from the
+// scene model (situation.ts): who's here, who the players reached, who's acting, who has what.
+// `reach`: entity ids close enough to the moment to be offered as actors (see graph.ts). Without
+// it, every entity is offered.
 export function buildLists(scene: Scene, moment: string, mentioned: Set<string>, reach?: Map<number, number>) {
-  const { notes, stated, fixes } = momentConditions(scene, moment, mentioned);
+  // The moment is read once, into the situation; a different one here would be a caller's mistake.
+  if (moment !== scene.situation.moment) throw new Error("buildLists: the scene was built for a different moment (pass `moment` to buildScene)");
+  const s = scene.situation;
   const tagger = makeTagger(scene);
-  const alive = (e: Scene["entities"][number]) => e.status !== "dead";
-  const free = (e: Scene["entities"][number]) => e.status !== "captured" && e.status !== "missing";
-  // Who may act directly: NPCs, factions and items that are here, plus NPCs the players brought
-  // in by naming them (going to see them, calling to them), unless captured or missing.
-  const present = new Set(
-    scene.entities
-      .filter((e) => (e.type === "npc" || e.type === "faction" || e.type === "item") && alive(e) && free(e))
-      // NPCs act directly only when they're travelling with the party or the moment brings them in;
-      // anyone else (unknown whereabouts, or recorded nearby) has to arrive first.
-      .filter((e) => e.type !== "npc" || scene.presence(e) === "with-party" || mentioned.has(e.name))
-      .map((e) => e.name),
-  );
-  const remoteOk = new Set(REMOTE_CONTACT.test(moment) ? scene.entities.filter((e) => e.type === "npc" && mentioned.has(e.name) && alive(e)).map((e) => e.name) : []);
-  const absentNpcs = scene.entities.filter((e) => e.type === "npc" && alive(e) && !present.has(e.name)).map((e) => e.name);
-  const outcomePcs = new Set(WHOLE_PARTY.test(moment) ? scene.pcs.map((p) => p.name) : scene.pcs.filter((p) => mentioned.has(p.name)).map((p) => p.name));
-
-  // Possession: who holds what, from the records. If the moment itself puts an item with a PC
-  // ("Khayiulad sells the monk figurine"), the moment wins for this call, and the GM is told the
-  // records disagree.
-  const byId = new Map(scene.entities.map((e) => [e.id, e]));
-  const holders = new Map<string, Set<string>>();
-  for (const h of scene.holds) holders.set(h.item, new Set([...(holders.get(h.item) ?? []), h.holder]));
-  const parentOf = new Map<string, string>();
-  for (const e of scene.entities) if (e.type === "item" && e.parentId != null && byId.get(e.parentId)) parentOf.set(e.name, byId.get(e.parentId)!.name);
-  const possession: Possession = { holders, parentOf };
-  const momentPcs = scene.pcs.filter((p) => mentioned.has(p.name));
-  // The most specific item named: "the monk figurine" means the Monk figurine, not its whole set.
-  const named = scene.entities.filter((e) => e.type === "item" && mentioned.has(e.name));
-  const momentItems = named.filter((item) => !named.some((other) => other !== item && isInside(other.name, item.name, parentOf)));
-  if (momentPcs.length) {
-    for (const item of momentItems) {
-      const recorded = holdersOf(item.name, possession);
-      const withItem = momentPcs.filter((p) => recorded.size && !recorded.has(p.name));
-      if (!withItem.length) continue;
-      holders.set(item.name, new Set([...(holders.get(item.name) ?? []), ...withItem.map((p) => p.name)]));
-      const who = [...recorded];
-      notes.push(
-        `Your records say ${who.join(" and ")} ${who.length > 1 ? "hold" : "holds"} ${item.name}; this moment has ${withItem.map((p) => p.name).join(" and ")} with it. Update with: relate "${withItem[0].name}" holds "${item.name}"`,
-      );
-      fixes.push({
-        say: `Loom treated ${withItem[0].name} as holding ${item.name} for these options. Your records say ${who.join(" and ")} ${who.length > 1 ? "hold" : "holds"} it.`,
-        apply: `${withItem[0].name} has it now`,
-        fix: { kind: "holds", holderId: withItem[0].id, itemId: item.id },
-      });
-    }
-  }
-
+  const present = s.here;
+  const remoteOk = s.contacted;
+  const outcomePcs = s.acting;
+  const absentNpcs = scene.entities.filter((e) => e.type === "npc" && e.status !== "dead" && !present.has(e.name)).map((e) => e.name);
+  const possession: Possession = { holders: s.holders, parentOf: s.parentOf, lost: s.lost };
   // A check, contest or attack is for a PC acting on what their player declared; the whole table
   // when the moment is about the whole party.
-  const checkTo = [...outcomePcs].filter((n) => scene.pcs.some((p) => p.name === n && p.status !== "dead")).concat(WHOLE_PARTY.test(moment) ? ["table"] : []);
+  const checkTo = [...outcomePcs].filter((n) => scene.pcs.some((p) => p.name === n && p.status !== "dead")).concat(s.reading.wholeParty ? ["table"] : []);
   const inReach = (n: string) => {
     const e = scene.entities.find((x) => x.name === n);
     return !reach || mentioned.has(n) || (e != null && reach.has(e.id));
   };
   return {
     tagger,
-    notes,
-    fixes,
-    stated,
+    notes: [...s.notes],
+    fixes: [...s.fixes],
+    stated: s.stated,
     check: { scene, tagger, present, remoteOk, outcomePcs, checkTo, possession } satisfies CheckContext,
     // Who each kind of beat may name, within reach of the moment (and anyone it names). The answer
     // format offers each kind only its own list, so an absent NPC can't be written acting here and a
@@ -567,8 +464,8 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
     // one option's check instead of making the whole answer unparseable.
     handOff: scene.pcs.filter((p) => p.status !== "dead").map((p) => p.name),
     pcs: scene.pcs.map((p) => p.name),
-    // Only effects that reach someone right now can be offered for a roll.
-    mechanics: scene.effects.filter((e) => e.targets.length > 0).map((e) => e.effect.name),
+    // Only rules whose trigger has happened and that reach someone can be offered for a roll.
+    mechanics: s.effects.filter((e) => e.live).map((e) => e.effect.name),
   };
 }
 
@@ -605,6 +502,7 @@ export interface ImprovOptions {
   tone?: number; // 0 grounded … 4 theatrical (default 1: Jacob found the default a bit theatrical)
   mix?: Mix; // which kinds of option to offer; default a mix
   steer?: string; // a one-tap nudge from the GM: "darker", "bring in Zara"
+  overrides?: Overrides; // the GM's corrections to who's here and what's in hand (the chips)
   focused?: boolean; // a tighter scene and fewer threads (cheapest); the default is wide
   threads?: number; // send exactly this many threads (plus any tied to what the moment names)
   embeddings?: string; // "local" | "voyage" | "off"; default from LOOM_EMBEDDINGS (local)
@@ -642,7 +540,7 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   const allThreads = await loadThreadContexts(campaignId);
 
   // What the moment names decides which threads are guaranteed a place.
-  const base = await buildScene(campaignId, { mentioned: new Set(), threadEntities: [] });
+  const base = await buildScene(campaignId, { mentioned: new Set(), threadEntities: [], moment, overrides: opts.overrides });
   const mentioned = new Set(findMentions(base.entities, moment).keys());
 
   // Meaning (embeddings): finds what the moment is about even when it names nothing. It adds
@@ -678,7 +576,7 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
     ...(meaning?.entities.filter((h) => h.z >= 1.5).slice(0, 3).map((h) => h.ownerId) ?? []),
   ].filter((id): id is number => id != null);
   const distances = await distancesFrom(campaignId, seeds, budget.depth);
-  const scene = await buildScene(campaignId, { mentioned, threadEntities: threads.flatMap((t) => t.entities), storyConditions, distances, budget });
+  const scene = await buildScene(campaignId, { mentioned, threadEntities: threads.flatMap((t) => t.entities), storyConditions, distances, budget, situation: base.situation });
   const lists = buildLists(scene, moment, mentioned, mode === "all" ? undefined : distances);
   const typeOf = new Map(scene.entities.map((e) => [e.name, e.type]));
 

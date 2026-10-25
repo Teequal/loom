@@ -61,6 +61,7 @@ async function developContext(campaignId: number, input: DevelopInput) {
     budget: BUDGETS.suggest,
     threadEntities: threads.filter((t) => input.threadIds.includes(t.id)).flatMap((t) => t.entities),
     storyConditions: new Map(pcs.map((p) => [p.name, threads.filter((t) => t.kind === "condition" && t.entities.includes(p.name)).map((t) => t.title)])),
+    moment: input.moment,
   });
 
   const tied = threads.filter((t) => input.threadIds.includes(t.id));

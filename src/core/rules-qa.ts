@@ -38,6 +38,7 @@ export async function answerRules(campaignId: number, question: string) {
     distances: await distancesFrom(campaignId, [...entities.filter((e) => named.has(e.name)).map((e) => e.id), ...pcs], 1),
     budget: BUDGETS.improvFocused,
     threadEntities: [],
+    moment: question, // "can Darius cast while restrained?": the conditions it states apply
   });
   const [camp] = await db.select().from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
   const toggles = camp?.ruleToggles as Record<string, string> | undefined;

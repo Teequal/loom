@@ -393,6 +393,21 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
     - PCs acting inside the model's own sentences still rely on the text checks.
   - 132/132 crafted checks and 25/25 adversarial cases pass; lint and types are clean.
 
+- [ ] **Engine build** (planned 25 Oct; plan in [docs/plan-2026-10-25-engine.md](docs/plan-2026-10-25-engine.md)). Jacob: code has the first say on what's true and what can happen; the model's pass is second (phrasing, flavour, context). No more fixing slips one at a time.
+  - **Decisions (Jacob):** chips shown as chips, icons or hidden (Settings page); the engine's reason for a move is shown, reworded by the model; a wildcard move is always offered.
+  - [x] **Phase A: one scene model** (25 Oct).
+    - **Moment reading** (`src/core/moment-reading.ts`): reads the moment once, in code. It works out who the moment brings in, who it only refers to ("Bhen's mother", "looks for Bhen", "asks about Professor Vex"), who it contacts from afar, which PCs act, what's in whose hand, what's used, conditions, and where the party goes. The rules are a table (`READING_RULES`), each with its own example moments, run by `npm run test:engine` (18/18).
+    - **The scene model** (`src/core/situation.ts`): `loadWorld` + `buildSituation(world, moment, overrides)`. It holds presence with a reason (here / with the party / nearby / elsewhere / unknown), who may act, who was contacted, the acting PCs, holders (a lost item has no holder; the moment or the GM can put one in a hand), live house rules ("on use" rules only when the moment uses their source), conditions the moment states, and record fixes.
+    - `buildScene` reads the Situation instead of the database, and so do improv, the flavour pass, Develop, fights and rules questions (each passes its own text as the moment). `buildLists` is a thin adapter, and throws if it's given a different moment from the scene's.
+    - **Laws enforced:** lost items have no holder, and nobody can use them; holding one clears "lost" (write laws in `entities.ts`). A rule's roll is rejected if its trigger hasn't happened.
+    - **Chips** (`src/app/scene-chips.tsx`, `POST /api/situation`, no model call): under the box as you type, e.g. "Tomas here · Bhen not here · Khayiulad: Knight figurine · Figurine madness". Tapping one corrects it (an override sent with the ask; steering reuses it).
+    - **Settings page** (`/settings`, `src/app/prefs.ts`, per browser): chips / icons / hidden, model, kinds of option, tone, show why, Develop's starting reach. Linked from the header and the tune panel.
+    - **Measured:** set-up before the model call is 25–40 ms warm, so the in-memory index was deferred (not needed for speed). Sample campaign, 16 calls: 0.38 rejected per call (was 0.50), 3.00 options per call, first 3.4 s, all 6.6 s. Duradan rerun of blind run 4's faults (Haiku): Bhen no longer appears when only mentioned; madness is rolled only when a figurine is used; the lost Knight figurine isn't put in anyone's hand.
+    - **Left for Phase B:** names in free text (a headline still named the lost Knight figurine "warming in someone's pocket"); PC body reactions ("Khayiulad's eyes roll back"); selling a figurine doesn't count as "use" (tap the rule chip if you'd call it).
+    - 133/133 crafted checks and 25/25 adversarial cases pass; lint and types are clean.
+  - [ ] Phase B: laws declared once.
+  - [ ] Phase C: the engine proposes the moves.
+
 ## Entity model build (docs/entity-model.md)
 
 - [x] Step 1: Schema with provenance (migration `drizzle/0001`):

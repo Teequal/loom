@@ -124,6 +124,15 @@ export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
         >
           Rules
         </button>
+        <Link
+          href="/settings"
+          aria-label="Settings"
+          title="Settings"
+          aria-current={path === "/settings" ? "page" : undefined}
+          className={`btn-tertiary rounded-md border border-line px-2 py-1 ${path === "/settings" ? "bg-surface text-foreground" : ""}`}
+        >
+          <Icon name="settings" />
+        </Link>
         <button
           type="button"
           onClick={() => window.dispatchEvent(new Event("loom:search"))}

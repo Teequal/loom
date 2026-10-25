@@ -87,6 +87,7 @@ export async function setupEncounter(entryId: number) {
     distances: await distancesFrom(campaignId, entities.filter((e) => named.has(e.name)).map((e) => e.id), BUDGETS.improv.depth),
     budget: BUDGETS.improv,
     threadEntities: threads.filter((t) => t.entities.some((n) => named.has(n))).flatMap((t) => t.entities),
+    moment: text,
   });
   const soFar = await sessionSoFar(campaignId);
   const prompt = `${scene.text}

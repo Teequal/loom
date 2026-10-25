@@ -19,3 +19,16 @@ export function jsonRoute<S extends z.ZodType, R>(schema: S, run: (body: z.infer
 }
 
 export const campaignId = z.number().int().positive();
+
+// The GM's corrections from the scene chips (see situation.ts Overrides).
+const Pair = z.object({ pc: z.string().max(120), item: z.string().max(120) });
+export const overrides = z
+  .object({
+    here: z.array(z.string().max(120)).max(30),
+    away: z.array(z.string().max(120)).max(30),
+    inHand: z.array(Pair).max(20),
+    notInHand: z.array(Pair).max(20),
+    rulesOn: z.array(z.string().max(120)).max(20),
+    rulesOff: z.array(z.string().max(120)).max(20),
+  })
+  .partial();

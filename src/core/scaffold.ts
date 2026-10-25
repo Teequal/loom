@@ -174,6 +174,7 @@ export interface CheckContext {
 export interface Possession {
   holders: Map<string, Set<string>>; // item → who may handle it now (records + the moment)
   parentOf: Map<string, string>; // item → its set
+  lost?: Set<string>; // lost items nobody has: nobody can use or carry them
 }
 
 // Who holds an item, counting the set it belongs to and the pieces inside it: holding a piece
@@ -207,11 +208,13 @@ export function checkPossession(beats: ScaffoldBeat[], c: CheckContext): { probl
   const gained = new Map<string, Set<string>>();
   const isItem = (n: string) => c.tagger.entityOf(n)?.type === "item";
   const give = (item: string, to: string) => gained.set(item, new Set([...(gained.get(item) ?? []), to]));
+  const lostNow = (item: string) => !!c.possession.lost?.has(item) && !gained.get(item)?.size;
   const holds = (who: string, item: string) => {
+    if (lostNow(item)) return false;
     const h = holdersOf(item, c.possession, gained);
     return h.size === 0 || h.has(who); // nobody recorded as holding it: can't judge
   };
-  const recorded = (item: string) => [...holdersOf(item, c.possession, gained)].join(", ") || "nobody";
+  const recorded = (item: string) => (lostNow(item) ? "nobody (it's lost)" : [...holdersOf(item, c.possession, gained)].join(", ") || "nobody");
 
   for (const b of beats) {
     const text = c.tagger.tag(b.does);

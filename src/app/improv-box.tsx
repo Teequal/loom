@@ -7,6 +7,8 @@ import { Icon } from "./icons";
 import { type Encounter, FightPanel } from "./fight";
 import { ResultPrompt } from "./results";
 import { Linked, LoomProvider, RefChips, useLoom } from "./loom-ui";
+import { setPref, usePrefs } from "./prefs";
+import { type Overrides, SceneChips } from "./scene-chips";
 import { Header, Note, post, store, useCampaigns, useElapsed } from "./shell";
 
 // The table page: type what the players just did, get options tied back to threads (each shown
@@ -71,15 +73,15 @@ interface Entry {
 }
 type Status = "idle" | "running" | "done" | "error";
 
-const MODELS = [
+export const MODELS = [
   { id: "haiku", label: "Quick", hint: "Haiku · ~3 s to the first option" },
   { id: "sonnet", label: "Balanced", hint: "Sonnet · a middle ground" },
   { id: "opus", label: "Best", hint: "Opus · slower, pulls in more that fits" },
 ] as const;
 type Model = (typeof MODELS)[number]["id"];
-const TONES = ["Grounded", "Restrained", "Balanced", "Dramatic", "Theatrical"];
+export const TONES = ["Grounded", "Restrained", "Balanced", "Dramatic", "Theatrical"];
 // Which kinds of option to offer. Most DMs never change the default mix.
-const MIXES = [
+export const MIXES = [
   { id: "mix", label: "Mix", hint: "One payoff, one twist, one callback or character beat" },
   { id: "fights", label: "Action", hint: "More fights and danger" },
   { id: "mystery", label: "Mystery", hint: "Reveal and deepen mysteries" },
@@ -88,7 +90,7 @@ const MIXES = [
 ] as const;
 type MixId = (typeof MIXES)[number]["id"];
 const FLAVOUR_LABEL: Record<string, string> = { payoff: "Payoff", twist: "Twist", callback: "Callback", character: "Character", tense: "Tense", funny: "Funny", mystery: "Mystery", fight: "Fight" };
-const REACH = ["Next few minutes", "This scene", "Next session", "The arc"];
+export const REACH = ["Next few minutes", "This scene", "Next session", "The arc"];
 const threadRefs = (ts: { id: number; title: string }[]) => ts.map((t) => ({ kind: "thread" as const, id: t.id, name: t.title }));
 
 export function ImprovBox() {
@@ -128,9 +130,15 @@ const SAMPLE_MOMENTS = [
 ];
 
 function Table({ campaignId, name, trySample }: { campaignId: number; name: string; trySample: () => Promise<void> }) {
-  const [model, setModel] = useState<Model>("haiku");
-  const [tone, setTone] = useState(1);
+  // Model, tone and kinds of option are per-browser preferences (the Settings page and the tune
+  // panel change the same ones).
+  const prefs = usePrefs();
+  const model: Model = prefs.model;
+  const tone = prefs.tone;
+  const mix: MixId = prefs.mix;
   const [moment, setMoment] = useState("");
+  const [overrides, setOverrides] = useState<Overrides>({}); // the GM's corrections from the scene chips
+  const [askedOverrides, setAskedOverrides] = useState<Overrides>({});
   const [placeholder, setPlaceholder] = useState("What did the players just do?");
   const [asked, setAsked] = useState("");
   const [cards, setCards] = useState<Card[]>([]);
@@ -146,21 +154,12 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const [showOthers, setShowOthers] = useState(false);
   const [openCard, setOpenCard] = useState<number | null>(null);
   const [steered, setSteered] = useState(""); // the option read in full; the rest are headlines
-  const [mix, setMix] = useState<MixId>(() => {
-    const m = store.get("loom.mix");
-    return MIXES.some((x) => x.id === m) ? (m as MixId) : "mix";
-  });
   const [sample, setSample] = useState(false);
   const [open, setOpen] = useState<number | null>(null); // timeline entry shown in detail
   const box = useRef<HTMLTextAreaElement>(null);
   const abort = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    const m = store.get("loom.model");
-    const t = Number(store.get("loom.tone"));
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- per-browser preferences read once on load
-    if (m === "opus" || m === "haiku" || m === "sonnet") setModel(m);
-    if (store.get("loom.tone") !== null && t >= 0 && t <= 4) setTone(t);
     box.current?.focus();
   }, []);
 
@@ -254,14 +253,19 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const live: Live = { campaignId, entries, reload, model, tone, focusBox };
 
   async function ask(again?: { steer: string }) {
-    // A steer re-weaves the same moment; otherwise it's whatever is in the box.
+    // A steer re-weaves the same moment (with the same corrections); otherwise it's whatever is in the box.
     const text = again ? asked : moment.trim();
     if (!text || status === "running") return;
+    const corrections = again ? askedOverrides : overrides;
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
     setAsked(text);
-    if (!again) setMoment("");
+    setAskedOverrides(corrections);
+    if (!again) {
+      setMoment("");
+      setOverrides({});
+    }
     setOpenCard(null);
     setSteered(again?.steer ?? "");
     setPlaceholder("What did the players just do?");
@@ -276,7 +280,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       const res = await fetch("/api/improv", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaignId, moment: text, model, tone, mix, steer: again?.steer }),
+        body: JSON.stringify({ campaignId, moment: text, model, tone, mix, steer: again?.steer, overrides: corrections }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -398,10 +402,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                   label="Model"
                   options={MODELS}
                   value={model}
-                  onChange={(v) => {
-                    setModel(v);
-                    store.set("loom.model", v);
-                  }}
+                  onChange={(v) => setPref("model", v)}
                 />
                 <p className="mt-1 text-xs text-muted">{MODELS.find((m) => m.id === model)?.hint}</p>
               </Field>
@@ -410,10 +411,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                   label="Kinds of option"
                   options={MIXES}
                   value={mix}
-                  onChange={(v) => {
-                    setMix(v);
-                    store.set("loom.mix", v);
-                  }}
+                  onChange={(v) => setPref("mix", v)}
                 />
               </Field>
               <Field label="Tone">
@@ -421,10 +419,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                   label="Tone"
                   steps={TONES}
                   value={tone}
-                  onChange={(v) => {
-                    setTone(v);
-                    store.set("loom.tone", String(v));
-                  }}
+                  onChange={(v) => setPref("tone", v)}
                 />
               </Field>
               <Field label="Risky changes">
@@ -440,6 +435,9 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                 </Switch>
               </Field>
               <p className="text-[11px] text-muted">Enter asks · Shift+Enter for a new line · / brings you back to the box</p>
+              <Link href="/settings" className="btn-tertiary inline-flex items-center gap-1 text-xs">
+                <Icon name="settings" size={12} /> All settings
+              </Link>
             </Tune>
             <button
               type="submit"
@@ -451,6 +449,8 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
             </button>
           </div>
         </form>
+        {/* What Loom read from the moment (code, as you type): tap to correct before asking. */}
+        {!shrunk && <SceneChips campaignId={campaignId} moment={moment} overrides={overrides} onChange={setOverrides} mode={prefs.chips} />}
       </div>
 
       {/* Reads like a rules question? Offer the rules panel; never reroute on its own. */}
@@ -1146,6 +1146,7 @@ function OptionCard({
   saved?: Plan[];
 }) {
   const [copied, setCopied] = useState(false);
+  const showWhy = usePrefs().why;
   // Swipe sideways between options on a phone.
   const touch = useRef<number | null>(null);
   return (
@@ -1197,7 +1198,7 @@ function OptionCard({
         <Linked text={card.text} />
       </p>
       <RefChips refs={[...threadRefs(card.threads), ...(card.callback ? [{ kind: "moment" as const, id: card.callback.id, name: `Callback: ${card.callback.title}` }] : [])]} />
-      {card.why && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
+      {card.why && showWhy && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
       <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
         {state !== "used" ? (
           <button type="button" onClick={onUse} disabled={!canUse} className="btn-secondary font-medium">

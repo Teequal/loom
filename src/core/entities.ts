@@ -137,6 +137,11 @@ export async function updateEntity(entityId: number, patch: EntityPatch, opts: W
   }
   update.traits = nextTraits;
   await db.update(schema.entities).set(update).where(eq(schema.entities.id, entityId));
+  // A lost item has no holder: losing it ends whoever held it (logged, so undo restores both).
+  if (entity.type === "item" && apply.status === "lost") {
+    const held = await db.select().from(schema.entityRelations).where(and(eq(schema.entityRelations.toEntityId, entity.id), eq(schema.entityRelations.type, "holds")));
+    for (const r of held) await removeRelation(r.id, opts.source, opts.batch);
+  }
   await logChanges(
     Object.keys(apply).map((field) => ({
       campaignId: entity.campaignId,
@@ -259,6 +264,12 @@ export async function setRelation(campaignId: number, input: RelationInput, opts
 
   const result = await upsertRelation(campaignId, input, opts, `${from.name} ${verb(input.type)} ${to.name}`);
   result.notes = [...notes, ...(result.notes ?? [])];
+
+  // Someone holding a lost item has found it.
+  if (input.type === "holds" && result.written.length && to.status === "lost") {
+    const found = await updateEntity(to.id, { status: "intact" }, opts);
+    if (found.written.length) result.notes.push(`${to.name} is no longer lost`);
+  }
 
   // Two-way relationships are recorded both ways.
   if (law.symmetric && result.written.length) {

@@ -1,9 +1,10 @@
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
-import { type EffectInPlay, loadEffectsInPlay } from "./effects";
+import type { EffectInPlay } from "./effects";
 import type { EntityTraits } from "./entity-fields";
 import type { Budget } from "./graph";
 import { capabilitiesOf, RELATION_LAWS, togglesText } from "./rules";
+import { buildSituation, loadWorld, type Overrides, type Presence, type Situation } from "./situation";
 
 // The scene: where the party is, who's here, the party roster and compact cards for the
 // entities in play. Built from structured data so the model can't contradict continuity,
@@ -11,9 +12,7 @@ import { capabilitiesOf, RELATION_LAWS, togglesText } from "./rules";
 
 type Entity = typeof schema.entities.$inferSelect;
 type Relation = typeof schema.entityRelations.$inferSelect;
-// "with-party": a companion travelling with the party (at their place, and allied with a PC);
-// "nearby": recorded at the party's place, but not with them (can turn up; doesn't stand there).
-export type Presence = "with-party" | "nearby" | "elsewhere" | "unknown";
+export type { Presence };
 
 export interface Scene {
   text: string; // prompt block
@@ -28,6 +27,7 @@ export interface Scene {
   resolve: (name: string) => Entity | undefined;
   presence: (e: Entity) => Presence;
   whereabouts: (e: Entity) => string; // human-readable, for rejection reasons
+  situation: Situation; // the scene model everything here is read from
 }
 
 const MAX_CARDS = 10;
@@ -43,11 +43,16 @@ export async function buildScene(
     // Context by distance: how many links each entity is from the moment, and how much to show.
     distances?: Map<number, number>;
     budget?: Budget;
+    // The scene model: built here from the moment (and the GM's corrections) unless given.
+    moment?: string;
+    overrides?: Overrides;
+    situation?: Situation;
   },
 ): Promise<Scene> {
-  const [campaign] = await db.select().from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
-  const entities = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
-  const relations = await db.select().from(schema.entityRelations).where(eq(schema.entityRelations.campaignId, campaignId));
+  const situation = opts.situation ?? buildSituation(await loadWorld(campaignId), opts.moment ?? "", opts.overrides);
+  const campaign = situation.world.campaign;
+  const entities = situation.entities;
+  const relations = situation.world.relations;
   const byId = new Map(entities.map((e) => [e.id, e]));
   const nameOf = (id: number | null) => (id == null ? null : (byId.get(id)?.name ?? null));
 
@@ -65,15 +70,6 @@ export async function buildScene(
     return lookup.get(n) ?? lookup.get(`the ${n}`) ?? lookup.get(n.split(/[\s,]+/)[0]);
   };
 
-  // Location hierarchy, in memory: is `place` inside `container` (or the same)?
-  const within = (place: number, container: number) => {
-    let cur: number | null = place;
-    for (let hops = 0; cur != null && hops < 20; hops++) {
-      if (cur === container) return true;
-      cur = byId.get(cur)?.parentId ?? null;
-    }
-    return false;
-  };
   const chain = (id: number | null) => {
     const names: string[] = [];
     let cur = id;
@@ -86,26 +82,9 @@ export async function buildScene(
     return names.join(" › ");
   };
 
-  const party = campaign?.partyLocationId ? (byId.get(campaign.partyLocationId) ?? null) : null;
+  const party = situation.party;
   const locationOf = (e: Entity) => e.actualLocationId ?? e.lastKnownLocationId;
-  // A companion has a tie of loyalty to a PC; anyone else recorded at the party's place is only
-  // nearby. Locations go stale between sessions, so being recorded there isn't standing there.
-  const pcIds = new Set(entities.filter((e) => e.type === "pc").map((e) => e.id));
-  const COMPANION_TIES = new Set(["ally", "serves", "family", "romance", "loves", "trusts"]);
-  const companions = new Set(
-    relations
-      .filter((r) => COMPANION_TIES.has(r.type) && (pcIds.has(r.fromEntityId) || pcIds.has(r.toEntityId)))
-      .flatMap((r) => [r.fromEntityId, r.toEntityId])
-      .filter((id) => !pcIds.has(id)),
-  );
-  const presence = (e: Entity): Presence => {
-    const loc = locationOf(e);
-    if (!party || loc == null) return "unknown";
-    // At the party's place if they're somewhere inside it, or the party is inside theirs (an NPC
-    // known only to be "in Duradan" could be at the clocktower).
-    if (!(within(loc, party.id) || within(party.id, loc))) return "elsewhere";
-    return companions.has(e.id) ? "with-party" : "nearby";
-  };
+  const presence = situation.presence;
   const whereabouts = (e: Entity) => {
     const loc = nameOf(locationOf(e));
     return loc ? `last known at ${loc}` : "whereabouts unknown";
@@ -133,7 +112,7 @@ export async function buildScene(
   const rank = (e: Entity) =>
     (opts.mentioned.has(e.name) ? 100 : 0) +
     (threadNames.has(e.name) ? 10 : 0) +
-    (e.type === "npc" ? { "with-party": 5, nearby: 2, elsewhere: 0, unknown: 0 }[presence(e)] : 0) +
+    (e.type === "npc" ? { here: 6, "with-party": 5, nearby: 2, elsewhere: 0, unknown: 0 }[presence(e)] : 0) +
     (e.importance === "major" ? 2 : e.importance === "minor" ? 1 : 0);
   // With distances, detail follows closeness: full cards nearest the moment, briefs one step
   // out, names two steps out, nothing beyond. Without, the older ranking applies.
@@ -169,7 +148,9 @@ export async function buildScene(
 
   const npcsWhere = (p: Presence) => entities.filter((e) => e.type === "npc" && e.status !== "dead" && presence(e) === p).map((e) => e.name);
   const withParty = npcsWhere("with-party");
+  const broughtIn = npcsWhere("here");
   const around = npcsWhere("nearby");
+  const onlyNamed = [...situation.reading.referred].filter((n) => entities.find((e) => e.name === n)?.status !== "dead");
   const dead = entities.filter((e) => e.type === "npc" && e.status === "dead").map((e) => e.name);
 
   const lines: string[] = [];
@@ -177,21 +158,25 @@ export async function buildScene(
   lines.push(party ? `- The party is at: ${chain(party.id)}` : "- The party's location is not recorded.");
   if (party) {
     lines.push(`- With the party: ${withParty.length ? withParty.join(", ") : "no NPCs"}`);
+    if (broughtIn.length) lines.push(`- Here now, because of this moment: ${broughtIn.join(", ")}`);
     if (around.length) lines.push(`- Recorded somewhere around here, not with the party (they can turn up): ${around.join(", ")}`);
   }
+  if (onlyNamed.length) lines.push(`- Only mentioned, not here (they can only arrive or send word): ${onlyNamed.join(", ")}`);
+  if (situation.contacted.size) lines.push(`- Reached from afar by the players (may answer remotely): ${[...situation.contacted].join(", ")}`);
+  if (situation.lost.size) lines.push(`- Lost (nobody has them): ${[...situation.lost].join(", ")}`);
   if (dead.length) lines.push(`- Dead (can't act): ${dead.join(", ")}`);
   if (campaign?.tone) lines.push(`- Tone: ${campaign.tone}`);
   if (campaign?.safetyLines.length) lines.push(`- Safety lines (never include): ${campaign.safetyLines.join("; ")}`);
 
   // The rules layer: toggles that differ from standard 5e, and every effect with who it reaches now.
-  const effects = await loadEffectsInPlay(campaignId, entities, party?.id ?? null);
+  const effects: EffectInPlay[] = situation.effects;
   const toggles = togglesText(campaign?.ruleToggles ?? {});
   // With distances, only rules that reach someone now or whose source is close by.
   const shown = dist ? effects.filter((e) => e.targets.length > 0 || (e.effect.sourceEntityId != null && dist.has(e.effect.sourceEntityId))) : effects;
   if (toggles.length || shown.length) {
     lines.push("", "RULES IN PLAY (5e unless noted)");
     for (const t of toggles) lines.push(`- ${t}`);
-    for (const e of shown) lines.push(`- ${e.text}`);
+    for (const e of shown) lines.push(`- ${e.text}${situation.effects.find((x) => x.effect.id === e.effect.id)?.live === false && e.targets.length ? ` (not triggered in this moment: ${situation.effects.find((x) => x.effect.id === e.effect.id)!.why}; don't call its roll)` : ""}`);
   }
 
   lines.push("", "THE PARTY (player characters, controlled by the players)");
@@ -215,10 +200,9 @@ export async function buildScene(
     partyLocation: party,
     pcs,
     entities,
-    holds: relations
-      .filter((r) => r.type === "holds")
-      .map((r) => ({ holder: nameOf(r.fromEntityId) ?? "", item: nameOf(r.toEntityId) ?? "" }))
-      .filter((h) => h.holder && h.item),
+    // A lost item has no holder, whatever an older record says (the Knight figurine thrown in the
+    // Morrow but still "held" by Khayiulad).
+    holds: [...situation.holders].flatMap(([item, who]) => [...who].map((holder) => ({ holder, item }))),
     effects,
     safetyLines: campaign?.safetyLines ?? [],
     realNames: [
@@ -228,6 +212,7 @@ export async function buildScene(
     resolve,
     presence,
     whereabouts,
+    situation,
   };
 }
 
@@ -249,6 +234,7 @@ function card(e: Entity, ctx: { nameOf: (id: number | null) => string | null; pr
   const parts: string[] = [];
   if (e.description) parts.push(e.description.replace(PLAYED_BY, "").trim());
   if (e.status === "dead") parts.push("Dead: can be remembered or found, never acts.");
+  else if (ctx.presence === "here") parts.push("Here now.");
   else if (ctx.presence === "with-party") parts.push("With the party.");
   else if (ctx.presence === "nearby") parts.push("Somewhere around here, not with the party.");
   const lastKnown = ctx.nameOf(e.lastKnownLocationId);

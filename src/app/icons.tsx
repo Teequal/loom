@@ -16,6 +16,13 @@ const PATHS = {
   arrow: <path d="M3.5 8h9M9 4.5L12.5 8 9 11.5" />,
   dot: <circle cx="8" cy="8" r="1.5" />,
   sparkle: <path d="M8 2.5v3M8 10.5v3M2.5 8h3M10.5 8h3M4.5 4.5l1.5 1.5M10 10l1.5 1.5M11.5 4.5L10 6M6 10l-1.5 1.5" />,
+  // The scene chips: someone here, an item, someone reached from afar, a rule, a place.
+  person: <path d="M8 7.5a2.25 2.25 0 100-4.5 2.25 2.25 0 000 4.5zM3.5 13c.6-2.3 2.3-3.5 4.5-3.5s3.9 1.2 4.5 3.5" />,
+  item: <path d="M3.5 6l4.5-2.5L12.5 6v4.5L8 13l-4.5-2.5V6zM3.5 6L8 8.5 12.5 6M8 8.5V13" />,
+  signal: <path d="M8 12.5h.01M5.5 10a3.5 3.5 0 015 0M3.5 7.5a6.5 6.5 0 019 0" />,
+  die: <path d="M4.5 3.5h7a1 1 0 011 1v7a1 1 0 01-1 1h-7a1 1 0 01-1-1v-7a1 1 0 011-1zM6 6h.01M8 8h.01M10 10h.01" />,
+  pin: <path d="M8 13.5s4-3.6 4-7a4 4 0 00-8 0c0 3.4 4 7 4 7zM8 7.5a1 1 0 100-2 1 1 0 000 2z" />,
+  settings: <path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6M10 3v3M6 10v3" />,
 } as const;
 
 export type IconName = keyof typeof PATHS;

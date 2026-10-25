@@ -5,6 +5,7 @@ import { findMentions } from "./retrieval";
 import { checkBeat, checkOnFail } from "./scaffold";
 import { BUDGETS, distancesFrom } from "./graph";
 import { buildScene } from "./scene";
+import type { Overrides } from "./situation";
 
 // The flavour pass: turns one chosen scaffold into vivid read-aloud text, using the facts behind
 // its tags (voices, appearance, the place, the exact mechanic). It may change the words, never
@@ -34,11 +35,12 @@ export interface FlavourInput {
   campaignId: number;
   moment: string;
   scaffold: ScaffoldOption;
+  overrides?: Overrides; // the GM's corrections, as for the options themselves
 }
 
 export async function flavour(input: FlavourInput, model?: string) {
   const { campaignId, moment, scaffold } = input;
-  const base = await buildScene(campaignId, { mentioned: new Set(), threadEntities: [] });
+  const base = await buildScene(campaignId, { mentioned: new Set(), threadEntities: [], moment, overrides: input.overrides });
   const mentioned = new Set(findMentions(base.entities, moment).keys());
   const lists0 = buildLists(base, moment, mentioned);
 
@@ -53,7 +55,7 @@ export async function flavour(input: FlavourInput, model?: string) {
   // Full cards for exactly what the option names; nothing else.
   const tagIds = base.entities.filter((e) => tagged.has(e.name)).map((e) => e.id);
   const distances = await distancesFrom(campaignId, tagIds, BUDGETS.flavour.depth);
-  const scene = await buildScene(campaignId, { mentioned: tagged, threadEntities: [], distances, budget: BUDGETS.flavour });
+  const scene = await buildScene(campaignId, { mentioned: tagged, threadEntities: [], distances, budget: BUDGETS.flavour, situation: base.situation });
   const lists = buildLists(scene, moment, mentioned);
   const t = lists.tagger;
 
