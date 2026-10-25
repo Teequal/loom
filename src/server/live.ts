@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db, schema } from "@/core/db/client";
 import { FIXTURE_NAME } from "@/core/seed";
 import { liveEntries, liveSessionNumber } from "@/core/live";
+import { developmentView } from "./develop";
 
 type Entry = typeof schema.liveEntries.$inferSelect;
 
@@ -29,7 +30,8 @@ export function entryView(e: Entry, titleOf = new Map<number, string>()) {
     status: e.status,
     summary: e.summary,
     questions: e.questions.filter((q) => !q.answer).map((q) => ({ n: q.n, group: q.group, summary: q.summary, reasons: q.reasons, evidence: q.evidence })),
-    developments: e.developments,
+    // Chains keep their scaffolds on the server; the page gets the readable parts.
+    developments: e.developments.map(developmentView),
     awaiting: e.resultState === "pending" ? e.awaiting : null,
     resultState: e.resultState,
     encounter: e.encounter,

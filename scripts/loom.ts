@@ -366,7 +366,8 @@ async function main() {
         count: flag(args, "count") ? Number(flag(args, "count")) : 1,
         from: flag(args, "from") === "step" ? "step" : "option",
         model: flag(args, "model"),
-        onChain: (c) => console.log(`  (chain "${c.label}" ready at ${((Date.now() - started) / 1000).toFixed(1)} s)`),
+        onStep: (i, _st, n) => console.log(`  (chain ${i + 1} step ${n + 1} at ${((Date.now() - started) / 1000).toFixed(1)} s)`),
+        onChain: (c) => console.log(`  (chain "${c.label}" complete at ${((Date.now() - started) / 1000).toFixed(1)} s)`),
       });
       console.log(`\nSuggested steer: ${r.suggested}${steer ? ` · asked: ${steer}` : ""}`);
       for (const [i, c] of r.chains.entries()) {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FLAVOURS, adoptHand, handText, checkOption, completedOptions, contextPrompt, fitToMove, liveRulesOf, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
+import { FLAVOURS, adoptHand, handText, checkOption, contextPrompt, fitToMove, liveRulesOf, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
 import { callLlm, type LlmResult } from "./llm";
 import { db, schema } from "./db/client";
 import { PILLARS } from "./db/schema";
@@ -78,7 +78,10 @@ export interface ChainInput {
   tone?: number;
   model?: string;
   overrides?: Overrides;
-  onChain?: (c: Chain) => void; // each chain as soon as it's complete and checked
+  refine?: Refine; // rework a chain in place instead of writing new ones
+  onStep?: (index: number, step: ChainStep, n: number) => void; // each step as soon as it's written and checked
+  onChain?: (c: Chain, index: number) => void; // each chain once complete: its title, headline and why
+  onDrop?: (index: number) => void; // a chain whose steps were shown turned out unusable
 }
 
 // How long a chain is: from an option, the next few minutes; from a step, the rest of the scene;
@@ -97,6 +100,12 @@ export function suggestSteer(p: Prepared, moves: Move[]): Steer {
   if (p.quietest) return "heartfelt";
   if (p.threads.slice(0, 3).some((t) => t.kind === "grudge")) return "fight";
   return "grounded";
+}
+
+/** The suggested steer for a choice, from code alone (for the ring, before the GM picks). */
+export async function suggestedSteer(campaignId: number, base: Pick<ChainInput, "moment" | "label" | "text">) {
+  const p = await prepareMoment(campaignId, `${base.moment}\n→ ${base.label ? `${base.label}: ` : ""}${base.text}`);
+  return suggestSteer(p, findMoves(p.scene.situation.view, p.threads, { callbacks: p.callbacks, liveRules: liveRulesOf(p.scene) }));
 }
 
 // Threads that share words with the GM's direction: where "tie to the story" leans.
@@ -192,7 +201,7 @@ export class StepRunner {
     return phrase(raw.if_they) ? `If they ${words(raw.if_they)}:` : "Then:";
   }
 
-  take(raw: RawStep) {
+  take(raw: RawStep): ChainStep | undefined {
     if (this.ended || !raw?.setup) return;
     const n = this.steps.length;
     // After a roll, what follows depends on how it went: never "whatever happens".
@@ -207,7 +216,7 @@ export class StepRunner {
     const stepOption = { ...this.head, label: this.label, setup: raw.setup, hand: raw.hand, on_fail: raw.on_fail, why: "", hand_off: { to: raw.hand.to, kind: "question" as const, mechanic: "none", text: "" } } as ScaffoldOption;
     const filled = fillSlots(adoptHand(stepOption), this.p.lists.tagger);
     for (const d of filled.dropped) this.log.push({ label: this.label, reason: `step ${n + 1}: sentence dropped: ${d}` });
-    if (filled.problem) return this.end(`step ${n + 1}: ${filled.problem}`);
+    if (filled.problem) return void this.end(`step ${n + 1}: ${filled.problem}`);
     const o = filled.option;
     const t0 = this.p.lists.tagger;
     normaliseHandOff(o, ctx);
@@ -217,7 +226,7 @@ export class StepRunner {
       const fresh = o.setup.filter((b) => b.byCode || !retells(t0.render(t0.tag(b.does)), this.base));
       if (fresh.length < o.setup.length) this.log.push({ label: this.label, reason: `step 1: sentence dropped: retells the choice` });
       if (fresh.length) o.setup = fresh;
-      else return this.end("step 1: only retells the choice");
+      else return void this.end("step 1: only retells the choice");
     }
     // Someone not here yet can't act here: their sentence goes (they arrive first, in a beat of
     // kind "arrival").
@@ -227,7 +236,7 @@ export class StepRunner {
       return !away;
     });
     if (here.length) o.setup = here;
-    else return this.end(`step ${n + 1}: nobody left to act`);
+    else return void this.end(`step ${n + 1}: nobody left to act`);
     // A step that asks again for the roll its choice already asked for ("Everyone makes an
     // Investigation check…" twice) hands the turn to the same players as a question instead.
     const first = this.firstHand;
@@ -242,25 +251,31 @@ export class StepRunner {
       this.log.push({ label: this.label, reason: `step 1: repeated the choice's ${sameRoll ? "roll" : "question"}; asked what they do instead` });
     }
     const reason = checkOption(o, ctx);
-    if (reason) return this.end(`step ${n + 1}: ${reason}`);
+    if (reason) return void this.end(`step ${n + 1}: ${reason}`);
 
-    // The world as this step leaves it.
-    for (const b of o.setup) if (b.kind === "arrival" && b.actor !== "walk-on" && b.actor !== "world") this.present.add(b.actor);
+    const isFight = this.fightAt != null && n + 1 >= this.fightAt;
+    const step: ChainStep = { when: this.when(raw), text: renderOption(o, t0), to: o.hand_off.to, needs: isFight ? "fight" : o.hand_off.kind === "roll" ? "roll" : null, scaffold: o };
+    this.leaves(step);
+    return step;
+  }
+
+  /** A step already written and checked (kept when a later step is swapped): the world moves on as it did. */
+  keep(step: ChainStep) {
+    if (!this.ended) this.leaves(step);
+  }
+
+  // The world as a step leaves it: who has arrived, who holds what, whose turn it is.
+  private leaves(step: ChainStep) {
+    const o = step.scaffold;
     const t = this.p.lists.tagger;
+    for (const b of o.setup) if (b.kind === "arrival" && b.actor !== "walk-on" && b.actor !== "world") this.present.add(b.actor);
     for (const b of o.setup) {
       // An item handed over ("tosses the {X} to {Y}") stays with its new holder.
       for (const m of t.tag(b.does).matchAll(/\{([^}|]+)(?:\|[^}]*)?\}[^{]{0,40}?\bto\s+\{([^}|]+)(?:\|[^}]*)?\}/g)) {
         if (t.entityOf(m[1])?.type === "item") this.holders.set(m[1], new Set([m[2]]));
       }
     }
-    const isFight = this.fightAt != null && n + 1 >= this.fightAt;
-    this.steps.push({
-      when: this.when(raw),
-      text: renderOption(o, t),
-      to: o.hand_off.to,
-      needs: isFight ? "fight" : o.hand_off.kind === "roll" ? "roll" : null,
-      scaffold: o,
-    });
+    this.steps.push(step);
     this.prevHand = o.hand ?? null;
   }
 
@@ -270,17 +285,85 @@ export class StepRunner {
   }
 }
 
+// The complete elements of a JSON array still being written, and the one in progress.
+function scanArray(text: string, key: string): { done: string[]; partial: string | null } {
+  const k = text.indexOf(`"${key}"`);
+  const at = k < 0 ? -1 : text.indexOf("[", k);
+  if (at < 0) return { done: [], partial: null };
+  const done: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  for (let i = at + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === "{") {
+      if (depth++ === 0) start = i;
+    } else if (ch === "}" && --depth === 0) done.push(text.slice(start, i + 1));
+    else if (ch === "]" && depth === 0) return { done, partial: null };
+  }
+  return { done, partial: depth > 0 ? text.slice(start) : null };
+}
+
+/** Ways to rework a chain in place. "swap" rewrites from one step on, keeping the steps before it. */
+export interface Refine {
+  chain: Chain; // the chain as it reads now (with its steps' scaffolds)
+  how: string; // "shorter", "darker", "lighter", "bring in Zara", or the GM's own words
+  fromStep?: number; // swap: rewrite from this step (0-based), keeping the ones before
+}
+
+const REFINE_TEXT: Record<string, string> = {
+  shorter: "Make it shorter: fewer steps (at least one fewer if it has more than one), and fewer, shorter beats.",
+  darker: "Make it darker: higher stakes, a grimmer turn, a real cost; still tied to the same threads.",
+  lighter: "Make it lighter: warmer or funnier, lower stakes; still tied to the same threads.",
+};
+
 /** Develop's chain: steer → the engine's moves → one (or a few) chains of steps. */
 export async function developChain(campaignId: number, input: ChainInput) {
   const moment = [input.moment, input.label || input.text ? `→ ${input.label ? `${input.label}: ` : ""}${input.text}` : ""].filter(Boolean).join("\n");
   const p = await prepareMoment(campaignId, moment, { overrides: input.overrides });
-  const count = Math.max(1, Math.min(3, input.count ?? 1));
+  const refine = input.refine;
+  const count = refine ? 1 : Math.max(1, Math.min(3, input.count ?? 1));
   const steer = input.steer ?? null;
-  const moves = findMoves(p.scene.situation.view, p.threads, { callbacks: p.callbacks, liveRules: liveRulesOf(p.scene), steer: steer ?? undefined, toward: steer === "story" ? towardDirection(p) : undefined, exclude: input.exclude, limit: Math.max(4, count + 2) });
-  const turn = choiceHand(input.text, p.lists.pcs);
+  let moves = findMoves(p.scene.situation.view, p.threads, { callbacks: p.callbacks, liveRules: liveRulesOf(p.scene), steer: steer ?? undefined, toward: steer === "story" ? towardDirection(p) : undefined, exclude: input.exclude, limit: Math.max(4, count + 2) });
+  // A rework stays on the chain's move; "bring in X" puts X in its cast, to arrive if they aren't here.
+  const bring = refine && /^bring in /i.test(refine.how) ? refine.how.replace(/^bring in /i, "").trim() : null;
+  if (refine) {
+    const same = findMoves(p.scene.situation.view, p.threads, { callbacks: p.callbacks, liveRules: liveRulesOf(p.scene), limit: 40 }).find((m) => moveKey(m) === refine.chain.move);
+    moves = [same ?? moves[0]].filter(Boolean).map((m, i) => ({ ...m, id: `M${i + 1}` }));
+    const who = bring ? p.scene.entities.find((e) => e.name.toLowerCase().startsWith(bring.toLowerCase())) : undefined;
+    if (who && moves[0] && !moves[0].cast.some((c) => c.name === who.name)) {
+      moves[0] = { ...moves[0], cast: [...moves[0].cast, { name: who.name, can: p.lists.check.present.has(who.name) ? "act" : "arrive", part: "lead" }] };
+    }
+  }
+  // A swap keeps the steps before it (code puts them back); the new steps follow the players' turn
+  // the last kept step ended on, so only they are asked for.
+  const keep = refine?.fromStep != null ? refine.chain.steps.slice(0, refine.fromStep) : [];
+  const lastKept = keep[keep.length - 1];
+  const turn = lastKept ? (lastKept.scaffold.hand ?? null) : choiceHand(input.text, p.lists.pcs);
   const { Schema, Chain } = chainSchema(p, moves, turn);
-  const steps = stepsFor(input);
+  const StepSchema = Chain.shape.steps.element;
+  const sized = stepsFor(input);
+  const steps = keep.length ? { ...sized, max: Math.max(1, sized.max - keep.length), text: `STEPS: ${Math.max(1, sized.max - keep.length)} new step${sized.max - keep.length > 1 ? "s" : ""} after the kept ones, each 1-2 beats, under 35 words.` } : refine && refine.how !== "shorter" ? { ...sized, text: `STEPS: ${refine.chain.steps.length} steps, as now, each 1-2 beats, under 35 words.` } : sized;
   const titleOf = p.titleOf;
+
+  const current = refine
+    ? `
+
+THE CHAIN AS IT READS NOW
+${refine.chain.steps.map((st, i) => `${i + 1}. ${st.when ? `${st.when} ` : ""}${st.text}`).join("\n")}
+
+CHANGE IT: ${
+        refine.fromStep != null
+          ? `steps 1-${refine.fromStep} stay as they are (code keeps them; don't write them). Write a different step ${refine.fromStep + 1} onward, following the players' turn step ${refine.fromStep} ends on${refine.how && refine.how !== "swap" ? `: ${REFINE_TEXT[refine.how] ?? refine.how}` : "."}`
+          : bring
+            ? `bring in ${bring}: they arrive or act from afar, tied to their threads. Keep what works.`
+            : (REFINE_TEXT[refine.how] ?? `The GM says: ${refine.how}`)
+      } Stay on the same move and threads. Write new sentences, not the old ones with a word changed.`
+    : "";
 
   const prompt = `${contextPrompt(p, moves, "chain")}
 ${steps.text}
@@ -294,25 +377,57 @@ ${input.moment}
 THE GM'S CHOICE (already played)
 ${input.label ? `${input.label}: ` : ""}${input.text}
 
-THE PLAYERS' TURN NOW
-${!turn ? "None: opens_on is \"start\"." : ROLLS.has(turn.kind) ? 'The roll above. opens_on is its "success" or its "failure".' : turn.kind === "choice" ? `A choice: first "${turn.what}", second "${turn.or}". opens_on is one of them.` : "The question above. opens_on is \"any\", with opens_if."}`;
+THE PLAYERS' TURN NOW${lastKept ? ` (step ${keep.length} ends on it: ${lastKept.text.slice(-200)})` : ""}
+${!turn ? 'None: opens_on is "start".' : ROLLS.has(turn.kind) ? 'The roll above. opens_on is its "success" or its "failure".' : turn.kind === "choice" ? `A choice: first "${turn.what}", second "${turn.or}". opens_on is one of them.` : 'The question above. opens_on is "any", with opens_if.'}${current}`;
 
   const log: { label: string; reason: string }[] = [];
   const accepted: Chain[] = [];
   const calls: LlmResult<unknown>[] = [];
 
-  // Each chain is taken as soon as it's complete in the stream, its steps checked in order.
-  const finish = (raw: unknown) => {
+  // One runner per chain as it streams in: its steps are checked (and shown) one at a time, in
+  // order, as each is written; the chain's title, headline and why come when it's complete.
+  type Live = { run: StepRunner; used: number; move: Move | undefined; dropped: boolean };
+  const live = new Map<number, Live>();
+  type Head = RawHead & { opens_on: string; opens_if: string };
+  const startRun = (index: number, head: Head) => {
+    const move = moves.find((m) => m.id === head.move);
+    const run = new StepRunner(p, head, move, `chain ${index + 1}`, steer === "fight" ? steps.max : null, log, turn, input.text);
+    for (const st of keep) run.keep(st);
+    const l: Live = { run, used: 0, move, dropped: false };
+    live.set(index, l);
+    for (const st of keep) input.onStep?.(index, st, run.steps.indexOf(st));
+    return l;
+  };
+  // Raw steps in order; the first takes the chain's opening outcome, and kept steps (a swap) are
+  // skipped in what the model wrote.
+  const feed = (index: number, l: Live, head: Head, raws: unknown[]) => {
+    for (; l.used < raws.length && l.used < steps.max; l.used++) {
+      const parsed = StepSchema.safeParse(raws[l.used]);
+      if (!parsed.success) {
+        if (!l.run.ended) log.push({ label: `chain ${index + 1}`, reason: `step ${l.used + 1}: unusable answer` });
+        l.run.ended = true;
+        return;
+      }
+      let raw = parsed.data as unknown as RawStep;
+      if (l.used === 0) raw = { ...raw, after: head.opens_on, if_they: head.opens_if.trim() || raw.if_they };
+      const st = l.run.take(raw);
+      if (st && index < count && !l.dropped) input.onStep?.(index, st, l.run.steps.length - 1);
+    }
+  };
+
+  const finish = (index: number, raw: unknown) => {
     const parsed = Chain.safeParse(raw);
-    if (!parsed.success) return log.push({ label: (raw as { label?: string })?.label ?? "a chain", reason: "chain rejected: unusable answer (a value outside the allowed lists)" });
-    const raw2 = parsed.data as unknown as RawHead & { opens_on: string; opens_if: string; steps: RawStep[] };
-    const opening = raw2.steps[0] && { ...raw2.steps[0], after: raw2.opens_on, if_they: raw2.opens_if.trim() || raw2.steps[0].if_they };
-    const c = { ...raw2, steps: opening ? [opening, ...raw2.steps.slice(1)] : [] } as unknown as RawHead & { steps: RawStep[]; label: string; headline: string; why: string; flavour: string; callback: string };
-    const move = moves.find((m) => m.id === c.move);
-    const fightAt = steer === "fight" ? Math.max(1, c.steps.length) : null;
-    const run = new StepRunner(p, c, move, c.label, fightAt, log, turn, input.text);
-    for (const s of c.steps.slice(0, steps.max)) run.take(s);
-    if (!run.steps.length) return;
+    let l = live.get(index);
+    if (!parsed.success) {
+      log.push({ label: (raw as { label?: string })?.label ?? `chain ${index + 1}`, reason: "chain rejected: unusable answer (a value outside the allowed lists)" });
+      if (l?.run.steps.length) input.onDrop?.(index);
+      return;
+    }
+    const c = parsed.data as unknown as Head & { steps: RawStep[]; label: string; headline: string; why: string; flavour: string; callback: string };
+    l ??= startRun(index, c);
+    feed(index, l, c, c.steps);
+    if (!l.run.steps.length || index >= count) return;
+    const { run, move } = l;
     const t = p.lists.tagger;
     const idOf = (ref: string) => Number(ref.replace(/^T/, ""));
     const main = move && !move.threads.includes(idOf(c.thread)) ? move.threads[0] : idOf(c.thread);
@@ -323,30 +438,43 @@ ${!turn ? "None: opens_on is \"start\"." : ROLLS.has(turn.kind) ? 'The roll abov
     const label = c.label.trim() || t.render(t.tag(c.headline)).split(/\s+/).slice(0, 5).join(" ") || "Next";
     const headline = [t.render(t.tag(c.headline)), run.steps[0].scaffold.setup[0] ? renderBeat(run.steps[0].scaffold.setup[0], t).replace(/[.!?]$/, "") : "", label].find(fine) ?? label;
     const cb = p.callbacks.find((m) => `M${m.id}` === c.callback?.trim());
-    const chain: Chain = { label, headline, why: t.render(t.tag(c.why)), flavour: c.flavour ?? null, move: move ? moveKey(move) : c.thread, threads: ids.map((id) => ({ id, title: titleOf.get(id)! })), callback: cb ? { id: cb.id, title: cb.title } : null, steps: run.steps };
-    if (accepted.length >= count) return;
+    const chain: Chain = { label, headline, why: t.render(t.tag(c.why)), flavour: c.flavour ?? null, move: move ? moveKey(move) : (refine?.chain.move ?? c.thread), threads: ids.map((id) => ({ id, title: titleOf.get(id)! })), callback: cb ? { id: cb.id, title: cb.title } : null, steps: run.steps };
     accepted.push(chain);
-    input.onChain?.(chain);
+    input.onChain?.(chain, index);
   };
 
   for (let attempt = 0; attempt < 2 && !accepted.length; attempt++) {
+    const base = attempt * 10; // a retry's chains get their own indexes
     let seen = 0;
     const onText = (snapshot: string) => {
-      const done = completedOptions(snapshot, "chains");
+      const { done, partial } = scanArray(snapshot, "chains");
       for (; seen < done.length; seen++) {
         try {
-          finish(JSON.parse(done[seen]));
+          finish(base + seen, JSON.parse(done[seen]));
         } catch {
           // not whole yet; the final answer settles it
         }
+      }
+      // The chain being written: once its head is complete, its steps go through as they finish.
+      if (!partial) return;
+      const at = partial.indexOf('"steps"');
+      if (at < 0) return;
+      const index = base + seen;
+      try {
+        const head = JSON.parse(`${partial.slice(0, at).replace(/,\s*$/, "")}}`) as Head;
+        const l = live.get(index) ?? startRun(index, head);
+        feed(index, l, head, scanArray(partial, "steps").done.map((x) => JSON.parse(x)));
+      } catch {
+        // the head isn't whole yet
       }
     };
     try {
       const res = await callLlm({ feature: "chain", campaignId, system: SYSTEM, prompt, schema: Schema, maxTokens: 6000, effort: "low", model: input.model, fast: true, onText });
       calls.push(res);
-      for (const c of res.data.chains.slice(seen)) finish(c);
+      for (const [i, c] of res.data.chains.entries()) if (i >= seen) finish(base + i, c);
     } catch (err) {
       if (err instanceof Error && /credit has run out/.test(err.message)) throw err;
+      for (const [i, l] of live) if (i >= base && l.run.steps.length && !accepted.some((c) => c.steps === l.run.steps)) input.onDrop?.(i);
       log.push({ label: `attempt ${attempt + 1}`, reason: `unusable answer (${err instanceof Error ? err.message.slice(0, 300) : "error"}…)` });
     }
   }
@@ -362,7 +490,7 @@ ${!turn ? "None: opens_on is \"start\"." : ROLLS.has(turn.kind) ? 'The roll abov
   if (log.length) {
     await db
       .insert(schema.optionRejections)
-      .values(log.map((r) => ({ campaignId, model: llm.model, moment: `[develop${steer ? ` ${steer}` : ""}] ${input.text}`.slice(0, 1000), label: r.label, reason: r.reason, kept: accepted.length })))
+      .values(log.map((r) => ({ campaignId, model: llm.model, moment: `[develop${refine ? ` refine ${refine.how}` : steer ? ` ${steer}` : ""}] ${input.text}`.slice(0, 1000), label: r.label, reason: r.reason, kept: accepted.length })))
       .catch(() => {});
   }
   return { chains: accepted, suggested: suggestSteer(p, moves), moves, log, llm };

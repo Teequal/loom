@@ -32,3 +32,30 @@ export const overrides = z
     rulesOff: z.array(z.string().max(120)).max(20),
   })
   .partial();
+
+/**
+ * A route that streams newline-delimited JSON: `send` writes one event per line as things are
+ * ready, and the route ends with whatever `run` returns as {type:"done", ...}, or {type:"error"}.
+ */
+export function streamRoute<S extends z.ZodType>(schema: S, run: (body: z.infer<S>, send: (event: object) => void) => Promise<object>, failure = "Something went wrong.") {
+  return async (request: Request) => {
+    const parsed = schema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) return Response.json({ error: parsed.error.issues[0]?.message ?? "That request didn't make sense." }, { status: 400 });
+    await dbReady();
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const send = (event: object) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        try {
+          send({ type: "done", ...(await run(parsed.data, send)) });
+        } catch (err) {
+          console.error(err);
+          send({ type: "error", message: err instanceof Error && /credit has run out|any more|isn.t on this/i.test(err.message) ? err.message : failure });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+    return new Response(stream, { headers: { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-store" } });
+  };
+}

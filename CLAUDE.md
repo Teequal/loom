@@ -489,7 +489,16 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - **Format:** one step shape for every step. A separate first-step shape made the format too large for the API to compile.
         - **Measured (Haiku, 18 chains: 3 moments × 6 steers, sample campaign and enriched copy):** ~4.8 s per chain (max 7.6 s), $0.001–0.004, 1.8–2.6 steps, 2 sentences dropped, 1 chain rejected. 14 crafted checks (183/183).
         - **Seen:** "Then:" joins after a question with no "if they"; lines by an NPC who never arrived can slip through as kind "arrival"; failure text can still decide for the PC who rolled ("he decides the vial is just another potion").
-      - [ ] Step 2: API and streaming. [ ] Step 3: the page. [ ] Step 4: measure with Jacob's ticks. [ ] Step 5: docs.
+      - [x] **Step 2: API and streaming** (`src/server/develop.ts`, routes under `/api/develop/`).
+        - **Steps stream as they're written:** the chain being written is read as it streams. Once its head (move, references, opening) is whole, each step is checked and sent on its own (`onStep`). The title, headline and why come when the chain is complete (`onChain`). A chain already shown that turns out unusable is withdrawn (`onDrop`). Measured: step 1 at ~5 s, each later step ~0.5 s after.
+        - `POST /api/develop/chain` `{ entryId, steer?, words?, count?, devId?, exclude? }` streams `step` / `chain` / `drop` / `done` lines. `chainBase` builds the base from the entry and its ancestors; a branch or result gets the shorter "from a step" chain. With `devId` and `exclude`, it's another take added to the same development.
+        - `POST /api/develop/refine` `{ entryId, devId, chain, how, fromStep? }`: shorter / darker / lighter / "bring in X" (added to the move's cast) / the GM's own words, staying on the same move. A swap (`fromStep`) asks only for the new steps; code keeps the earlier ones (`StepRunner.keep`) and the new ones follow the last kept step's turn.
+        - `POST /api/develop/back` restores the version before the last rework (up to 5 kept per chain). `POST /api/develop/suggest` gives the ringed steer from code alone (~0.2 s).
+        - Chains are saved on the entry's `developments` as `{ kind: "chain", id, steer, words, chains }`, scaffolds included; the page gets them without scaffolds (`developmentView`). The old Develop routes stay until step 3 replaces the page.
+        - `streamRoute` in `src/server/route.ts` is the shared newline-JSON route helper.
+        - **Tested through the API (sample campaign):** develop, darker, lighter, swap from step 2, own words, Back, another take (a different move: a collision). 184/184 checks.
+        - **Seen:** on Quick, darker and lighter change little, and the model can copy the old wording; Balanced may suit reworks better (to try on the page).
+      - [ ] Step 3: the page. [ ] Step 4: measure with Jacob's ticks. [ ] Step 5: docs.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 
