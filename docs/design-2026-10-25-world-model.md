@@ -268,11 +268,38 @@ Each stage runs on its own, is measured, and is committed once it passes.
 
 **Stage 5: plans for Develop, fights and prep ideas,** which retires the remaining prose checks.
 
-## 11. Decisions for Jacob
+## 11. Decisions (Jacob, 25 Oct)
 
-1. **Mood:** −3 to +3 per character (and stance per faction), shown as a dial. Should mood change only by the DM, or can extraction propose it from the notes ("furious after the betrayal")?
-2. **Thread roles:** is the role list in section 4 (subject, cause, victim, holder, seeker, key, obstacle, witness, beneficiary, place) the right vocabulary, or are there roles you think in that are missing?
-3. **Free notes:** keep a free-text notes field on every node for the DM (never read as facts), alongside the typed properties?
-4. **Stage 4 timing:** migrate storage straight after Stage 3 proves out, or keep reading through the adapter until the web editing is designed?
+1. **Mood:** −3 to +3 per character (stance per faction). You set it; extraction may propose changes from the notes for you to confirm.
+2. **Thread roles:** more are needed. The catalogue is open-ended (`THREAD_ROLES` in `src/core/world/links.ts`): a role it doesn't know is kept and treated as "involved" until it's added. The starting set is 27 roles in five groups:
+   - who it's about: subject, victim, target, beneficiary;
+   - why it exists: cause, origin, source;
+   - what it turns on: key, cost, prize, clue;
+   - who moves it: seeker, rival, obstacle, guardian, holder, carrier, informant, ally, betrayer;
+   - bonds and witnesses: debtor, creditor, promiser, promisee, witness, place.
 
-**About the uncommitted Phase B work:** profiles, the role law and the body allowlist all pass every test, and they're a working bridge. Stage 2 replaces them. They can be committed as a checkpoint, or left out.
+   Each role says which moves it enables (a "key" held by another PC is a collision; a "seeker" can arrive).
+3. **Free notes:** every node has a notes field for the DM, never read as facts.
+4. **Storage:** move it over once Stage 3 has proved the approach.
+
+## 12. Stage 1 results (25 Oct)
+
+- **Built:**
+  - `src/core/world/nodes.ts`: Zod schemas per node kind, nested and ranged, plus the engine-question tags (`READS`).
+  - `src/core/world/links.ts`: the link catalogue with its laws, and the thread roles.
+  - `src/core/world/load.ts`: `loadGraph(campaignId)` reads today's tables into nodes and links, with an index that finds any node's links from either end.
+  - Tests: `npm run test:world -- [ids] [--report]`.
+- **Passes on both campaigns:**
+  - Every record fits its schema and every link its laws.
+  - Each relationship is one link (Duradan: 20 rows become 18 links, because two-way ties stored twice are now one).
+  - Each thread link is one link with a role, found from both ends.
+  - Every PC belongs to the party.
+  - Field tags carry over.
+  - The Knight figurine is lost, last seen at the River Morrow.
+- **One law found real data it didn't expect:** "Elemental Guardian controls …", where the guardian is filed as "other". "Other" is now allowed to act.
+- **What the coverage report shows (Duradan):**
+  - Characters: 2 of 18 have health, 0 have mood or goals, 5 have a stance, 4 have race.
+  - Threads: 0 of 32 have stakes or a deadline, and all 85 thread links are "involved", because no roles are recorded yet.
+  - Places: 18 of 19 have a scale (worked out from their names).
+
+  The model can carry far more than the data holds today. **Before Stage 3, extraction should fill it:** an enrichment pass that proposes typed fields and thread roles from the stored notes, through the usual review. Otherwise the engine has little to calculate with.

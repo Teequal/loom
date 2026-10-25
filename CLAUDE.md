@@ -405,8 +405,16 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
     - **Measured:** set-up before the model call is 25–40 ms warm, so the in-memory index was deferred (not needed for speed). Sample campaign, 16 calls: 0.38 rejected per call (was 0.50), 3.00 options per call, first 3.4 s, all 6.6 s. Duradan rerun of blind run 4's faults (Haiku): Bhen no longer appears when only mentioned; madness is rolled only when a figurine is used; the lost Knight figurine isn't put in anyone's hand.
     - **Left for Phase B:** names in free text (a headline still named the lost Knight figurine "warming in someone's pocket"); PC body reactions ("Khayiulad's eyes roll back"); selling a figurine doesn't count as "use" (tap the rule chip if you'd call it).
     - 133/133 crafted checks and 25/25 adversarial cases pass; lint and types are clean.
-  - [ ] Phase B: laws declared once.
-  - [ ] Phase C: the engine proposes the moves.
+  - [x] **Phase B (bridge, committed as a checkpoint):** entity profiles (`profiles.ts`), the role law, and the PC-body allowlist. Superseded by the world model below.
+  - **Phases B and C are replaced by the world model** (Jacob, 25 Oct). Design: [docs/design-2026-10-25-world-model.md](docs/design-2026-10-25-world-model.md). Typed node objects with nested properties, one link per connection (with a role for threads), tags the engine calculates from, and suggestions built from engine plans with slots.
+    - [x] **Stage 1:** types and the graph, read from today's tables.
+      - `src/core/world/` holds `nodes.ts`, `links.ts` (link laws and 27 thread roles, open-ended) and `load.ts` (`loadGraph`).
+      - `npm run test:world -- 3 --report` passes on the sample campaign and Duradan.
+      - **Finding:** the data is thin. Duradan has 0 of 18 characters with mood or goals, 0 of 32 threads with stakes, and every thread link is "involved". An enrichment pass should fill these before Stage 3.
+    - [ ] Stage 2: the engine's questions on the graph (replaces the scene model's internals and the profiles).
+    - [ ] Stage 3: plans and slots for improv.
+    - [ ] Stage 4: storage, extraction and typed editing.
+    - [ ] Stage 5: plans for Develop, fights and prep ideas.
 
 ## Entity model build (docs/entity-model.md)
 
