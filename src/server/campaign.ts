@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { db, schema } from "@/core/db/client";
 import { updateCampaign } from "@/core/entities";
-import type { EntityTraits } from "@/core/entity-fields";
+import { type EntityTraits, hasTrait, traitText } from "@/core/entity-fields";
 import { listMoments, setMomentStatus } from "@/core/moments";
 
 // Everything in the loom for one campaign, shaped for the campaign page: the story's direction,
@@ -49,8 +49,8 @@ export async function overview(campaignId: number) {
       const traits = e.traits as EntityTraits;
       const secretField = (f: string) => !!e.fieldMeta[f]?.secret;
       const details = Object.entries(traits)
-        .filter(([, v]) => (Array.isArray(v) ? v.length : v))
-        .map(([k, v]) => ({ key: k.replace(/_/g, " "), value: Array.isArray(v) ? v.join("; ") : String(v), secret: secretField(`traits.${k}`) }));
+        .filter(([, v]) => hasTrait(v))
+        .map(([k, v]) => ({ key: k.replace(/_/g, " "), value: traitText(k, v), secret: secretField(`traits.${k}`) }));
       return {
         id: e.id,
         name: e.name,

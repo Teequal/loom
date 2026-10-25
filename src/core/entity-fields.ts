@@ -119,3 +119,22 @@ export interface CampaignMechanic {
   name: string; // "Figurine madness"
   rule: string; // "Every figurine use triggers a madness roll"
 }
+
+const MOODS: Record<string, string> = { "-3": "despairing", "-2": "low", "-1": "uneasy", "0": "steady", "1": "content", "2": "high-spirited", "3": "elated" };
+
+/** A trait's value in words, for people and prompts: ranked goals in order, beliefs marked when untrue, mood as a word. */
+export function traitText(key: string, value: unknown): string {
+  if (key === "mood" && typeof value === "number") return MOODS[String(value)] ?? String(value);
+  if (!Array.isArray(value)) return String(value);
+  const items = key === "goals" ? [...value].sort((a, b) => (a?.priority ?? 9) - (b?.priority ?? 9)) : value;
+  return items
+    .map((v) => {
+      if (v == null || typeof v !== "object") return String(v);
+      const o = v as { text?: string; true?: boolean };
+      return `${o.text ?? JSON.stringify(v)}${key === "beliefs" && o.true === false ? " (not true)" : ""}`;
+    })
+    .join("; ");
+}
+
+/** Whether a trait has anything to show (0 is a value: a steady mood). */
+export const hasTrait = (v: unknown) => (Array.isArray(v) ? v.length > 0 : v != null && v !== "");

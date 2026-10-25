@@ -1,6 +1,6 @@
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
-import type { EntityTraits } from "./entity-fields";
+import { type EntityTraits, hasTrait, traitText } from "./entity-fields";
 import { historyOf } from "./history";
 import { activityOf, viewOf } from "./world/engine";
 import { loadGraph } from "./world/load";
@@ -141,8 +141,8 @@ async function entityNode(campaignId: number, id: number) {
     partOf: e.type !== "location" ? L.entRef(e.parentId) : null,
     contains: L.entities.filter((x) => x.parentId === id || x.lastKnownLocationId === id || x.actualLocationId === id).map((x) => L.entRef(x.id)!).slice(0, 30),
     details: Object.entries(traits)
-      .filter(([, v]) => (Array.isArray(v) ? v.length : v))
-      .map(([k, v]) => ({ key: k.replace(/_/g, " "), value: Array.isArray(v) ? v.join("; ") : String(v), secret: secret(`traits.${k}`) })),
+      .filter(([, v]) => hasTrait(v))
+      .map(([k, v]) => ({ key: k.replace(/_/g, " "), value: traitText(k, v), secret: secret(`traits.${k}`) })),
     ties,
     // Ties that ended with nothing in their place ("once allied with Zara").
     formerTies: [

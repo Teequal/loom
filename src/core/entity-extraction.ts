@@ -11,6 +11,8 @@ import {
   TRAIT_KEYS,
   TraitsSchema,
   type EntityTraits,
+  hasTrait,
+  traitText,
 } from "./entity-fields";
 import { RELATION_LAWS } from "./rules";
 
@@ -90,7 +92,8 @@ export async function entityStateText(campaignId: number) {
       e.parentId && `${e.type === "location" ? "inside" : "part of"} ${name.get(e.parentId)}`,
       ...Object.entries(e.traits)
         .filter(([k]) => !e.fieldMeta[`traits.${k}`]?.secret)
-        .map(([k, v]) => `${k} ${Array.isArray(v) ? v.join("; ") : v}`),
+        .filter(([, v]) => hasTrait(v))
+        .map(([k, v]) => `${k} ${traitText(k, v)}`),
     ].filter(Boolean);
     return `- ${e.name} (${e.type})${e.aliases.length ? ` aka ${e.aliases.join(", ")}` : ""}: ${e.description}${facts.length ? ` [${facts.join("; ")}]` : ""}`;
   });

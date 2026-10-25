@@ -1,5 +1,6 @@
 import { and, desc, eq, or } from "drizzle-orm";
 import { db, schema } from "./db/client";
+import { traitText } from "./entity-fields";
 
 // L4 history: the automatic change log. Writes go through entities.ts, which calls logChanges;
 // nobody has to remember to record anything.
@@ -53,7 +54,7 @@ export async function historyOf(campaignId: number, entity: { id: number; name: 
   const show = (field: string, v: unknown) => {
     if (v == null || v === "") return "—";
     if (/(LocationId|parentId)$/.test(field) && typeof v === "number") return names.get(v) ?? `#${v}`;
-    return Array.isArray(v) ? v.join("; ") : String(v);
+    return traitText(field.replace(/^traits\./, ""), v);
   };
   return all.map((r) => {
     const field = r.field.replace(/^traits\./, "").replace(/LocationId$/, " location").replace(/Id$/, "").replace(/_/g, " ");
