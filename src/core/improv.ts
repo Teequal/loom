@@ -9,11 +9,12 @@ import { BUDGETS, distancesFrom } from "./graph";
 import { sessionSoFar } from "./live";
 import { planSlips } from "./plan-agency";
 import { listMoments, momentLine } from "./moments";
-import { personalLines, spotlightScore, tableSeats, tableText } from "./players";
+import { personalLines, spotlightScore, tableSeats } from "./players";
 import { buildScene, type Scene } from "./scene";
+import { BODY_PARTS, expand, fillSlots, pcOpensClause, SENSATIONS, type Ref } from "./slots";
 import type { Overrides, RecordFix } from "./situation";
 export type { RecordFix };
-import { capabilitiesOf, checkBeat, checkOnFail, checkPossession, makeTagger, notInScene, pcBodyActs, type CheckContext, type Possession, type ScaffoldBeat, type Tagger } from "./scaffold";
+import { capabilitiesOf, checkBeat, checkOnFail, checkPossession, makeTagger, notInScene, type CheckContext, type Possession, type ScaffoldBeat, type Tagger } from "./scaffold";
 
 // The improv box answers with a scaffold, not free prose. The answer format is built for each
 // request: the "who acts" slot only offers characters allowed to act right now, the thread slot
@@ -28,6 +29,7 @@ export interface ScaffoldOption {
   setup: ScaffoldBeat[];
   hand_off: { to: string; kind: "question" | "roll"; mechanic: string; text: string }; // the sentence code writes from `hand`
   hand?: Hand; // what the model chose, in parts
+  refs?: Ref[]; // who and what the sentences name, with the part each plays ({1}, {2} in the text)
   on_fail: { target: string; effect: string };
   why: string;
   callback?: string; // "M12" if it calls back a key moment, else "none"
@@ -67,7 +69,9 @@ export function handText(h: Hand): Pick<ScaffoldOption["hand_off"], "kind" | "me
   const pc = h.to === "table" ? null : `{${h.to}}`;
   const player = pc ? `${pc}'s player` : "the table";
   const who = pc ?? "Everyone";
-  const against = (x = "") => (phrase(x) ? ` against ${phrase(x)}` : "");
+  // "against the current", never "against resist the urge": a phrase that doesn't start like a
+  // noun (an article, a name or a possessive) is left out.
+  const against = (x = "") => (phrase(x) && /^(?:the|a|an|his|her|their|its|this|that|every|any|some|\{|[A-Z])/.test(phrase(x)) ? ` against ${phrase(x)}` : "");
   const skill = h.skill && h.skill !== "none" ? h.skill : null;
   const roll = (text: string, mechanic = "none") => ({ kind: "roll" as const, mechanic, text });
   switch (h.kind) {
@@ -135,18 +139,16 @@ Rules:
 - Small table-level details (a sound, a line of dialogue, an unnamed extra) are fine; new plots, factions or major NPCs are not. Never include anything on the safety lines.
 - Make the options genuinely different from each other.
 
-TAGS: write every named character, place, item and mechanic in curly braces, exactly as named in the scene, e.g. {Zara the Unbound}, {Figurine madness}. To make it read naturally, add how it should read after a bar: {Figurines of a knight and a monk|the monk figurine}, {Zara the Unbound|Zara}.
+REFERENCES: never write a name inside your sentences. List the characters, places and items an option names in refs, in order, and write {1}, {2}… where they go, as "object" (something happens to it, it's seen, given or talked about) or "possessor" (it owns what follows: "{2}'s seal is broken"). Player characters are only ever objects or owners of things ("the guard eyes {1}'s pack"); no sentence or clause starts with one.
 
 Each option is a scaffold:
-- setup: short beats of what happens right now, as many and as long as LENGTH says. Each beat has a kind, and an actor from that kind's own list (the format offers each kind only who it allows):
-  - "world": the environment, magic or events. actor "world". does is a full sentence; things may happen to or around a PC ("{Khayiulad}'s figurine grows warm against his palm").
-  - "npc": a character who is here acts or speaks. actor is their name. does is what they do, without repeating the name ("turns the figurine over and goes pale").
-  - "walk_on": an unnamed extra (a merchant, a guard). actor "walk-on", walk_on describes them ("a nervous merchant"), does is what they do.
+- setup: short beats of what happens next, as many and as long as LENGTH says. What the players declared isn't narrated: the world responds to it, and the hand settles how it turns out. Each beat has a kind:
+  - "world": the environment, magic or events. actor "world". does is a full sentence ("a hairline crack of light opens above {1}").
+  - "npc": a character who is here acts or speaks. actor is their name. does is what they do, without the name ("turns {1} over and goes pale").
+  - "walk_on": an unnamed extra. actor "walk-on", walk_on describes them ("a nervous merchant"), does is what they do.
   - "arrival": a character who isn't here arrives ("bursts through the door, breathless").
   - "remote": a character who isn't here acts from afar ("sends a runner with a sealed note").
-  - "outcome": the immediate physical result of what a PC just declared in this moment ("hits the cobblestones hard"). actor is that PC. No new decisions, words, thoughts or feelings.
-  PCs never act in any other kind, and never act inside another beat's sentence.
-  Describe what happens TO a PC (sensations, forces, what they see or feel), never how they react: no swaying, bracing, staggering, flinching, clutching, stepping back or gripping tighter. Write "The vision tears through {Khayiulad}, and the corridor tilts", not "{Khayiulad} sways as the vision tears through him, one hand braced against the wall". The player decides the reaction; only on_fail may move a PC's body.
+  - "happens": what a PC feels, chosen from parts: pc, part (a body part, or "none" for all of them), sense, and cause (a short noun phrase: "the river's cold grip", "the figurine's pull"). Code writes it ("Bram's chest aches: the river's cold grip").
 - hand: how the players get involved, chosen in parts; code writes the sentence. to is a PC or "table". Fill only the fields its kind uses, and leave the others "" (or "none"). Pick the kind:
   - "question": ask what they do. what is a short noun phrase for what they're facing ("the heckling patron"), or "".
   - "choice": offer two clear choices: what and or are short verb phrases a player would say ("write a note", "wave him off").
@@ -158,15 +160,15 @@ Each option is a scaffold:
   - "death_save": a PC who is dying.
   Rolls are for player characters only; what NPCs notice or decide is the GM's call, never a roll.
 - on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. For a roll by the table, the effect says who it hits ("whoever fails…"), never "he" or "she". This is the only place a PC may act against their player's will. Otherwise target "none" and effect "".
-- headline: written after the option, as its summary in one glanceable line, under 12 words, present tense, the hook first ("The lookout bolts for the alarm bell"). Use only the characters, objects and place the setup and hand actually use, called the same thing (if the setup has a fishmonger, so does the headline). Its subject is the world or an NPC, never a player character or the party; an unnamed extra is "a merchant", "a guard", never "a walk-on". The GM reads only this before choosing. flavour: one of payoff, twist, callback, character, tense, funny, mystery, fight. MIX at the end says which kinds to offer.
+- headline: plain words (names as words here, no braces), written after the option, as its summary in one glanceable line, under 12 words, present tense, the hook first ("The lookout bolts for the alarm bell"). Use only the characters, objects and place the setup and hand actually use, called the same thing (if the setup has a fishmonger, so does the headline). Its subject is the world or an NPC, never a player character or the party; an unnamed extra is "a merchant", "a guard", never "a walk-on". The GM reads only this before choosing. flavour: one of payoff, twist, callback, character, tense, funny, mystery, fight. MIX at the end says which kinds to offer.
 - label: 2-5 words. why: under 15 words, why this fits now; don't repeat the thread title or use thread numbers.
 - callback: if the option echoes or pays off one of the KEY MOMENTS listed, its id ("M12"); otherwise "none". Use one only when it genuinely fits.
 - pillar: the kind of play the option mostly offers: combat, social, exploration, mystery, comedy or drama.
-- THE TABLE says who has been quiet. Hand-offs mostly go to whoever the moment is about; at most one option goes to a quiet player instead, and only when it fits. Never mention players.`;
+- Hand-offs mostly go to whoever the moment is about. HAND ONE OPTION TO, when given, names one PC to give one option to, if it fits. Never mention players.`;
 
 const nonEmpty = (xs: string[], fallback: string): [string, ...string[]] => (xs.length ? (xs as [string, ...string[]]) : [fallback]);
 
-function optionsSchema(lists: { threads: string[]; npcActors: string[]; absentActors: string[]; outcomeActors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[] }) {
+function optionsSchema(lists: { threads: string[]; nameable: string[]; npcActors: string[]; absentActors: string[]; outcomeActors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[] }) {
   // One shape per kind of beat, each with only the actors that kind allows. A kind with nobody to
   // offer is left out.
   const beat = <K extends ScaffoldBeat["kind"]>(kind: K, actors: string[]) => z.object({ kind: z.literal(kind), actor: z.enum(nonEmpty(actors, "world")), walk_on: z.string(), does: z.string() });
@@ -176,9 +178,11 @@ function optionsSchema(lists: { threads: string[]; npcActors: string[]; absentAc
     ...(lists.npcActors.length ? [beat("npc", lists.npcActors)] : []),
     beat("arrival", ["walk-on", ...lists.absentActors]),
     beat("remote", ["walk-on", ...lists.absentActors]),
-    ...(lists.outcomeActors.length ? [beat("outcome", lists.outcomeActors)] : []),
   ];
-  const Beat = z.union(kinds as unknown as [(typeof kinds)[number], (typeof kinds)[number], ...(typeof kinds)[number][]]);
+  // What happens to a PC, from parts: code writes the sentence.
+  const happens = z.object({ kind: z.literal("happens"), pc: z.enum(nonEmpty(lists.handOff, "none")), part: z.enum(BODY_PARTS), sense: z.enum(SENSATIONS), cause: z.string() });
+  const all = [...kinds, happens];
+  const Beat = z.union(all as unknown as [(typeof all)[number], (typeof all)[number], ...(typeof all)[number][]]);
   const thread = z.enum(nonEmpty(lists.threads, "T0"));
   // The hand-off, in one flat shape (a union per kind made the format too large for the API to
   // compile); code checks who each kind may go to (see Hand and checkOption).
@@ -197,6 +201,9 @@ function optionsSchema(lists: { threads: string[]; npcActors: string[]; absentAc
         thread,
         also_ties_to: z.array(thread),
         label: z.string(),
+        // Who and what the sentences name, numbered {1}, {2}…, each with the part it plays.
+        refs: z.array(z.object({ name: z.enum(nonEmpty(lists.nameable, "none")), as: z.enum(["object", "possessor"]) })),
+        // What physically happens because of what the players declared, before anything else.
         setup: z.array(Beat),
         hand: Hand,
         // Free text, normalised in code (normaliseHandOff): one odd target ("everyone") used to make the
@@ -241,8 +248,10 @@ export function renderBeat(b: ScaffoldBeat, tagger: Tagger) {
   // "Uses the tables as cover" after a name reads "Vex'ahlia uses…"; names (tagged) keep their capital.
   const does = tagger.render(b.kind === "world" || b.actor === "world" || tagged.startsWith("{") ? tagged : tagged.replace(/^([A-Z])(?=[a-z])/, (c) => c.toLowerCase())).trim();
   const extra = b.kind === "walk_on" || b.actor === "walk-on" || (b.actor === "world" && b.kind !== "world" && b.walk_on.trim());
-  // "world" as the actor of another kind of beat is still the world talking, not a character called World.
-  if (!extra && (b.kind === "world" || b.actor === "world")) return sentence(capitalise(does));
+  // "world" as the actor of another kind of beat is still the world talking, not a character called
+  // World. A world sentence that starts with a verb ("asks loudly whether…") lost its subject:
+  // someone did it.
+  if (!extra && (b.kind === "world" || b.actor === "world")) return sentence(capitalise(/^[a-z]+s\b/.test(does) && !/^(?:this|its|has|is|was)\b/.test(does) ? `someone ${does}` : does));
   const subject = extra ? capitalise(tagger.render(b.walk_on).replace(/\bwalk-on\b\s*/gi, "").trim() || "someone") : b.actor;
   const startsWithSubject = does.toLowerCase().startsWith(subject.toLowerCase()) || does.toLowerCase().startsWith(subject.split(/[\s,]+/)[0].toLowerCase());
   return sentence(startsWithSubject ? capitalise(does) : `${subject} ${does}`);
@@ -276,16 +285,50 @@ export function adoptHand(o: ScaffoldOption): ScaffoldOption {
   // its skill as a check of that kind.
   const hand = { ...o.hand };
   if (hand.kind === "notice" && (!hand.skill || hand.skill === "none")) hand.skill = "Perception";
+  // References in the hand-off's phrases ("reach for {1}'s falling body", or "1's" without braces)
+  // become the names they stand for, tagged like everywhere else.
+  const refs = o.refs ?? [];
+  const named = (t?: string) => t?.replace(/\{(\d+)\}|\b(\d+)(?=['’]s\b)/g, (w, a?: string, b?: string) => (refs[Number(a ?? b) - 1] ? `{${refs[Number(a ?? b) - 1].name}}` : w));
+  if (refs.length) Object.assign(hand, { what: named(hand.what), or: named(hand.or) });
   return { ...o, hand, hand_off: { to: hand.to, ...handText(hand) } };
 }
 
 // A hand-off to "the table" whose text names exactly one PC is really to that PC.
 export function normaliseHandOff(o: ScaffoldOption, c: CheckContext) {
-  // A beat whose actor is "world" or "walk-on" is the world or an extra, whatever kind it says.
+  // A beat whose actor is "world" or "walk-on" is the world or an extra, whatever kind it says;
+  // an extra without a description is "someone".
   for (const b of o.setup) {
-    if (b.kind === "world") continue;
-    if (b.actor === "walk-on" || (b.actor === "world" && b.walk_on.trim())) b.kind = "walk_on";
+    if (b.kind === "outcome") continue;
+    if (b.actor === "walk-on" || (b.kind !== "world" && b.actor === "world" && b.walk_on.trim())) b.kind = "walk_on";
     else if (b.actor === "world") b.kind = "world";
+    // An extra with no description whose sentence starts with a thing ("a folded note is passed…")
+    // is the world happening; otherwise the extra is "someone".
+    if (b.kind === "walk_on" && !b.walk_on.trim() && /^(?:a|an|the|some)\b/i.test(b.does.trim())) b.kind = "world";
+    else if (b.kind === "walk_on" && !b.walk_on.trim()) b.walk_on = "someone";
+  }
+  // Rolls the engine can put right from what it knows, rather than throwing the option away.
+  if (o.hand) {
+    const h = o.hand;
+    const declared = c.checkTo.includes(h.to);
+    if ((h.kind === "check" || h.kind === "contest" || h.kind === "attack") && !declared) {
+      // A PC who didn't declare this doesn't attempt it: noticing is a notice roll, anything else
+      // that comes at them is a save.
+      const notice = h.skill && NOTICE_SKILLS.includes(h.skill as (typeof NOTICE_SKILLS)[number]);
+      o.hand = notice ? { ...h, kind: "notice" } : { ...h, kind: "save", ability: h.skill && h.skill !== "none" ? (SKILL_ABILITY[h.skill] ?? h.ability) : h.ability, skill: "none" };
+    }
+    // A rule roll with no rule named is a question about what they face.
+    if (o.hand.kind === "rule" && (!o.hand.mechanic || o.hand.mechanic === "none")) o.hand = { ...o.hand, kind: "question" };
+    if (o.hand.kind === "death_save" && o.hand.to !== "table") {
+      const e = c.tagger.entityOf(o.hand.to);
+      if (e && capabilitiesOf(e).aware) o.hand = { ...o.hand, kind: "question", what: "" };
+    }
+    if (o.hand !== h) o.hand_off = { to: o.hand.to, ...handText(o.hand) };
+  }
+  // A failure line with no roll to fail is dropped, not the option.
+  if (o.hand_off.kind !== "roll" && o.on_fail.target !== "none") o.on_fail = { target: "none", effect: "" };
+  // A failure for the whole table says who it hits, not "he" or "she".
+  if (o.hand_off.to === "table" && o.on_fail.effect) {
+    o.on_fail.effect = o.on_fail.effect.replace(/\b(he|she)\b/gi, (w) => (w[0] === "H" || w[0] === "S" ? "They" : "they")).replace(/\b(him|her)\b/gi, "them").replace(/\b(his|hers)\b/gi, "their");
   }
 
   if (o.hand_off.to === "table" && !o.hand) {
@@ -355,8 +398,10 @@ export function checkOption(o: ScaffoldOption, c: CheckContext): string | null {
     const used: Record<string, string[]> = { question: ["what"], choice: ["what", "or"], check: ["what"], contest: ["what"], attack: ["what"], save: ["what"], notice: ["what"] };
     for (const field of used[o.hand.kind] ?? []) {
       if (!h[field]) continue;
-      const pcActs = c.tagger.actingTags(c.tagger.tag(h[field])).find((x) => x.entity.type === "pc");
-      if (pcActs) return `the hand-off has ${pcActs.entity.name} acting ("${pcActs.entity.name} ${pcActs.next}…")`;
+      // Read like any sentence: a PC may be named ("signal Bram", "Bram with gestures"), but not
+      // open a phrase as its subject ("Bram grabbing the captain's arm").
+      const r = expand(h[field], o.refs ?? [], c.tagger);
+      if (r.problem) return `the hand-off: ${r.problem}`;
     }
     const k = o.hand.kind;
     if ((k === "check" || k === "contest" || k === "attack") && !c.checkTo.includes(o.hand.to))
@@ -465,6 +510,9 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
     outcomeActors: [...outcomePcs],
     checkTo,
     actors: [...present, ...absentNpcs].filter(inReach).concat(scene.pcs.map((p) => p.name)),
+    // Everything a sentence may name through a slot: who and what is within reach of the moment
+    // (here, reachable or remembered), plus the PCs.
+    nameable: [...new Set([...scene.entities.filter((e) => e.type !== "pc" && inReach(e.name)).map((e) => e.name), ...scene.pcs.map((p) => p.name)])],
     // Every living PC stays on the list: a name the model insists on (an unconscious PC) then fails
     // one option's check instead of making the whole answer unparseable.
     handOff: scene.pcs.filter((p) => p.status !== "dead").map((p) => p.name),
@@ -590,12 +638,8 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   const quietest = seats
     .filter((x) => x.quietFor >= 2 && x.pc.status !== "dead" && capabilitiesOf(x.pc).act)
     .sort((a, b) => b.quietFor - a.quietFor)[0];
-  const tableBlock = [
-    tableText(seats),
-    quietest && `Spotlight: if the moment allows, make exactly one option hand off to ${quietest.pc.name}; the others go to whoever the moment is about.`,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  // The table notes rank options in code; the model only hears which PC to give one option to.
+  const tableBlock = quietest ? `HAND ONE OPTION TO: ${quietest.pc.name}, if the moment allows; the others go to whoever the moment is about.` : "";
   const lines = [...scene.safetyLines, ...(await personalLines(campaignId))];
 
   // Key moments involving who and what is in play: what a callback could draw on (up to 3).
@@ -625,12 +669,13 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   const [campaignRow] = await db.select({ direction: schema.campaigns.direction }).from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
   const direction = campaignRow?.direction.trim() ?? "";
   const soFar = await sessionSoFar(campaignId);
-  const OptionsSchema = optionsSchema({ threads: threads.map((t) => `T${t.id}`), npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`) });
+  const OptionsSchema = optionsSchema({ threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`) });
   const prompt = `${scene.text}
 
 WHO MAY ACT
 - Here now (kind "npc"): ${[...lists.check.present].filter((n) => typeOf.get(n) === "npc").join(", ") || "nobody named; use walk-ons"}
 - Not here (only kind "arrival" or "remote"): ${lists.actors.filter((n) => typeOf.get(n) === "npc" && !lists.check.present.has(n)).join(", ") || "nobody"}. Bring one in only when it pays off their thread, at most one per option; otherwise use walk-ons.
+- Acting in this moment (what they declared is settled by the hand and the world's response, never narrated): ${lists.outcomeActors.join(", ") || "no PC in particular"}
 - Checks, contests and attacks only for: ${lists.check.checkTo.map((n) => (n === "table" ? "the table" : n)).join(", ") || "nobody (use a question, a choice, a notice roll or a save)"}
 ${lists.stated.length ? `- As of this moment: ${lists.stated.join("; ")}\n` : ""}${lists.check.remoteOk.size ? `- The players reached out to: ${[...lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${lists.check.possession.holders.size ? `- Who holds what: ${[...lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 OPEN THREADS
@@ -658,7 +703,7 @@ ${moment}`;
       // A headline is about the world or an NPC: one that opens with a PC ("Kira must signal Bram…")
       // is about what the player does, so it falls back.
       const pcLed = (t: string) => scene.pcs.some((p) => new RegExp(`^${p.name.split(/\s+/)[0]}\\b(?!['’]s)`, "i").test(t));
-      const fine = (t: string) => !!t && t.split(/\s+/).length <= 13 && !planSlips(t, scene.pcs).length && !/\bwalk-on\b/i.test(t) && !pcLed(t) && !notInScene(lists.tagger.tag(t), lists.check) && !pcBodyActs(lists.tagger.tag(t), lists.check);
+      const fine = (t: string) => !!t && t.split(/\s+/).length <= 13 && !planSlips(t, scene.pcs).length && !/\bwalk-on\b/i.test(t) && !pcLed(t) && !notInScene(lists.tagger.tag(t), lists.check) && !pcOpensClause(lists.tagger.tag(t), lists.tagger);
       const h = lists.tagger.render(lists.tagger.tag(o.headline ?? ""));
       if (fine(h)) return h;
       // Otherwise the first beat, or its first clause, or the label: whole words, never cut off.
@@ -697,7 +742,9 @@ ${moment}`;
         rejected.push({ label: (raw as { label?: string })?.label ?? "an option", reason: "unusable answer (a value outside the allowed lists)" });
         return;
       }
-      const o = adoptHand(parsed.data as unknown as ScaffoldOption);
+      const filled = fillSlots(adoptHand(parsed.data as unknown as ScaffoldOption), lists.tagger);
+      if (filled.problem) return rejected.push({ label: (parsed.data as { label: string }).label, reason: filled.problem });
+      const o = filled.option;
       normaliseHandOff(o, lists.check);
       const reason = checkOption(o, lists.check);
       if (reason) return rejected.push({ label: o.label, reason });
@@ -753,7 +800,10 @@ ${moment}`;
 IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}. Every option must steer away from it: keep it off-screen, redirect the danger elsewhere (often onto the party or the villain's plans), or resolve it without depicting or threatening it.`;
     const res = await callLlm({ feature: "improv", campaignId, system: SYSTEM, prompt: steer, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
     calls.push(res);
-    const fresh = (res.data.options as unknown as ScaffoldOption[]).map(adoptHand).filter((o) => {
+    const fresh = (res.data.options as unknown as ScaffoldOption[]).map(adoptHand).map((o) => fillSlots(o, lists.tagger)).filter((f) => {
+      if (f.problem) rejected.push({ label: f.option.label, reason: f.problem });
+      return !f.problem;
+    }).map((f) => f.option).filter((o) => {
       normaliseHandOff(o, lists.check);
       const reason = checkOption(o, lists.check);
       if (reason) rejected.push({ label: o.label, reason });

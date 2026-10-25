@@ -428,7 +428,32 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         The enriched options use the data: the Wand at Khayiulad's belt, the Shard in Iresia's hands, the Monk figurine sensing a soul (its "key" role), Darius's unidentified potions. Sample campaign, 16 calls: 0.38 rejected per call, 2.94 options per call.
       - **Left for Stage 3:** Tomas is in almost every option (the only NPC with the party, so the model's default); missing articles ("Monk figurine hums"); a check where a save fits ("a Wisdom check against the figurine's pull").
       - 149/149 crafted, 25/25 adversarial, 18/18 reading rules, and the world tests on Duradan and the copy all pass.
-    - [ ] Stage 3: plans and slots for improv.
+    - [x] **Stage 3 (part 1): slots, no PC free text, structural checks** (25 Oct). Built from the rejection analysis: about half of all rejections were a PC narrated in prose (two thirds of those the moment's own PC), about a fifth were checks misreading grammar, and the rest were roll choices, table notes echoed back, and gaps in the records. Jacob: minimise the model's part in structure and detection; it should output correctly, not need checks that reject falsely.
+      - **Names through references** (`src/core/slots.ts`): each option lists its references once (name, and whether it's an object or a possessor), and its sentences use {1}, {2}. Code fills in the names and their possessives. References counted from {0} are shifted. Items don't own things.
+      - **No free text with a PC as subject:**
+        - What the players declared isn't narrated; the hand (roll) and the world's response settle it. The short-lived result slot was removed.
+        - What a PC feels is a **"happens" beat** built from parts: who, a body part from a list, a sensation from a list, and a cause in words. Code writes it ("Khayiulad's head throbs: the Knight figurine's pull from somewhere in the Morrow") and marks it `byCode`, so it isn't checked as model text.
+      - **One structural rule replaces the verb-reading checks** (`pcOpensClause`): a PC (by name, reference or pronoun) opening a clause, or a PC's body part opening one, is the PC acting; anywhere else they're an object. Being in a state ("Darius is still caged") is fine. It applies to beats, failure text, hand-off phrases and titles.
+      - **Retired:** the outcome checks, the reaction lists, the PC-body sensation allowlist, the pronoun-reaction and posed-limb patterns, and the actor/reference mix-up check. Known limits that now pass: "…, bracing himself" and "one hand braced" with no name or pronoun.
+      - **The engine repairs instead of rejecting:**
+        - a notice roll with no skill becomes Perception;
+        - a check for a PC who didn't declare that action becomes a save or a notice roll;
+        - a death save for someone who isn't dying becomes a question, and a rule roll with no rule a question;
+        - a failure line without a roll is dropped; "he/she" in a table-wide failure becomes "they";
+        - a blank extra becomes "someone" (or the world, for a passive sentence); a world sentence that starts with a verb gets "someone";
+        - an "against" that isn't a noun phrase is left out; references in hand-off phrases become names.
+      - **Context the engine reads:** "wants", "must" and "should" after an absent NPC are statements about them, not presence; a faction's agents ("Ka'Anshar guards") arrive like anyone else; "Bhen's mother" is a new person, not Bhen; a moment that brings a captured PC into the scene puts them back with the party.
+      - **The table notes are no longer sent.** The model only hears "HAND ONE OPTION TO: <PC>"; ranking stays in code.
+      - **Measured (Haiku):**
+
+        | | Rejected per call | Options shown | First / all | Duradan dropped (10 moments) | Copy dropped |
+        |---|---|---|---|---|---|
+        | Before Stage 3 | 0.38–0.55 | 2.94 | 3.5 / 6.7 s | 6 (8.3 s) | 3 (8.4 s) |
+        | After | 0.19–0.31 | 3.00 | 3.1 / 6.6 s | 2–3 (6.4–6.9 s) | 2 (6.6–6.9 s) |
+
+        In the last sample run every rejection was a real slip ("Kira steps forward", "Bram grins through a split lip"); none were false flags.
+      - 162/162 crafted, 25/25 adversarial, 18/18 reading rules, and the world tests pass.
+    - [ ] Stage 3 (part 2): engine-chosen moves and casts from the graph (Tomas is still in most options), then the remaining prompt rules.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

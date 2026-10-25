@@ -195,7 +195,8 @@ export function presenceOf(v: View, key: NodeKey, memo = new Map<NodeKey, Presen
       const body = bodyOf(v, n);
       const state = [n.status && n.status !== "alive" ? n.status : "", body.health && body.health !== "healthy" ? body.health : "", ...body.conditions.map((c) => c.name)].filter(Boolean).join(", ");
       // Still the players' to run, but a captive or missing PC isn't with the party.
-      const apart = n.status === "captured" || n.status === "missing";
+      // The moment can bring them back into the scene ("Darius wants to fight Vex'ahlia").
+      const apart = (n.status === "captured" || n.status === "missing") && !reading.acting.has(n.name) && !reading.wholeParty;
       return set({ role: "player", where: apart ? "elsewhere" : "with-party", standing: state ? `a player character (${state})` : "a player character", why: apart ? `${n.status}, away from the party` : "a player character" });
     }
     if (n.status === "dead") return set({ role: "remembered", where: "elsewhere", standing: `dead${placeName ? `, died at ${placeName}` : ""}`, why: "dead" });

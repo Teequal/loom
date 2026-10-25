@@ -1,6 +1,7 @@
 import type { EntityTraits } from "./entity-fields";
 import { capabilitiesOf } from "./rules";
 import type { Scene } from "./scene";
+import { pcOpensClause } from "./slots";
 
 // Tags and checks shared by the improv scaffold and the flavour pass.
 //
@@ -18,6 +19,7 @@ export interface ScaffoldBeat {
   actor: string; // "world", "walk-on", or an entity name from the allowed list
   walk_on: string; // description of an unnamed extra ("a nervous merchant"), else ""
   does: string;
+  byCode?: boolean; // written by Loom from parts (a "happens" beat): nothing in it is the model's to check
 }
 
 const TAG = /\{([^{}]+)\}/g;
@@ -38,48 +40,7 @@ const PASSIVE_NEXT = new Set(
 
 const PRONOUN_START = /^\s*(?:he|she|they|it|him|her|them)\b/i;
 
-// "{Name}'s <limb> <deliberate motion>": hands grabbing, legs carrying. Eyes glazing or a body
-// shimmering under a spell are effects, not actions, so they pass.
-// A PC's body is the player's. When a PC's body part is the subject ("{Khayiulad}'s eyes…"),
-// only what happens TO them may follow: sensations (tingles, burns, goes cold, swims). Anything
-// else is the body doing something, which only a failed roll can make it do. Listing what's
-// allowed, rather than every reaction that isn't, is what makes this hold.
-const BODY = "hands?|fingers?|grip|arms?|legs?|feet|foot|body|mouth|jaw|knees?|eyes?|head|face|shoulders?|chest|heart|breath|voice|skin|scales|horns?|tail|lips|teeth|stomach|back|spine|muscles|throat|pulse|blood|vision|ears?|nose|neck|wrists?|palms?|thoughts|mind";
-const PC_BODY = new RegExp(`\\{([^{}|]+)(?:\\|[^{}]*)?\\}['’]s\\s+(?:(?:left|right|own|bandaged|injured|wounded|scaled|clawed|bare|cold|trembling)\\s+)?(?:${BODY})\\s+(?:\\w+ly\\s+)?([a-z]+)(?:\\s+([a-z]+))?`, "gi");
-const SENSATION = /^(?:tingles?|burns?|aches?|throbs?|stings?|itch(?:es)?|prickles?|pounds?|races?|hammers?|flutters?|feels?|is|are|was|were|has|have|had|catches|hitches|swims?|blurs?|doubles?|fills?|darkens?|spins?|rings?|hums?|buzz(?:es)?|crawls?)$/;
-const BECOMES = /^(?:go|goes|grow|grows|turn|turns|run|runs)$/;
-const STATE = /^(?:cold|numb|warm|hot|pale|heavy|slick|stiff|dry|white|still|tight|weak|clammy|icy)$/;
-// The body part is only the subject when nothing puts it in a phrase ("in {Khayiulad}'s hand",
-// "against her palm"), and only acts when a verb follows ("…hand like a…" isn't one).
-const PREPOSITION_BEFORE = /\b(?:in|on|against|into|onto|from|at|over|under|through|around|across|beside|by|between|of|with|within|toward|towards|to|inside|behind)\s+(?:the\s+)?$/i;
-const NOT_A_VERB = /^(?:like|as|and|or|but|with|while|when|to|of|in|on|at|for|from|that|which|so|than|the|a|an)$/;
-export function pcBodyActs(tagged: string, c: CheckContext): string | null {
-  for (const m of tagged.matchAll(PC_BODY)) {
-    const e = c.tagger.entityOf(m[1]);
-    if (!e || !isPc(e)) continue;
-    if (PREPOSITION_BEFORE.test(tagged.slice(Math.max(0, (m.index ?? 0) - 25), m.index)) || NOT_A_VERB.test(m[2].toLowerCase())) continue;
-    const [verb, after] = [m[2].toLowerCase(), (m[3] ?? "").toLowerCase()];
-    if (SENSATION.test(verb) || (BECOMES.test(verb) && STATE.test(after)) || PAST.test(verb)) continue;
-    return `has ${e.name}'s body act before any roll ("…${m[0].replace(/\{([^{}|]+)(?:\|([^{}]*))?\}/g, (_, n, r) => r || n)}…"); only what happens to them can be described`;
-  }
-  return null;
-}
-
-// A PC's response to what's happening (swaying, bracing, flinching) is the player's to describe.
-// Before the hand-off, beats describe sensations and forces on a PC ("the corridor tilts around
-// {Khayiulad}"), not how they react; after a failed roll the body may move.
-const REACTION =
-  "(?:sway|brac|stagger|stead(?:y|ies|ied|ying)|clutch|flinch|recoil|stumbl|gasp|winc|trembl|reel|buckl|cower)\\w*|grip\\w*\\s+(?:\\w+\\s+){0,3}tighter|(?:snatch|jerk|yank|pull|draw)\\w*\\s+(?:his|her|their)\\s+(?:hand|arm|fingers)\\s+(?:back|away)|tighten\\w*\\s+(?:his|her|their)\\s+grip|steps?\\s+back|stepp(?:ed|ing)\\s+back|takes?\\s+a\\s+step\\s+back";
 const TAG_RE = "\\{([^{}|]+)(?:\\|[^{}]*)?\\}";
-const PC_REACTS = new RegExp(`${TAG_RE}\\s+(?:\\w+ly\\s+)?(?:${REACTION})\\b`, "gi");
-const PC_PART_REACTS = new RegExp(
-  `${TAG_RE}['’]s\\s+(?:\\w+\\s+)?(?:hands?|fingers?|grip|arms?|legs?|knees?|feet|foot|body|shoulders?|jaw)\\s+(?:\\w+ly\\s+)?(?:${REACTION}|tighten\\w*|gives?\\s+way|shak\\w+)\\b`,
-  "gi",
-);
-const PRONOUN_REACTS = new RegExp(`\\b(?:he|she|they)\\s+(?:\\w+ly\\s+)?(?:${REACTION})\\b`, "gi");
-// "one hand braced against the wall", "steadying himself", "bracing herself".
-const LIMB_POSED = /\b(?:one|a|his|her|their|both)\s+(?:hands?|arms?|palms?|feet|knees?)\s+(?:braced|pressed|clutch\w*|grip\w*|flung|thrown)\b/i;
-const REFLEXIVE_REACTS = /\b(?:stead\w*|brac\w*|catch\w*|caught|pull\w*|draw\w*)\s+(?:himself|herself|themselves|themself)\b/i;
 
 export function makeTagger(scene: Scene) {
   // Every way an entity can be named → its canonical name. Longest first, so "Professor
@@ -262,7 +223,10 @@ export function checkPossession(beats: ScaffoldBeat[], c: CheckContext): { probl
       if (isItem(item) && actor && !holds(actor, item)) return { problem: `${actor} uses ${item}, but ${recorded(item)} holds it`, gained };
     }
     for (const m of text.matchAll(IN_HAND)) {
-      const [item, who] = [m[1].trim(), c.tagger.entityOf(m[2].trim())?.name ?? m[2].trim()];
+      const owner = c.tagger.entityOf(m[2].trim());
+      const [item, who] = [m[1].trim(), owner?.name ?? m[2].trim()];
+      // Only characters have hands and packs ("the Shard's hands" is a slot mix-up, not a holder).
+      if (owner && owner.type !== "pc" && owner.type !== "npc") continue;
       if (isItem(item) && !holds(who, item)) return { problem: `${item} is in ${who}'s hands, but ${recorded(item).replace(/, (?=[^,]*$)/, " and ")} ${recorded(item).includes(",") ? "hold" : "holds"} it`, gained };
     }
     for (const m of text.matchAll(POSSESSIVE)) {
@@ -282,10 +246,15 @@ const isPc = (e: Entity) => e.type === "pc";
 const REFERENCE_NEXT = new Set(
   (
     "and or but nor with to from in on at by for of as into onto toward towards over under before after behind beside near who whom whose which that " +
-    "is was were are be been lies lay remains remained rests rested sank had has once still"
+    "is was were are be been lies lay remains remained rests rested sank had has once still " +
+    // What someone wants, knows or believes is about them, not them being here.
+    "wants needs knows believes hopes fears seeks hunts plans means intends " +
+    // "Zara must be told", "the figurine should be in the river": statements about them.
+    "must should would could might may can cannot will"
   ).split(" "),
 );
 const REPORTED = /\b(?:saw|seen|see|sees|heard|hears|watched|remembers?|remembered|recalls?|recalled|dreams?|dreamt|dreamed|imagines?|swears?|swore|says?|said|claims?|claimed|tells?|told|rumou?rs?|story|stories|legends?|vision of|visions of|memory of|image of|reflection of)\b[^.!?;]*$/i;
+const AGENTS = /^(?:guards?|agents?|men|soldiers?|priests?|scouts?|riders?|hunters?|acolytes?|zealots?|troops?|enforcers?|thugs?|spies|spy|envoys?|messengers?|runners?|patrols?|members?|followers?|cultists?|bandits?)$/;
 const roleOf = (e: Entity, c: CheckContext) => c.scene.situation.profiles.get(e.name);
 export function notInScene(tagged: string, c: CheckContext, own?: { actor?: Entity; kind?: BeatKind }): string | null {
   for (const m of tagged.matchAll(new RegExp(`${TAG_RE}(['’]s)?\\s*([\\w'’-]*)`, "g"))) {
@@ -299,6 +268,8 @@ export function notInScene(tagged: string, c: CheckContext, own?: { actor?: Enti
     if (REPORTED.test(tagged.slice(Math.max(0, (m.index ?? 0) - 60), m.index))) continue;
     const next = (m[3] ?? "").toLowerCase();
     if (!next || REFERENCE_NEXT.has(next) || PAST.test(next)) continue;
+    // "Ka'Anshar guards", "Red Hand riders": the faction's agents, who arrive like anyone else.
+    if ((e.type === "faction" || e.type === "other") && AGENTS.test(next)) continue;
     return p.role === "remembered"
       ? `${e.name} can only be remembered here (${p.standing}), but "${e.name} ${next}…" has it here now`
       : `${e.name} isn't here (${p.standing}), but "${e.name} ${next}…" has it here; it can only arrive or send word`;
@@ -319,7 +290,8 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
       break;
     case "walk_on":
       if (!b.walk_on.trim()) return "a walk-on beat has no description of the extra";
-      if (c.tagger.tagsIn(c.tagger.tag(b.walk_on)).some((n) => { const t = c.tagger.entityOf(n)?.type; return t === "npc" || t === "pc"; })) return `a walk-on is really a known character: "${b.walk_on}"`;
+      // "Bhen's mother" is someone new described through a known character, not that character.
+      if (c.tagger.tagsIn(c.tagger.tag(b.walk_on).replace(/\{[^{}]+\}['’]s\b/g, "")).some((n) => { const t = c.tagger.entityOf(n)?.type; return t === "npc" || t === "pc"; })) return `a walk-on is really a known character: "${b.walk_on}"`;
       break;
     case "npc":
       if (!actor || isPc(actor)) return `a player character (${b.actor}) is used as an acting NPC`;
@@ -350,7 +322,7 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
     case "outcome":
       if (!actor || !isPc(actor)) return `an outcome beat must be about a player character's declared action (${b.actor})`;
       if (!c.outcomePcs.has(actor.name)) return `${actor.name} didn't do anything in this moment, so there's no outcome for them`;
-      if (/^(?:\w+ly\s+)?(?:decides?|chooses?|says?|shouts?|asks?|tells?|insists?|agrees?|refuses?|volunteers?|tries|attempts?|feels?|thinks?|realizes?|wants?|notices?|sees?)\b/i.test(c.tagger.render(does).replace(new RegExp(`^${actor.name}\\s*`, "i"), ""))) {
+      if (/^(?:\w+ly\s+)?(?:decides?|chooses?|says?|shouts?|asks?|tells?|insists?|agrees?|refuses?|volunteers?|tries|attempts?|thinks?|realizes?|wants?)\b/i.test(c.tagger.render(does).replace(new RegExp(`^${actor.name}\\s*`, "i"), ""))) {
         return `an outcome decides what ${actor.name} does: "${c.tagger.render(does)}"`;
       }
       break;
@@ -358,28 +330,26 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
 
   // A PC's body acting on its own ("{Darius}'s legs carry him…") is a forced action: only an
   // outcome of their own declared action, or a failed roll, can do that.
-  if (b.kind !== "outcome") {
-    const r = pcBodyActs(does, c);
-    if (r) return r;
-  }
 
-  {
-    const r = pcReaction(b, does, actor, c);
-    if (r) return r;
-  }
+
 
   // Anyone else acting inside the sentence.
   for (const { entity, next } of c.tagger.actingTags(does)) {
     if (actor && entity.name === actor.name) continue; // the beat's own actor
-    if (isPc(entity)) return `${entity.name} acts mid-sentence ("${entity.name} ${next}…")`;
+    if (isPc(entity)) continue; // PCs are read by where they stand in the sentence (pcOpensClause, below)
     if (!capabilitiesOf(entity).act && entity.status !== "dead" && roleOf(entity, c)?.role === "here") return `${entity.name} can't act right now (${capabilitiesOf(entity).causes?.join(", ") || "incapacitated"}) but does ("${entity.name} ${next}…")`;
   }
   {
     const r = notInScene(does, c, { actor, kind: b.kind });
     if (r) return r;
   }
+  // A PC opening a clause is the PC doing something; named anywhere else, they're an object.
+  if (b.kind !== "outcome" && !b.byCode) {
+    const r = pcOpensClause(does, c.tagger);
+    if (r) return r;
+  }
   // A world beat that opens with a character is that character acting.
-  if (b.kind === "world") {
+  if (b.kind === "world" && !b.byCode) {
     const first = c.tagger.render(does).trim();
     const lead = c.tagger.tagsIn(does)[0];
     const e = lead ? c.tagger.entityOf(lead) : undefined;
@@ -393,58 +363,14 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
   return null;
 }
 
-// A PC reacting in a setup beat: named ("{Salaena} flinches"), by body part ("{Khayiulad}'s knees
-// buckle"), or by pronoun or posed limb ("…and he staggers", "one hand braced") where the nearest
-// character named before it is a PC.
-function pcReaction(b: ScaffoldBeat, does: string, actor: Entity | undefined, c: CheckContext): string | null {
-  const said = `"${c.tagger.render(does)}"`;
-  // An outcome is what the declared action physically does ("hits the cobblestones hard"); the
-  // PC's response to it ("sways on his feet and grips the table") is still the player's.
-  if (b.kind === "outcome" && actor) {
-    const own = c.tagger.render(does).replace(new RegExp(`^${actor.name}\\s*`, "i"), "");
-    if (new RegExp(`(?:^|\\band\\s+|,\\s*|\\bthen\\s+)(?:\\w+ly\\s+)?(?:${REACTION})\\b`, "i").test(own) || LIMB_POSED.test(own) || REFLEXIVE_REACTS.test(own)) {
-      return `the outcome describes how ${actor.name} reacts: ${said}`;
-    }
-  }
-  for (const re of [PC_REACTS, PC_PART_REACTS]) {
-    for (const m of does.matchAll(re)) {
-      const e = c.tagger.entityOf(m[1]);
-      if (e && isPc(e)) return `describes how ${e.name} reacts before any roll: ${said}`;
-    }
-  }
-  // Who a pronoun or posed limb refers to: the last character tagged before it, or the beat's own
-  // actor in an npc beat that names nobody first.
-  const lastBefore = (index: number) => {
-    let who: Entity | undefined = b.kind === "npc" ? actor : undefined;
-    for (const m of does.slice(0, index).matchAll(new RegExp(TAG_RE, "g"))) {
-      const e = c.tagger.entityOf(m[1]);
-      if (e && (e.type === "pc" || e.type === "npc")) who = e;
-    }
-    return who;
-  };
-  const at = [...does.matchAll(PRONOUN_REACTS)].map((m) => m.index ?? 0);
-  for (const re of [LIMB_POSED, REFLEXIVE_REACTS]) {
-    const m = does.match(re);
-    if (m) at.push(m.index ?? 0);
-  }
-  for (const i of at) {
-    const who = lastBefore(i);
-    if (who && isPc(who)) return `describes how ${who.name} reacts before any roll: ${said}`;
-  }
-  return null;
-}
-
 // The consequence of a failed roll: the target PC may be forced to act; nobody else may break
 // continuity.
 export function checkOnFail(target: string, effect: string, c: CheckContext): string | null {
   if (!effect.trim()) return null;
   const tagged = c.tagger.tag(effect);
-  for (const { entity, next } of c.tagger.actingTags(tagged)) {
-    if (isPc(entity)) {
-      if (entity.name !== target) return `on a failure, ${entity.name} (not the one who rolled) acts ("${entity.name} ${next}…")`;
-      continue;
-    }
-  }
+  // Another PC opening a clause: read structurally, as everywhere (slots.ts).
+  const other = pcOpensClause(tagged, c.tagger, target);
+  if (other) return `on a failure, ${other}`;
   const r = notInScene(tagged, c);
   return r ? `on a failure, ${r}` : null;
 }
