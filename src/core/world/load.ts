@@ -21,6 +21,8 @@ export interface Graph {
   entityKey: (id: number) => NodeKey | undefined;
   /** What didn't fit the schemas or the link laws, for the report. */
   problems: { at: string; issue: string }[];
+  /** What happened at the table, session by session: the notes and the live log, for activity. */
+  record: { session: number; text: string; weight: number }[];
 }
 
 type Entity = typeof schema.entities.$inferSelect;
@@ -70,6 +72,10 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     db.select().from(schema.keyMoments).where(eq(schema.keyMoments.campaignId, campaignId)),
     db.select().from(schema.effects).where(eq(schema.effects.campaignId, campaignId)),
   ]);
+  const live = await db
+    .select({ session: schema.liveEntries.sessionNumber, moment: schema.liveEntries.moment, choice: schema.liveEntries.choice, kind: schema.liveEntries.choiceKind })
+    .from(schema.liveEntries)
+    .where(eq(schema.liveEntries.campaignId, campaignId));
   const threadIds = threads.map((t) => t.id);
   const [threadEntities, threadLinks, threadEvents] = threadIds.length
     ? await Promise.all([
@@ -303,5 +309,11 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     },
     entityKey,
     problems,
+    // The notes count fully; what was used at the table counts fully; a moment only asked about
+    // counts a little.
+    record: [
+      ...sessions.filter((s) => s.recap.trim()).map((s) => ({ session: s.number, text: s.recap, weight: 1 })),
+      ...live.map((l) => ({ session: l.session, text: l.kind ? `${l.moment} ${l.choice}` : l.moment, weight: l.kind ? 1 : 0.3 })),
+    ],
   };
 }

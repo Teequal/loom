@@ -468,7 +468,13 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
       - **References by name:** `{Iresia}` in braces, with the part each plays still taken from the list. Haiku swapped numbered references ("Tomas glances at Tomas's hands").
       - **Rendering:** a named actor before a sentence starting with "a" or "the" is set off ("Zara the Unbound: a voice rasps…"). A choice phrase starting with someone's name becomes a question. "an attendant of Azarath" is a new person; "ever", "yet" and "never" after an absent name are statements about them.
       - **Measured (Haiku):** sample campaign 0.13 options rejected per call, 3.00 options per call, 3.1 s / 6.7 s. Duradan 0–2 dropped per 10 moments at 6.7–7.0 s; the copy 0. Expected-thread hits occasionally 9/10 (options follow the engine's moves).
-      - **Open:** the model still reaches for Tomas. 40 of the 69 dropped sentences on Duradan were "Tomas isn't in this move's cast". The options are fine, but those words are wasted. Choices: tell the model per move who's present but not cast, or let companions take a supporting line in any move.
+      - **NPC activity** (Jacob: "something to measure their activity tied to their typed object… without strict rules").
+        - `activityOf` (engine) scores each NPC's time on stage: mentions in the session notes and the table log (`Graph.record`; a moment only asked about counts 0.3), each session back counting half as much. Bands: quiet / active / very active.
+        - Duradan: Tomas 3.5 and Azarath 3.3 are very active; Vex, Vex'ahlia and Zara are quiet.
+        - **In the moves:** a very active lead costs a move 0.3. Quiet or active NPCs here with the party may lend one supporting line to any move ("support"). Very active ones not in the move's threads sit it out ("resting"), and the prompt says so. One support line per option; extras are dropped.
+        - **Shown:** in the scene's profile lines ("very active lately: give others room", "quiet lately") and as a chip in the inspector ("on stage a lot lately", "quiet lately").
+        - **Measured:** options mentioning Tomas fell from 11 of 33 (before moves) to 2–3 (copy) and 0 (real Duradan, where no thread lists him). Sentences dropped for the cast fell from 40 to 17. 0–2 options dropped per 10 moments, at about 7 s.
+        - **Watch:** in real Duradan Tomas now disappears unless a moment names him. His activity fades over quiet sessions, and the very-active threshold (3.0) is the knob.
       - 169/169 crafted, 25/25 adversarial, and the world and reading tests pass.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.

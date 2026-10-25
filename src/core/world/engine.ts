@@ -331,6 +331,43 @@ export function heat(v: View, t: Thread): { score: number; ripe: boolean } {
   return { score: Math.round(score * 10) / 10, ripe: t.status === "ripe" || score >= 4.5 };
 }
 
+// ---------- Activity: how much each NPC has been on stage lately ----------
+
+export interface Activity {
+  score: number; // mentions, weighted by recency: each session back counts half as much
+  band: "quiet" | "active" | "very active";
+  lastSession: number | null;
+}
+
+/**
+ * How present each NPC has been: mentions in the session notes and the table log, each session
+ * back counting half as much. A measure, not a rule: the move finder gives the very active fewer
+ * leads and lets quiet ones step in, so one NPC (Tomas) doesn't end up in every option.
+ */
+export function activityOf(v: View): Map<string, Activity> {
+  const cached = activityCache.get(v);
+  if (cached) return cached;
+  const latest = Math.max(0, ...v.g.record.map((r) => r.session));
+  const out = new Map<string, Activity>();
+  for (const n of v.g.nodes.values()) {
+    if (n.kind !== "character" || n.side !== "npc") continue;
+    const names = [n.name, ...n.aliases, n.name.split(/[\s,]+/)[0]].filter((x) => x.length >= 3).map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    const re = new RegExp(`\\b(?:${names.join("|")})\\b`, "gi");
+    let score = 0;
+    let last: number | null = null;
+    for (const r of v.g.record) {
+      const hits = r.text.match(re)?.length ?? 0;
+      if (!hits) continue;
+      score += Math.min(hits, 4) * r.weight * 0.5 ** Math.max(0, latest - r.session);
+      last = Math.max(last ?? 0, r.session);
+    }
+    out.set(n.name, { score: Math.round(score * 10) / 10, band: score >= 3 ? "very active" : score >= 1 ? "active" : "quiet", lastSession: last });
+  }
+  activityCache.set(v, out);
+  return out;
+}
+const activityCache = new WeakMap<View, Map<string, Activity>>();
+
 // ---------- Profiles: what matters about each node, for this moment ----------
 
 const MOOD = ["despairing", "grim", "uneasy", "steady", "upbeat", "confident", "elated"];
@@ -352,6 +389,8 @@ export function profileOf(v: View, key: NodeKey, memo?: Map<NodeKey, Presence>):
     const caps = capabilities(v, n);
     const cant = (["act", "speak", "aware"] as const).filter((k) => !caps[k]);
     if (n.mind.mood != null) facts.push(`mood: ${MOOD[n.mind.mood + 3]}`);
+    const act = n.side === "npc" ? activityOf(v).get(n.name) : undefined;
+    if (act && act.band !== "active") facts.push(act.band === "very active" ? "very active lately: give others room" : "quiet lately");
     if (n.side === "npc" && n.stance != null) facts.push(`${["hostile", "hostile", "unfriendly", "indifferent", "friendly", "helpful", "devoted"][n.stance + 3]} to the party`);
     if (body.health && body.health !== "healthy" && n.side === "npc") facts.push(`health: ${body.health}`);
     if (body.conditions.length && n.side === "npc") facts.push(`conditions: ${body.conditions.map((c) => c.name).join(", ")}`);

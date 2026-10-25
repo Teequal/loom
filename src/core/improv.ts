@@ -132,7 +132,7 @@ export interface ImprovOption {
 const SYSTEM = `You are Loom, a game master's assistant used live at the table. The players just did something unexpected. Offer 4 short, playable options that tie the moment back to threads already in the campaign, instead of inventing new material.
 
 Rules:
-- Every option builds on one of the engine's MOVES (move), a different one for each option. Its main thread is thread; also_ties_to lists the move's other threads it genuinely uses. Only the move's cast may be named as actors: those "here" in npc beats, those who "can arrive or send word" in arrival or remote beats. Anyone else is a walk-on.
+- Every option builds on one of the engine's MOVES (move), a different one for each option. Its main thread is thread; also_ties_to lists the move's other threads it genuinely uses. Only the move's cast may be named as actors: those "here" in npc beats, those who "can arrive or send word" in arrival or remote beats; a "support" character may have one line. Characters "resting" sit this move out. Anyone else is a walk-on.
 - Get the facts right: who did what to whom must match the threads and cards exactly.
 - Match the energy of the moment: comedic stays comedic, tense stays tense. LENGTH and TONE at the end say how much to write and how dramatic to be.
 - Serve where the story is going: when the GM has said where they want it to head, options should move toward that, not away from it. Build on what this session has already established.
@@ -768,11 +768,13 @@ ${moment}`;
       // dropped with their sentence (anyone else is a walk-on).
       const move = moves.find((m) => m.id === o.move);
       if (move && !move.threads.includes(idOf(o.thread))) o.thread = `T${move.threads[0]}`;
+      let supportLines = 0;
       const outsideCast = (b: ScaffoldBeat) => {
         if (!move || (b.kind !== "npc" && b.kind !== "arrival" && b.kind !== "remote") || b.actor === "walk-on" || b.actor === "world") return null;
         const c = move.cast.find((x) => x.name === b.actor);
-        if (!c) return `${b.actor} isn't in this move's cast`;
+        if (!c) return move.resting.includes(b.actor) ? `${b.actor} is resting in this move (very active lately)` : `${b.actor} isn't in this move's cast`;
         if (b.kind === "npc" && c.can !== "act") return `${b.actor} isn't here; in this move they can only arrive or send word`;
+        if (c.part === "support" && ++supportLines > 1) return `${b.actor} is support in this move: one line at most`;
         return null;
       };
       // The same for the world-model checks: a sentence that breaks one goes, the option stays.

@@ -2,6 +2,9 @@ import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import type { EntityTraits } from "./entity-fields";
 import { historyOf } from "./history";
+import { activityOf, viewOf } from "./world/engine";
+import { loadGraph } from "./world/load";
+import { readMoment } from "./moment-reading";
 
 // The loom as something you can walk: every thread, character, place, item, faction, key moment
 // and session is a node, and every connection in a node's detail points at another node. The
@@ -92,6 +95,8 @@ async function entityNode(campaignId: number, id: number) {
   const latestSession = Math.max(0, ...L.sessions.map((x) => x.number));
   const traits = e.traits as EntityTraits;
   const secret = (f: string) => !!e.fieldMeta[f]?.secret;
+  // How much an NPC has been on stage lately (the engine's measure, from notes and the table log).
+  const activity = e.type === "npc" ? activityOf(viewOf(await loadGraph(campaignId), readMoment([], ""))).get(e.name) ?? null : null;
   // Where it is, as a chain of places (the Ritual Site › the Time Pocket › the Woods).
   const chain: NodeRef[] = [];
   for (let cur = e.actualLocationId ?? e.lastKnownLocationId ?? (e.type === "location" ? e.parentId : null), hops = 0; cur != null && hops < 6; hops++) {
@@ -129,6 +134,7 @@ async function entityNode(campaignId: number, id: number) {
     status: e.status,
     attitude: e.attitude,
     importance: e.importance,
+    activity: activity && { band: activity.band, lastSession: activity.lastSession },
     description: e.description,
     aliases: e.aliases,
     where: chain,

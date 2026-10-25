@@ -1,5 +1,5 @@
 import type { SelectedThread } from "./retrieval";
-import { heat, presenceOf, type View } from "./world/engine";
+import { activityOf, heat, presenceOf, type View } from "./world/engine";
 import { THREAD_ROLES } from "./world/links";
 import type { AnyNode, NodeKey, Thread } from "./world/nodes";
 
@@ -15,6 +15,8 @@ export type MoveKind = "payoff" | "complication" | "arrival" | "hint" | "collisi
 export interface CastMember {
   name: string;
   can: "act" | "arrive"; // here and able to act, or not here: arrives or sends word
+  part: "lead" | "support"; // in the move's threads, or here and quiet enough to lend a line
+  busy?: boolean; // very active lately: kept brief, and leads fewer moves
 }
 
 export interface Move {
@@ -22,6 +24,7 @@ export interface Move {
   kind: MoveKind;
   threads: number[]; // the first is the move's main thread
   cast: CastMember[];
+  resting: string[]; // here with the party, but not in this move (too active lately to lend a line)
   because: string; // the engine's reason, in plain words
   score: number;
   callback?: number; // a key moment's id, for callback moves
@@ -51,20 +54,25 @@ export function findMoves(
       .map((l) => ({ node: node(endKey(l.from))!, role: l.role ?? "involved", secret: l.secret }))
       .filter((p) => !!p.node);
   // Who in a thread can be cast, and how: here and free to act, or able to come in.
+  const activity = activityOf(v);
+  const busy = (name: string) => activity.get(name)?.band === "very active";
   const castOf = (parts: Part[]): CastMember[] => {
     const out: CastMember[] = [];
     for (const p of parts) {
       if (p.node.kind !== "character" && p.node.kind !== "faction" && p.node.kind !== "item" && p.node.kind !== "other") continue;
       if (p.node.kind === "character" && p.node.side === "pc") continue;
       const pr = presenceOf(v, p.node.key as NodeKey, memo);
-      if (pr.role === "here") out.push({ name: p.node.name, can: "act" });
-      else if (pr.role === "reachable" && p.node.kind !== "item") out.push({ name: p.node.name, can: "arrive" });
+      if (pr.role === "here") out.push({ name: p.node.name, can: "act", part: "lead", busy: busy(p.node.name) || undefined });
+      else if (pr.role === "reachable" && p.node.kind !== "item") out.push({ name: p.node.name, can: "arrive", part: "lead", busy: busy(p.node.name) || undefined });
     }
     return out;
   };
+  // NPCs here with the party: they can lend a supporting line to any move, unless they've been
+  // on stage a lot lately, in which case they rest for moves that aren't theirs.
+  const presentNpcs = [...v.g.nodes.values()].filter((n) => n.kind === "character" && n.side === "npc" && presenceOf(v, n.key as NodeKey, memo).role === "here").map((n) => n.name);
   const top = Math.max(1, ...threads.map((t) => t.score));
   const moves: Omit<Move, "id">[] = [];
-  const add = (m: Omit<Move, "id">) => moves.push(m);
+  const add = (m: Omit<Move, "id" | "resting">) => moves.push({ ...m, resting: [] });
 
   for (const t of threads) {
     const tn = node(`thread:${t.id}` as NodeKey) as Thread | undefined;
@@ -110,6 +118,8 @@ export function findMoves(
     if (t) add({ kind: "callback", threads: [t.id], cast: castOf(partsOf(t)), because: `it can call back "${cb.title}"`, score: 0.8 + WEIGHT.callback, callback: cb.id });
   }
 
+  // A busy lead costs a move a little, so quieter characters get more of the stage.
+  for (const m of moves) m.score -= 0.3 * m.cast.filter((c) => c.busy).length;
   // Pick a varied set: each pick costs the rest a little for sharing its kind, main thread or cast.
   const limit = opts.limit ?? 5;
   const picked: Omit<Move, "id">[] = [];
@@ -131,9 +141,14 @@ export function findMoves(
   // Always one open move, for the model's own idea, on the strongest thread with whoever's here.
   if (threads[0]) {
     const here = [...new Map([...threads.slice(0, 3).flatMap((t) => castOf(partsOf(t)).filter((c) => c.can === "act"))].map((c) => [c.name, c])).values()];
-    picked.push({ kind: "wildcard", threads: threads.slice(0, 3).map((t) => t.id), cast: here, because: "your own idea, on the threads most in play", score: 0 });
+    picked.push({ kind: "wildcard", threads: threads.slice(0, 3).map((t) => t.id), cast: here, because: "your own idea, on the threads most in play", score: 0, resting: [] });
   }
-  return picked.map((m, i) => ({ ...m, id: `M${i + 1}` }));
+  return picked.map((m, i) => {
+    const inCast = new Set(m.cast.map((c) => c.name));
+    const others = presentNpcs.filter((n) => !inCast.has(n));
+    const support: CastMember[] = others.filter((n) => !busy(n)).map((name) => ({ name, can: "act", part: "support" }));
+    return { ...m, id: `M${i + 1}`, cast: [...m.cast, ...support], resting: others.filter(busy) };
+  });
 }
 
 function dedupe(cast: CastMember[]) {
@@ -146,8 +161,17 @@ function dedupe(cast: CastMember[]) {
 export function movesBlock(moves: Move[], titleOf: Map<number, string>) {
   return moves
     .map((m) => {
-      const cast = m.cast.length ? m.cast.map((c) => `${c.name} (${c.can === "act" ? "here" : "can arrive or send word"})`).join(", ") : "nobody named: use walk-ons";
-      return `${m.id} ${m.kind}: ${m.threads.map((t) => `T${t} "${titleOf.get(t) ?? ""}"`).join(" + ")} · cast: ${cast} · because: ${m.because}`;
+      const leads = m.cast.filter((c) => c.part === "lead");
+      const support = m.cast.filter((c) => c.part === "support");
+      const cast = leads.length ? leads.map((c) => `${c.name} (${c.can === "act" ? "here" : "can arrive or send word"}${c.busy ? "; very active lately, keep brief" : ""})`).join(", ") : "nobody named: use walk-ons";
+      return [
+        `${m.id} ${m.kind}: ${m.threads.map((t) => `T${t} "${titleOf.get(t) ?? ""}"`).join(" + ")} · cast: ${cast}`,
+        support.length && `support (here, one line at most): ${support.map((c) => c.name).join(", ")}`,
+        m.resting.length && `resting (here, but not in this move): ${m.resting.join(", ")}`,
+        `because: ${m.because}`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
     })
     .join("\n");
 }
