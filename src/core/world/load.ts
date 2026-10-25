@@ -32,7 +32,7 @@ const endKey = (e: { kind: string; id: number }) => `${e.kind}:${e.id}` as NodeK
 const PATH: Record<string, string> = {
   status: "status", attitude: "stance", importance: "importance", description: "summary",
   "traits.health": "body.health", "traits.conditions": "body.conditions",
-  "traits.goal": "mind.goals", "traits.wants": "mind.wants", "traits.fears": "mind.fears", "traits.flaws": "mind.flaws", "traits.ideals": "mind.ideals", "traits.bonds": "mind.bonds",
+  "traits.goal": "mind.goals", "traits.goals": "mind.goals", "traits.mood": "mind.mood", "traits.beliefs": "mind.beliefs", "traits.wants": "mind.wants", "traits.fears": "mind.fears", "traits.flaws": "mind.flaws", "traits.ideals": "mind.ideals", "traits.bonds": "mind.bonds",
   "traits.abilities": "abilities", "traits.gear": "gear", "traits.secrets": "knowledge", "traits.knowledge": "knowledge",
   "traits.race": "identity.race", "traits.occupation": "identity.occupation", "traits.level": "identity.level", "traits.age": "identity.age", "traits.gender": "identity.gender",
   "traits.alignment": "identity.alignment", "traits.background": "identity.background", "traits.appearance": "identity.appearance", "traits.voice": "identity.voice",
@@ -133,7 +133,13 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
             health: e.status === "dead" ? "dead" : t.health,
             conditions: list(t.conditions).map((c) => ({ name: c, is5e: (CONDITIONS_5E as readonly string[]).includes(c.toLowerCase().split(/[\s(]/)[0]) })),
           },
-          mind: { goals: list(t.goal).map((g) => ({ text: g, priority: 1 })), wants: list(t.wants), fears: list(t.fears), flaws: list(t.flaws), ideals: list(t.ideals), bonds: list(t.bonds), beliefs: [] },
+          mind: {
+            mood: t.mood,
+            // Ranked goals where recorded; a single "goal" line counts as the top one.
+            goals: [...(t.goals ?? []), ...list(t.goal).filter((g) => !(t.goals ?? []).some((x) => x.text === g)).map((g) => ({ text: g, priority: 1 }))],
+            wants: list(t.wants), fears: list(t.fears), flaws: list(t.flaws), ideals: list(t.ideals), bonds: list(t.bonds),
+            beliefs: t.beliefs ?? [],
+          },
           abilities: list(t.abilities).map((a) => ({ name: a })),
           gear: list(t.gear),
           knowledge: [...list(t.secrets).map((s) => ({ text: s, secret: true })), ...list(t.knowledge).map((s) => ({ text: s, secret: false }))],
@@ -163,7 +169,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
         kind: "thread",
         threadKind: t.kind,
         status: t.status === "progressing" ? "building" : t.status,
-        stakes: { ifIgnored: t.stakes || undefined },
+        stakes: { level: t.stakesLevel ?? undefined, ifIgnored: t.stakes || undefined },
         deadline: t.deadline ? { text: t.deadline } : undefined,
         steps: threadEvents.filter((ev) => ev.threadId === t.id).map((ev) => ({ session: sNo(ev.sessionId), change: ev.change, note: ev.note })),
         payoffs: t.payoffIdeas,
@@ -222,11 +228,10 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
       push({ id: `loc:${e.id}:${certainty}`, from, to: end(placeId)!, type: "located_at", certainty, secret: !!fm?.secret, meta: metaFrom(fm?.source ?? "extracted", sNo(fm?.sessionId), fm?.secret) }, `loc:${e.id}`);
     }
   }
-  // Who and what each thread is about: one link per pair, read from either end. Today's links
-  // carry no role, so they start as "involved".
+  // Who and what each thread is about: one link per pair, read from either end, with its role.
   for (const te of threadEntities) {
     const from = end(te.entityId);
-    if (from) push({ id: `te:${te.threadId}-${te.entityId}`, from, to: { kind: "thread", id: te.threadId }, type: "in_thread", role: "involved", secret: false, meta: metaFrom("extracted") }, `te:${te.threadId}-${te.entityId}`);
+    if (from) push({ id: `te:${te.threadId}-${te.entityId}`, from, to: { kind: "thread", id: te.threadId }, type: "in_thread", role: te.role || "involved", secret: te.secret, meta: metaFrom("extracted", null, te.secret) }, `te:${te.threadId}-${te.entityId}`);
   }
   for (const tl of threadLinks) push({ id: `tt:${tl.fromThreadId}-${tl.toThreadId}`, from: { kind: "thread", id: tl.fromThreadId }, to: { kind: "thread", id: tl.toThreadId }, type: "connects", secret: false, note: tl.note || undefined, meta: metaFrom("extracted") }, `tt:${tl.fromThreadId}`);
   // Moments: who and what they involved, and when.

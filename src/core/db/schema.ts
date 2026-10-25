@@ -205,6 +205,7 @@ export const threads = sqliteTable("threads", {
   lastTouchedSessionId: integer("last_touched_session_id").references(() => sessions.id),
   deadline: text("deadline").notNull().default(""), // "before the Moons align"
   stakes: text("stakes").notNull().default(""), // what happens if it's ignored
+  stakesLevel: integer("stakes_level"), // 1 (a loose end) … 5 (the campaign turns on it)
   secret: integer("secret", { mode: "boolean" }).notNull().default(false), // GM-only thread
   fieldMeta: fieldMeta(),
   createdAt: createdAt(),
@@ -215,6 +216,9 @@ export const threadEntities = sqliteTable(
   {
     threadId: integer("thread_id").notNull().references(() => threads.id, { onDelete: "cascade" }),
     entityId: integer("entity_id").notNull().references(() => entities.id, { onDelete: "cascade" }),
+    // What part the entity plays in the thread (THREAD_ROLES in world/links.ts): subject, cause, key…
+    role: text("role").notNull().default("involved"),
+    secret: integer("secret", { mode: "boolean" }).notNull().default(false), // GM-only link ("the fighter was Vex'ahlia")
   },
   (t) => [primaryKey({ columns: [t.threadId, t.entityId] })],
 );

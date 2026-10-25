@@ -4,7 +4,6 @@ import type { EffectInPlay } from "./effects";
 import type { EntityTraits } from "./entity-fields";
 import type { Budget } from "./graph";
 import { capabilitiesOf, RELATION_LAWS, togglesText } from "./rules";
-import { profileLine } from "./profiles";
 import { buildSituation, loadWorld, type Overrides, type Presence, type Situation } from "./situation";
 
 // The scene: where the party is, who's here, the party roster and compact cards for the
@@ -157,7 +156,7 @@ export async function buildScene(
       .filter((p) => p.role === role && p.entity.type !== "pc" && filter(p.entity))
       .sort((a, b) => Number(relevant(b.entity)) - Number(relevant(a.entity)))
       .slice(0, cap)
-      .map((p) => `  - ${profileLine(p)}`);
+      .map((p) => `  - ${p.line}`);
   const inScene = group("here", (e) => e.type !== "location", 12);
   const canCome = group("reachable", (e) => e.type !== "location" && relevant(e), 12);
   const remembered = group("remembered", (e) => relevant(e) || e.type === "npc", 10);

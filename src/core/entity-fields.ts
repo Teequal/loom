@@ -57,6 +57,9 @@ export const TraitsSchema = z
     voice: z.string(), // voice and mannerisms
     alignment: z.enum(ALIGNMENTS),
     goal: z.string(), // current goal or off-screen activity
+    goals: z.array(z.object({ text: z.string(), priority: z.number().int().min(1).max(3) })), // ranked goals; "goal" stays for a single line
+    mood: z.number().int().min(-3).max(3), // -3 despairing … 0 steady … +3 elated
+    beliefs: z.array(z.object({ text: z.string(), true: z.boolean().optional() })), // "he can't die" (true: false)
     wants: list,
     fears: list,
     ideals: list,

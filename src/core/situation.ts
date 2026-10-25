@@ -1,8 +1,9 @@
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
-import { effectsInPlay, type EffectInPlay } from "./effects";
+import type { EffectInPlay } from "./effects";
 import { readMoment, type MomentReading } from "./moment-reading";
-import { buildProfiles, type Profile } from "./profiles";
+import { holdersOf, liveRules, placeChain, presenceOf, profileLine, profileOf, viewOf, type Role, type View } from "./world/engine";
+import { loadGraph, type Graph } from "./world/load";
 
 // The scene model: what is true right now, decided by code. Built once per moment from the
 // records and the moment (read in moment-reading.ts), plus the GM's corrections. Every feature
@@ -43,10 +44,11 @@ export interface World {
   effects: Effect[];
   threads: { id: number; title: string; status: string }[];
   threadEntities: { threadId: number; entityId: number }[];
+  graph: Graph; // the world model (world/): typed nodes and links the engine calculates from
 }
 
 export async function loadWorld(campaignId: number): Promise<World> {
-  const [[campaign], entities, relations, effects, threads, threadEntities] = await Promise.all([
+  const [[campaign], entities, relations, effects, threads, threadEntities, graph] = await Promise.all([
     db.select().from(schema.campaigns).where(eq(schema.campaigns.id, campaignId)),
     db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId)),
     db.select().from(schema.entityRelations).where(eq(schema.entityRelations.campaignId, campaignId)),
@@ -57,8 +59,9 @@ export async function loadWorld(campaignId: number): Promise<World> {
       .from(schema.threadEntities)
       .innerJoin(schema.threads, eq(schema.threads.id, schema.threadEntities.threadId))
       .where(eq(schema.threads.campaignId, campaignId)),
+    loadGraph(campaignId),
   ]);
-  return { campaign: campaign ?? null, entities, relations, effects, threads, threadEntities };
+  return { campaign: campaign ?? null, entities, relations, effects, threads, threadEntities, graph };
 }
 
 export interface LiveEffect extends EffectInPlay {
@@ -66,16 +69,26 @@ export interface LiveEffect extends EffectInPlay {
   why: string;
 }
 
+// Each entity's part in this moment, from the engine (world/engine.ts): its role, where it stands,
+// and one line of what matters about it (mood, goals, beliefs, holders, its parts in threads).
+export interface SceneProfile {
+  entity: Entity;
+  role: Role;
+  standing: string;
+  line: string;
+}
+
 export interface Situation {
   world: World;
   moment: string;
   reading: MomentReading;
+  view: View; // the world model as it stands for this moment
   entities: Entity[]; // the records, with what the moment states applied (conditions)
   pcs: Entity[];
   party: Entity | null; // where the party is for this moment
   presence: (e: Entity) => Presence;
   why: (e: Entity) => string; // why they're where they are, for the chips and the prompt
-  profiles: Map<string, Profile>; // each entity's role in this moment, where it stands, and what matters about it
+  profiles: Map<string, SceneProfile>;
   here: Set<string>; // NPCs, factions and items that may act directly (role "here")
   contacted: Set<string>; // absent NPCs the players reached; they may answer from afar
   acting: Set<string>; // PCs whose declared action this moment is
@@ -88,131 +101,82 @@ export interface Situation {
   stated: string[]; // conditions the moment states, for the prompt
 }
 
-const COMPANION_TIES = new Set(["ally", "serves", "family", "romance", "loves", "trusts"]);
-
+// The scene model is the engine's answers for this moment, in the shapes the rest of Loom reads.
 export function buildSituation(world: World, moment: string, overrides: Overrides = {}): Situation {
-  // A copy, so what this moment states doesn't leak into other calls.
+  // A copy of the rows, so what this moment states doesn't leak into other calls.
   const entities = world.entities.map((e) => ({ ...e, traits: { ...(e.traits as object) } as Entity["traits"] }));
-  const byId = new Map(entities.map((e) => [e.id, e]));
   const byName = new Map(entities.map((e) => [e.name, e]));
   const pcs = entities.filter((e) => e.type === "pc");
+  const g = world.graph;
   const reading = readMoment(entities, moment);
-  const notes: string[] = [];
+  const view = viewOf(g, reading, overrides);
+  const keyOf = (e: Entity) => g.entityKey(e.id)!;
+
+  // Conditions the moment states: on the rows too, so cards and capability checks see them.
   const fixes: RecordFix[] = [];
-  const stated: string[] = [];
-
-  const within = (place: number, container: number) => {
-    let cur: number | null = place;
-    for (let hops = 0; cur != null && hops < 20; hops++) {
-      if (cur === container) return true;
-      cur = byId.get(cur)?.parentId ?? null;
-    }
-    return false;
-  };
-
-  // Where the party is: the records, unless the moment takes them somewhere.
-  const recordedParty = world.campaign?.partyLocationId ? (byId.get(world.campaign.partyLocationId) ?? null) : null;
-  const movedTo = reading.goesTo ? (byName.get(reading.goesTo) ?? null) : null;
-  const party = movedTo ?? recordedParty;
-  if (movedTo && movedTo.id !== recordedParty?.id) notes.push(`This moment takes the party to ${movedTo.name}; your records have them at ${recordedParty?.name ?? "no recorded place"}.`);
-
-  // Conditions the moment states apply for this call; the GM is told the records disagree.
-  for (const { pc: name, condition } of reading.conditions) {
-    const pc = byName.get(name);
-    if (!pc) continue;
-    const t = pc.traits as { health?: string; conditions?: string[] };
-    const has = condition === "unconscious" ? t.health === "unconscious" || t.conditions?.includes("unconscious") : t.conditions?.includes(condition);
-    if (has) continue;
-    pc.traits = (condition === "unconscious" ? { ...t, health: "unconscious" } : { ...t, conditions: [...(t.conditions ?? []), condition] }) as Entity["traits"];
-    const field = condition === "unconscious" ? "health=unconscious" : `conditions="${(pc.traits as { conditions: string[] }).conditions.join(", ")}"`;
-    notes.push(`This moment has ${pc.name} ${condition}; your records don't. Update with: entity set "${pc.name}" ${field}`);
+  for (const { pc, condition } of view.conditionFixes) {
+    const row = byName.get(pc.name);
+    if (!row) continue;
+    const t = row.traits as { health?: string; conditions?: string[] };
+    row.traits = (condition === "unconscious" ? { ...t, health: "unconscious" } : { ...t, conditions: [...(t.conditions ?? []), condition] }) as Entity["traits"];
     fixes.push({ say: `Loom treated ${pc.name} as ${condition} for these options, because the moment says so. Your records don't have that yet.`, apply: `Record ${pc.name} as ${condition}`, fix: { kind: "condition", entityId: pc.id, condition } });
-    stated.push(`${pc.name} is ${condition} (${condition === "unconscious" ? "can't act, speak or notice anything; death saves only" : "per the 5e condition"})`);
   }
+  for (const { pc, item, records } of view.holdFixes) fixes.push({ say: `Loom treated ${pc.name} as having ${item.name} for these options. ${records}`, apply: `${pc.name} has it now`, fix: { kind: "holds", holderId: pc.id, itemId: item.id } });
 
-  // Presence, from the records relative to where the party is, then the moment, then the GM.
-  const pcIds = new Set(pcs.map((p) => p.id));
-  const companions = new Set(
-    world.relations
-      .filter((r) => COMPANION_TIES.has(r.type) && (pcIds.has(r.fromEntityId) || pcIds.has(r.toEntityId)))
-      .flatMap((r) => [r.fromEntityId, r.toEntityId])
-      .filter((id) => !pcIds.has(id)),
-  );
-  const away = new Set(overrides.away ?? []);
-  const broughtIn = new Set([...reading.broughtIn, ...(overrides.here ?? [])].filter((n) => !away.has(n)));
-  const recordsPresence = (e: Entity): Exclude<Presence, "here"> => {
-    const loc = e.actualLocationId ?? e.lastKnownLocationId;
-    // Companions travel with the party wherever it goes.
-    if (companions.has(e.id) && recordedParty && loc != null && (within(loc, recordedParty.id) || within(recordedParty.id, loc))) return "with-party";
-    if (!party || loc == null) return "unknown";
-    if (!(within(loc, party.id) || within(party.id, loc))) return "elsewhere";
-    return companions.has(e.id) ? "with-party" : "nearby";
-  };
-  const presence = (e: Entity): Presence => (away.has(e.name) ? "elsewhere" : broughtIn.has(e.name) ? "here" : recordsPresence(e));
-  const why = (e: Entity) => {
-    if (away.has(e.name)) return "you said they're not here";
-    if ((overrides.here ?? []).includes(e.name)) return "you said they're here";
-    if (reading.broughtIn.has(e.name)) return "the moment brings them in";
-    if (reading.contacted.has(e.name)) return "the players reach them from afar";
-    if (reading.referred.has(e.name)) return "only mentioned in the moment";
-    return { "with-party": "travelling with the party", nearby: "recorded around here, not with the party", elsewhere: "recorded elsewhere", unknown: "whereabouts unknown" }[recordsPresence(e)];
-  };
+  const memo = new Map();
+  const presenceOfRow = (e: Entity) => presenceOf(view, keyOf(e), memo);
+  const party = view.party ? (entities.find((e) => e.id === view.party!.id) ?? null) : null;
 
-  // Items: who has what. A lost item has no holder; the moment (or the GM) can put one in a PC's hand.
-  const parentOf = new Map<string, string>();
-  for (const e of entities) if (e.type === "item" && e.parentId != null && byId.get(e.parentId)) parentOf.set(e.name, byId.get(e.parentId)!.name);
+  // Who has what: direct holders, with the moment's and the GM's changes (sets are read through parentOf).
   const holders = new Map<string, Set<string>>();
-  const lostIds = new Set(entities.filter((e) => e.type === "item" && e.status === "lost").map((e) => e.id));
-  for (const r of world.relations) {
-    if (r.type !== "holds" || lostIds.has(r.toEntityId)) continue;
-    const [h, i] = [byId.get(r.fromEntityId)?.name, byId.get(r.toEntityId)?.name];
-    if (h && i) holders.set(i, new Set([...(holders.get(i) ?? []), h]));
+  const parentOf = new Map<string, string>();
+  const lost = new Set<string>();
+  for (const e of entities.filter((x) => x.type === "item")) {
+    const direct = holdersOf(view, keyOf(e)).filter((h) => !h.via).map((h) => g.nodes.get(h.holder)!.name);
+    if (direct.length) holders.set(e.name, new Set(direct));
+    const parent = placeChain(view, keyOf(e))[1];
+    if (parent && g.nodes.get(parent)?.kind === "item") parentOf.set(e.name, g.nodes.get(parent)!.name);
+    if (e.status === "lost" && !direct.length) lost.add(e.name);
   }
-  // The most specific item named: "the monk figurine" means that piece, not its whole set.
-  const named = reading.inHand.filter((h) => !reading.inHand.some((o) => o !== h && o.pc === h.pc && isInside(o.item, h.item, parentOf)));
-  const holdsViaSet = (who: string, item: string) => {
-    for (let cur: string | undefined = item, hops = 0; cur && hops < 10; cur = parentOf.get(cur), hops++) if (holders.get(cur)?.has(who)) return true;
-    return false;
-  };
-  const misread = (h: { pc: string; item: string }) => (overrides.notInHand ?? []).some((x) => x.pc === h.pc && x.item === h.item);
-  for (const { pc: name, item: itemName } of [...named.filter((h) => !misread(h)), ...(overrides.inHand ?? [])]) {
-    const pc = byName.get(name);
-    const item = byName.get(itemName);
-    if (!pc || !item || holdsViaSet(name, itemName)) continue;
-    const recorded = [...(holders.get(itemName) ?? [])];
-    holders.set(itemName, new Set([...recorded, name]));
-    const records = item.status === "lost" && !recorded.length ? "Your records say it's lost." : recorded.length ? `Your records say ${recorded.join(" and ")} ${recorded.length > 1 ? "hold" : "holds"} it.` : null;
-    if (!records) continue; // nobody recorded as holding it: nothing disagrees
-    notes.push(`${records} This moment has ${name} with ${itemName}. Update with: relate "${name}" holds "${itemName}"`);
-    fixes.push({ say: `Loom treated ${name} as having ${itemName} for these options. ${records}`, apply: `${name} has it now`, fix: { kind: "holds", holderId: pc.id, itemId: item.id } });
-  }
-  const lost = new Set(entities.filter((e) => lostIds.has(e.id) && !holders.get(e.name)?.size).map((e) => e.name));
 
+  const effects: LiveEffect[] = liveRules(view)
+    .map((r) => {
+      const effect = world.effects.find((x) => x.id === r.rule.id);
+      return effect ? { effect, sourceName: r.source?.name ?? null, holders: r.holders, targets: r.targets, tableWide: r.tableWide, text: r.text, live: r.live, why: r.why } : null;
+    })
+    .filter((x): x is LiveEffect => !!x);
+
+  const profiles = new Map<string, SceneProfile>();
+  for (const e of entities) {
+    const p = profileOf(view, keyOf(e), memo);
+    profiles.set(e.name, { entity: e, role: p.presence.role, standing: p.presence.standing, line: profileLine(p) });
+  }
+  const here = new Set([...profiles.values()].filter((p) => p.role === "here" && p.entity.type !== "location" && p.entity.status !== "captured" && p.entity.status !== "missing").map((p) => p.entity.name));
   const contacted = new Set([...reading.contacted].filter((n) => byName.get(n)?.status !== "dead"));
   const acting = new Set(reading.wholeParty ? pcs.map((p) => p.name) : [...reading.acting]);
 
-  // House rules: who each reaches now, and whether its trigger has happened. "On use" and "on
-  // touch" rules are live only when the moment uses their source (or a piece of it); the rest
-  // whenever they reach someone.
-  const holds = [...holders].flatMap(([item, who]) => [...who].map((h) => ({ holderId: byName.get(h)?.id ?? -1, itemId: byName.get(item)?.id ?? -1 }))).filter((h) => h.holderId > 0 && h.itemId > 0);
-  const effects: LiveEffect[] = effectsInPlay({ effects: world.effects, entities, holds, threads: world.threads, partyLocationId: party?.id ?? null }).map((e) => {
-    if (!e.targets.length) return { ...e, live: false, why: "it reaches nobody right now" };
-    if ((overrides.rulesOff ?? []).includes(e.effect.name)) return { ...e, live: false, why: "you said it isn't triggered" };
-    if ((overrides.rulesOn ?? []).includes(e.effect.name)) return { ...e, live: true, why: "you said it's triggered" };
-    if (e.effect.trigger === "on-use" || e.effect.trigger === "on-touch") {
-      const source = e.sourceName;
-      const usedNow = [...reading.used].find((u) => source && (u === source || isInside(u, source, parentOf) || isInside(source, u, parentOf)));
-      return usedNow ? { ...e, live: true, why: `the moment uses ${usedNow}` } : { ...e, live: false, why: `nobody uses ${source ?? "its source"} in this moment` };
-    }
-    return { ...e, live: true, why: `it reaches ${e.targets.join(", ")}` };
-  });
-
-  // Each entity's role in this moment, from everything the records say about it (profiles.ts).
-  // Who may act directly follows: NPCs, factions and items that are here and free to act.
-  const profiles = buildProfiles({ entities, relations: world.relations, party, presence, holders, parentOf, reading, away, effects, threads: world.threads, threadEntities: world.threadEntities });
-  const here = new Set([...profiles.values()].filter((p) => p.role === "here" && p.entity.type !== "location" && p.entity.status !== "captured" && p.entity.status !== "missing").map((p) => p.entity.name));
-
-  return { world, moment, reading, entities, pcs, party, presence, why, profiles, here, contacted, acting, holders, parentOf, lost, effects, notes, fixes, stated };
+  return {
+    world,
+    moment,
+    reading,
+    view,
+    entities,
+    pcs,
+    party,
+    presence: (e) => presenceOfRow(e).where,
+    why: (e) => presenceOfRow(e).why,
+    profiles,
+    here,
+    contacted,
+    acting,
+    holders,
+    parentOf,
+    lost,
+    effects,
+    notes: view.notes,
+    fixes,
+    stated: view.stated,
+  };
 }
 
 // What the page shows under the box: only what this moment involves, each with why and whether

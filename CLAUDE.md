@@ -411,7 +411,23 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
       - `src/core/world/` holds `nodes.ts`, `links.ts` (link laws and 27 thread roles, open-ended) and `load.ts` (`loadGraph`).
       - `npm run test:world -- 3 --report` passes on the sample campaign and Duradan.
       - **Finding:** the data is thin. Duradan has 0 of 18 characters with mood or goals, 0 of 32 threads with stakes, and every thread link is "involved". An enrichment pass should fill these before Stage 3.
-    - [ ] Stage 2: the engine's questions on the graph (replaces the scene model's internals and the profiles).
+    - **Enriched test copy** (25 Oct, Jacob's request). `scripts/copy-campaign.ts` copies a campaign's world. "Duradan (enriched test copy)" (campaign 12) was filled by `scenarios/private/duradan-enrichment.ts`: moods, health, ranked goals, beliefs, item holders, places, stakes levels on all 32 threads, and 93 thread roles. The real Duradan is untouched. Migration `0011` added `thread_entities.role` and `secret`, `threads.stakes_level`, and the traits `mood`, `goals` and `beliefs`. Scenario file: `scenarios/private/duradan-copy.json`.
+    - [x] **Stage 2: the engine's questions on the graph** (`src/core/world/engine.ts`).
+      - A `View` is the graph for one moment, with what the moment changes (conditions, items in hand, a place it moves to) and the GM's corrections.
+      - Questions: `presenceOf` (here / reachable / remembered / player, with where and why), `holdersOf` (direct, through a set, or through a piece), `capabilities`, `liveRules`, `threadsOf` (a node's roles in threads), `heat` (stakes, recency, progress, deadline; flags ripe threads), and `profileOf`/`profileLine`.
+      - `situation.ts` is now the engine's answers in the shapes the rest of Loom reads (`loadWorld` also loads the graph), and `profiles.ts` is gone.
+      - The scene prompt lists each entity with its standing, mood, goals, beliefs, holdings and its roles in threads (e.g. `key in "Khayiulad's soul trapped in the reality crack" (ripe)`).
+      - A captured or missing PC is still the players' but not with the party, so what they hold isn't here.
+      - **Measured (Haiku, the 10 Duradan scenario moments):**
+
+        | | Dropped | Avg latency | Cost |
+        |---|---|---|---|
+        | Real Duradan | 6 | 8.3 s | $0.020 |
+        | Enriched copy | 3 | 8.4 s | $0.022 |
+
+        The enriched options use the data: the Wand at Khayiulad's belt, the Shard in Iresia's hands, the Monk figurine sensing a soul (its "key" role), Darius's unidentified potions. Sample campaign, 16 calls: 0.38 rejected per call, 2.94 options per call.
+      - **Left for Stage 3:** Tomas is in almost every option (the only NPC with the party, so the model's default); missing articles ("Monk figurine hums"); a check where a save fits ("a Wisdom check against the figurine's pull").
+      - 149/149 crafted, 25/25 adversarial, 18/18 reading rules, and the world tests on Duradan and the copy all pass.
     - [ ] Stage 3: plans and slots for improv.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
