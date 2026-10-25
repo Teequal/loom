@@ -1,8 +1,9 @@
 import { z } from "zod";
-import { FLAVOURS, adoptHand, handText, checkOption, contextPrompt, fitToMove, liveRulesOf, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
+import { APPROACH_SKILLS, FLAVOURS, adoptHand, handText, type Approach, checkOption, contextPrompt, fitToMove, liveRulesOf, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
 import { callLlm, type LlmResult } from "./llm";
 import { db, schema } from "./db/client";
 import { PILLARS } from "./db/schema";
+import { deltasOf, taggedNames, untag } from "./deltas";
 import { findMoves, moveKey, type Move, type Steer } from "./moves";
 import { planSlips } from "./plan-agency";
 import { fillSlots, pcOpensClause } from "./slots";
@@ -17,11 +18,11 @@ import type { Overrides } from "./situation";
 // step is here in the next, and an item handed over stays handed over.
 
 export const STEER_TEXT: Record<Steer, string> = {
-  fight: "a fight. Build toward one: earlier steps raise the tension, and the last step is the moment it breaks out (pillar combat), with who is fighting and where.",
+  fight: "a fight. The steps raise the tension toward it: someone squares up, blades come out, there's a last chance to back down. Don't write the attack itself: name who attacks in foes (one of the list, or \"walk-ons\" with foes_desc a few words like \"three Red Hand bandits\"), and code writes the moment it breaks out.",
   heartfelt: "a heartfelt moment. A personal beat for a player character: their condition, a bond, someone who matters to them, a callback. Low on action.",
   epic: "an epic scene. Big and cinematic: threads colliding, high stakes, one striking image, still built only from what's established.",
   grounded: "grounded. Plain, plausible consequences of what's established: no sudden magic, nobody new arriving.",
-  quiet: "a quiet moment. Downtime the table can breathe in: small talk, a small kindness, a clue noticed in passing.",
+  quiet: "a quiet moment. Downtime the table can breathe in: small talk, a small kindness, a clue noticed in passing. Nobody new arrives and nothing threatens them.",
   story: "tie to the story. Move the threads toward where the GM wants the story to go, and pay something off.",
 };
 
@@ -79,6 +80,7 @@ export interface ChainInput {
   model?: string;
   overrides?: Overrides;
   refine?: Refine; // rework a chain in place instead of writing new ones
+  turn?: Hand | null; // the players' turn the choice ended on, from its scaffold (undefined: read it from the text)
   onStep?: (index: number, step: ChainStep, n: number) => void; // each step as soon as it's written and checked
   onChain?: (c: Chain, index: number) => void; // each chain once complete: its title, headline and why
   onDrop?: (index: number) => void; // a chain whose steps were shown turned out unusable
@@ -115,7 +117,7 @@ function towardDirection(p: Prepared) {
   return new Set(p.threads.filter((t) => (`${t.title} ${t.summary}`.toLowerCase().match(/[a-z']{5,}/g) ?? []).some((w) => words.has(w))).map((t) => t.id));
 }
 
-function chainSchema(p: Prepared, moves: Move[], turn: Hand | null) {
+function chainSchema(p: Prepared, moves: Move[], turn: Hand | null, foes?: string[]) {
   // Kind "npc" offers only who's here: someone away can only arrive or act from afar, and once
   // they've arrived their later lines stay kind "arrival" (rendered the same: name, then what they do).
   const lists = { moves: moves.map((m) => m.id), threads: p.threads.map((t) => `T${t.id}`), nameable: p.lists.nameable, npcActors: p.lists.npcActors, absentActors: p.lists.absentActors, outcomeActors: p.lists.outcomeActors, handOff: p.lists.handOff, pcs: p.lists.pcs, mechanics: p.lists.mechanics, moments: p.callbacks.map((m) => `M${m.id}`) };
@@ -127,7 +129,9 @@ function chainSchema(p: Prepared, moves: Move[], turn: Hand | null) {
   // (Two step shapes made the format too large for the API to compile, so the first step's outcome
   // is its own small field on the chain, and the first step's own "after" is set from it.)
   const Chain = z.object({ move, thread, also_ties_to: z.array(thread), refs, opens_on: z.enum(opening), opens_if: z.string(), steps: z.array(step(["success", "failure", "first", "second", "any"])), label: z.string(), headline: z.string(), why: z.string(), flavour: z.enum(FLAVOURS), pillar: z.enum(PILLARS), callback: z.string() });
-  return { Schema: z.object({ chains: z.array(Chain) }), Chain };
+  // A fight chain says who attacks: someone the engine counts as hostile, or an unnamed group.
+  const Fight = foes ? Chain.extend({ foes: z.enum(["walk-ons", ...foes]), foes_desc: z.string() }) : Chain;
+  return { Schema: z.object({ chains: z.array(Fight) }), Chain: Fight };
 }
 // Words of four letters or more: what a sentence is about.
 const content = (t: string) => (t.toLowerCase().match(/[a-z']{4,}/g) ?? []).filter((w) => !/^(?:that|this|with|from|into|their|there|they|them|then|over|your|what|when|while|have|been|were|will|just)$/.test(w));
@@ -175,17 +179,21 @@ export class StepRunner {
   ended = false;
   private present: Set<string>;
   private holders: Map<string, Set<string>>;
+  private named = new Set<string>(); // everyone and everything the chain (and the choice) has named so far
+  private said: string[] = []; // what the choice and the steps so far say, for what a turn may ask about
   constructor(
     private p: Prepared,
     private head: RawHead,
     private move: Move | undefined,
     private label: string,
-    private fightAt: number | null, // the step that breaks into a fight, for a fight chain
+    private steer: Steer | null, // what the GM asked for: some steers are requirements (see take)
     private log: { label: string; reason: string }[],
     private prevHand: Hand | null, // the players' turn the GM's choice ended on
     private base = "", // the GM's choice as written
   ) {
     this.firstHand = prevHand;
+    for (const n of taggedNames(p.lists.tagger.tag(base))) this.named.add(n);
+    this.said.push(base);
     this.present = new Set(p.lists.check.present);
     this.holders = new Map([...p.lists.check.possession.holders].map(([k, v]) => [k, new Set(v)]));
   }
@@ -237,6 +245,19 @@ export class StepRunner {
     });
     if (here.length) o.setup = here;
     else return void this.end(`step ${n + 1}: nobody left to act`);
+    // Some steers are requirements, not just leanings: in a grounded or quiet chain nobody new
+    // arrives, and a quiet one has no danger to roll against.
+    if (this.steer === "grounded" || this.steer === "quiet") {
+      const calm = o.setup.filter((b) => !((b.kind === "arrival" || b.kind === "remote") && b.actor !== "walk-on" && b.actor !== "world"));
+      if (calm.length < o.setup.length) this.log.push({ label: this.label, reason: `step ${n + 1}: sentence dropped: nobody new arrives in a ${this.steer} chain` });
+      if (calm.length) o.setup = calm;
+      else return void this.end(`step ${n + 1}: only an arrival, in a ${this.steer} chain`);
+    }
+    if (this.steer === "quiet" && o.hand && ["attack", "save"].includes(o.hand.kind)) {
+      o.hand = { kind: "question", to: o.hand.to };
+      o.hand_off = { to: o.hand.to, ...handText(o.hand) };
+      o.on_fail = { target: "none", effect: "" };
+    }
     // A step that asks again for the roll its choice already asked for ("Everyone makes an
     // Investigation check…" twice) hands the turn to the same players as a question instead.
     const first = this.firstHand;
@@ -250,11 +271,61 @@ export class StepRunner {
       o.on_fail = { target: "none", effect: "" };
       this.log.push({ label: this.label, reason: `step 1: repeated the choice's ${sameRoll ? "roll" : "question"}; asked what they do instead` });
     }
+    // A check after a choice holds to how the chosen side is done: "talk her round" is a talking
+    // skill, "climb the wall" a physical one.
+    const prev = this.prevHand;
+    const approach = prev?.kind === "choice" ? (raw.after === "second" ? prev.or_approach : raw.after === "first" ? prev.approach : undefined) : undefined;
+    const skills = approach ? (APPROACH_SKILLS[approach as Approach] ?? []) : [];
+    if (o.hand && skills.length && (o.hand.kind === "check" || o.hand.kind === "contest" || o.hand.kind === "attack") && !skills.includes(o.hand.skill ?? "")) {
+      if (o.hand.kind !== "attack" || !["force", "magic", "item"].includes(approach!)) {
+        this.log.push({ label: this.label, reason: `step ${n + 1}: ${o.hand.kind} held to the chosen approach (${approach}: ${skills[0]})` });
+        o.hand = { ...o.hand, kind: o.hand.kind === "attack" ? "check" : o.hand.kind, skill: skills[0], ability: "none" };
+        o.hand_off = { to: o.hand.to, ...handText(o.hand) };
+      }
+    }
+    // A turn can only be about what's been set up: someone or something the choice or the steps
+    // have named, or words they've used. Otherwise it's a plain "what do you do?".
+    const stepNames = new Set([...this.named, ...o.setup.flatMap((b) => [b.actor, ...taggedNames(t0.tag(b.does))]), ...this.present, ...this.p.lists.pcs]);
+    const stepWords = new Set(content([...this.said, ...o.setup.map((b) => untag(t0.tag(b.does)))].join(" ")));
+    if (o.hand?.what) {
+      const strangers = taggedNames(t0.tag(o.hand.what)).filter((x) => !stepNames.has(t0.entityOf(x)?.name ?? x));
+      // The two sides of a choice are what the players might do, so they're new by nature: only
+      // their names are held to what's been set up.
+      const words = o.hand.kind === "choice" ? [] : content(untag(t0.tag(o.hand.what)));
+      if (strangers.length || (words.length >= 2 && !words.some((w) => stepWords.has(w)))) {
+        this.log.push({ label: this.label, reason: `step ${n + 1}: the turn asked about something not set up (${strangers.join(", ") || untag(o.hand.what)})` });
+        o.hand = o.hand.kind === "choice" ? { kind: "question", to: o.hand.to } : { ...o.hand, what: "" };
+        o.hand_off = { to: o.hand.to, ...handText(o.hand) };
+      }
+    }
     const reason = checkOption(o, ctx);
     if (reason) return void this.end(`step ${n + 1}: ${reason}`);
 
-    const isFight = this.fightAt != null && n + 1 >= this.fightAt;
-    const step: ChainStep = { when: this.when(raw), text: renderOption(o, t0), to: o.hand_off.to, needs: isFight ? "fight" : o.hand_off.kind === "roll" ? "roll" : null, scaffold: o };
+    // No two steps open on the same condition ("If they deal with the guards" twice).
+    let when = this.when(raw);
+    if (when && when !== "Then:" && this.steps.some((x) => x.when === when)) when = "Then:";
+    const step: ChainStep = { when, text: renderOption(o, t0), to: o.hand_off.to, needs: o.hand_off.kind === "roll" ? (this.steer === "fight" && o.hand?.kind === "attack" ? "fight" : "roll") : null, scaffold: o };
+    this.leaves(step);
+    return step;
+  }
+
+  /**
+   * A fight chain ends in a fight, written by code: who attacks is from the engine's list (or an
+   * unnamed group, in a few words), and everyone rolls initiative. Unless the last step already
+   * started it with an attack.
+   */
+  fightFinale(foes: string, desc: string): ChainStep | undefined {
+    if (this.ended || !this.steps.length) return;
+    const last = this.steps[this.steps.length - 1];
+    if (last.needs === "fight") return;
+    const t = this.p.lists.tagger;
+    const e = foes !== "walk-ons" ? t.entityOf(foes) : undefined;
+    const group = phrase(desc).split(/\s+/).slice(0, 6).join(" ");
+    const who = e ? `{${e.name}} ${e.type === "faction" ? "attack" : "attacks"}` : group ? `${group.charAt(0).toUpperCase()}${group.slice(1)} attack` : "";
+    if (!who) return;
+    const prev = this.prevHand;
+    const scaffold = { ...this.head, label: this.label, setup: [{ kind: "world", actor: "world", walk_on: "", does: `${who}.`, byCode: true }], hand: { kind: "attack", to: "table" }, hand_off: { to: "table", kind: "roll", mechanic: "none", text: "Everyone rolls initiative." }, on_fail: { target: "none", effect: "" }, why: "" } as ScaffoldOption;
+    const step: ChainStep = { when: prev && ROLLS.has(prev.kind) ? "On a failure:" : "Then:", text: `${t.render(`${who}.`)} Everyone rolls initiative.`, to: "table", needs: "fight", scaffold };
     this.leaves(step);
     return step;
   }
@@ -266,17 +337,15 @@ export class StepRunner {
 
   // The world as a step leaves it: who has arrived, who holds what, whose turn it is.
   private leaves(step: ChainStep) {
-    const o = step.scaffold;
     const t = this.p.lists.tagger;
-    for (const b of o.setup) if (b.kind === "arrival" && b.actor !== "walk-on" && b.actor !== "world") this.present.add(b.actor);
-    for (const b of o.setup) {
-      // An item handed over ("tosses the {X} to {Y}") stays with its new holder.
-      for (const m of t.tag(b.does).matchAll(/\{([^}|]+)(?:\|[^}]*)?\}[^{]{0,40}?\bto\s+\{([^}|]+)(?:\|[^}]*)?\}/g)) {
-        if (t.entityOf(m[1])?.type === "item") this.holders.set(m[1], new Set([m[2]]));
-      }
-    }
+    const d = deltasOf(step.scaffold, (n) => t.entityOf(n)?.type === "item");
+    for (const a of d.arrivals) this.present.add(a);
+    // An item handed over ("tosses the {X} to {Y}") stays with its new holder.
+    for (const h of d.handovers) this.holders.set(h.item, new Set([h.to]));
+    for (const b of step.scaffold.setup) for (const x of [b.actor, ...taggedNames(b.does)]) if (x && x !== "world" && x !== "walk-on") this.named.add(t.entityOf(x)?.name ?? x);
+    this.said.push(step.text);
     this.steps.push(step);
-    this.prevHand = o.hand ?? null;
+    this.prevHand = step.scaffold.hand ?? null;
   }
 
   private end(reason: string) {
@@ -343,8 +412,11 @@ export async function developChain(campaignId: number, input: ChainInput) {
   // the last kept step ended on, so only they are asked for.
   const keep = refine?.fromStep != null ? refine.chain.steps.slice(0, refine.fromStep) : [];
   const lastKept = keep[keep.length - 1];
-  const turn = lastKept ? (lastKept.scaffold.hand ?? null) : choiceHand(input.text, p.lists.pcs);
-  const { Schema, Chain } = chainSchema(p, moves, turn);
+  // The turn the choice ended on: from its scaffold when Loom built it, else read from its sentence.
+  const turn = lastKept ? (lastKept.scaffold.hand ?? null) : input.turn !== undefined ? input.turn : choiceHand(input.text, p.lists.pcs);
+  // Who could start a fight: hostile or unfriendly characters and factions within reach, alive.
+  const foes = steer === "fight" ? p.scene.entities.filter((e) => (e.type === "npc" || e.type === "faction") && ["hostile", "unfriendly"].includes(e.attitude ?? "") && e.status !== "dead" && p.lists.nameable.includes(e.name)).map((e) => e.name) : undefined;
+  const { Schema, Chain } = chainSchema(p, moves, turn, foes);
   const StepSchema = Chain.shape.steps.element;
   const sized = stepsFor(input);
   const steps = keep.length ? { ...sized, max: Math.max(1, sized.max - keep.length), text: `STEPS: ${Math.max(1, sized.max - keep.length)} new step${sized.max - keep.length > 1 ? "s" : ""} after the kept ones, each 1-2 beats, under 35 words.` } : refine && refine.how !== "shorter" ? { ...sized, text: `STEPS: ${refine.chain.steps.length} steps, as now, each 1-2 beats, under 35 words.` } : sized;
@@ -391,7 +463,7 @@ ${!turn ? 'None: opens_on is "start".' : ROLLS.has(turn.kind) ? 'The roll above.
   type Head = RawHead & { opens_on: string; opens_if: string };
   const startRun = (index: number, head: Head) => {
     const move = moves.find((m) => m.id === head.move);
-    const run = new StepRunner(p, head, move, `chain ${index + 1}`, steer === "fight" ? steps.max : null, log, turn, input.text);
+    const run = new StepRunner(p, head, move, `chain ${index + 1}`, steer, log, turn, input.text);
     for (const st of keep) run.keep(st);
     const l: Live = { run, used: 0, move, dropped: false };
     live.set(index, l);
@@ -426,6 +498,11 @@ ${!turn ? 'None: opens_on is "start".' : ROLLS.has(turn.kind) ? 'The roll above.
     const c = parsed.data as unknown as Head & { steps: RawStep[]; label: string; headline: string; why: string; flavour: string; callback: string };
     l ??= startRun(index, c);
     feed(index, l, c, c.steps);
+    if (steer === "fight") {
+      const f = c as unknown as { foes?: string; foes_desc?: string };
+      const fin = l.run.fightFinale(f.foes ?? "walk-ons", f.foes_desc ?? "");
+      if (fin && index < count) input.onStep?.(index, fin, l.run.steps.length - 1);
+    }
     if (!l.run.steps.length || index >= count) return;
     const { run, move } = l;
     const t = p.lists.tagger;

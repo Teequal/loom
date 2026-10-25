@@ -54,11 +54,27 @@ const SKILL_ABILITY: Record<string, (typeof ABILITIES)[number]> = {
   Acrobatics: "Dexterity", "Animal Handling": "Wisdom", Arcana: "Intelligence", Athletics: "Strength", Deception: "Charisma", History: "Intelligence", Insight: "Wisdom", Intimidation: "Charisma", Investigation: "Intelligence",
   Medicine: "Wisdom", Nature: "Intelligence", Perception: "Wisdom", Performance: "Charisma", Persuasion: "Charisma", Religion: "Intelligence", "Sleight of Hand": "Dexterity", Stealth: "Dexterity", Survival: "Wisdom",
 };
+// How each side of a choice is done, so what follows can hold to it: a check after "talk her
+// round" is a talking skill, not Athletics.
+export const APPROACHES = ["talk", "force", "sneak", "study", "magic", "item", "move", "wait"] as const;
+export type Approach = (typeof APPROACHES)[number];
+export const APPROACH_SKILLS: Record<Approach, string[]> = {
+  talk: ["Persuasion", "Deception", "Intimidation", "Insight", "Performance"],
+  force: ["Athletics"],
+  sneak: ["Stealth", "Sleight of Hand", "Acrobatics"],
+  study: ["Investigation", "Arcana", "History", "Nature", "Religion", "Medicine", "Perception", "Insight", "Survival"],
+  magic: ["Arcana", "Religion", "Nature"],
+  move: ["Acrobatics", "Athletics", "Survival"],
+  item: [],
+  wait: ["Perception", "Insight"],
+};
 export type Hand = {
   kind: "question" | "choice" | "check" | "contest" | "attack" | "notice" | "save" | "rule" | "death_save";
   to: string;
   what?: string; // what they face (question), the first choice, what they're up against, or what a notice roll is about
   or?: string; // the second choice
+  approach?: string; // how the first choice is done (APPROACHES), for a choice
+  or_approach?: string; // how the second is done
   ability?: string;
   skill?: string;
   mechanic?: string;
@@ -141,10 +157,10 @@ Each option is a scaffold:
   - "walk_on": an unnamed extra. actor "walk-on", walk_on describes them ("a nervous merchant"), does is what they do.
   - "arrival": a character who isn't here arrives ("bursts through the door, breathless").
   - "remote": a character who isn't here acts from afar ("sends a runner with a sealed note").
-  - "happens": what a PC feels, chosen from parts: pc, part (a body part, or "none" for all of them), sense, and cause (a short noun phrase: "the river's cold grip", "the figurine's pull"). Code writes it ("Bram's chest aches: the river's cold grip").
+  - "happens": what a PC feels, chosen from parts: pc, part (a body part, or "none" for all of them), sense, and cause (a thing or force in at most 5 words: "the river's cold grip", "the figurine's pull"; never a thought or a feeling). Code writes it ("Bram's chest aches: the river's cold grip").
 - hand: how the players get involved, chosen in parts; code writes the sentence. to is a PC or "table". Fill only the fields its kind uses, and leave the others "" (or "none"). Pick the kind:
   - "question": ask what they do. what is a short noun phrase for what they're facing ("the heckling patron"), or "".
-  - "choice": offer two clear choices: what and or are short verb phrases a player would say ("write a note", "wave him off").
+  - "choice": offer two clear choices: what and or are short verb phrases a player would say ("write a note", "wave him off"), and approach and or_approach say how each is done: talk, force, sneak, study, magic, item, move or wait. For other kinds, approach and or_approach are "wait".
   - "check" or "contest": only for a PC doing what their player declared in this moment. Pick the ability and skill (or "none"); what is who or what they're up against ("the captain", "the current"), or "".
   - "attack": only for a PC who declared an attack. what is the target.
   - "notice": a perception or knowledge check (Perception, Insight, Investigation, Arcana, History…), for anyone or the table. what is a noun phrase for what it's about ("what's bobbing in the current", "the sigil on the crates").
@@ -201,6 +217,8 @@ export function scaffoldParts(lists: SchemaLists) {
     to: z.enum(nonEmpty(["table", ...lists.handOff], "table")),
     what: z.string(),
     or: z.string(),
+    approach: z.enum(APPROACHES),
+    or_approach: z.enum(APPROACHES),
     ability: z.enum(["none", ...ABILITIES]),
     skill: z.enum(SKILLS),
     mechanic: z.enum(nonEmpty(["none", ...lists.mechanics], "none")),

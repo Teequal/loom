@@ -55,7 +55,7 @@ export async function POST(request: Request) {
           result.options.map((o) => {
             const { threads: _t, ...shown } = card(o, titleOf);
             void _t;
-            return { ...shown, threadIds: [o.thread_id, ...o.also_ties_to] };
+            return { ...shown, threadIds: [o.thread_id, ...o.also_ties_to], scaffold: o.scaffold };
           }),
         );
         send({

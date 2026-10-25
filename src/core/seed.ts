@@ -25,8 +25,8 @@ export async function seedFixture() {
   const ent = await db
     .insert(schema.entities)
     .values([
-      { campaignId, name: "Bram", type: "pc", aliases: ["the immortal guy"], description: "Reckless fighter. Played by Sam." },
-      { campaignId, name: "Kira", type: "pc", aliases: [], description: "Sharp-tongued rogue, used to doing the talking. Played by Alex." },
+      { campaignId, name: "Bram", type: "pc", aliases: ["the immortal guy"], description: "Reckless fighter. Played by Sam.", traits: { gender: "male" } },
+      { campaignId, name: "Kira", type: "pc", aliases: [], description: "Sharp-tongued rogue, used to doing the talking. Played by Alex.", traits: { gender: "female" } },
       { campaignId, name: "Mother Ysolde", type: "npc", aliases: ["the alchemist", "Ysolde"], description: "Cheerful, shifty alchemist in Thornbridge market." },
       { campaignId, name: "Thornbridge", type: "location", aliases: [], description: "River town held hostage by bandits at the bridge." },
       { campaignId, name: "The Red Hand", type: "faction", aliases: ["the bandits"], description: "Bandits controlling the bridge toll." },

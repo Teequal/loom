@@ -93,6 +93,8 @@ The model writes one sentence per planned beat. It can't add an actor, an object
 
 ## 6. Roadmap
 
+**Status (26 Oct):** items 1–8 are built and covered by crafted checks (203/203); see CLAUDE.md, "Engine gaps 1–8". Nothing is measured live yet (no API credit).
+
 Ordered by gain for effort. Items marked *code only* can be built and covered by crafted checks without API credit; measuring them needs credit.
 
 1. **Keep the scaffold on logged options and steps** (*code only*). Store the hand (kind, sides, target), the move, the cast and each beat's kind, actor and references on `LiveOption` and on branch entries. Develop reads the turn from data, which retires `choiceHand`'s regex, and the View starts from the choice's real effects.

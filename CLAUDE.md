@@ -527,6 +527,19 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - **Proposed:** Develop on Sonnet by default (Opus when the table is on Best); a stall timeout with one retry on every call.
         - Waiting for Jacob's own ticks.
       - [ ] Step 5: docs.
+    - **Engine gaps 1–8** (26 Oct; analysis in [docs/review-2026-10-26-engine-gaps.md](docs/review-2026-10-26-engine-gaps.md); built without API credit, so nothing here is measured live yet).
+      1. **Scaffolds are kept.** Each logged option keeps its `ScaffoldOption` (`LiveOption.scaffold`), and chain steps already keep theirs. `scaffoldFor(entry)` (`live.ts`) finds it for an option, or for a step on the chain it came from. `deltasOf` (`src/core/deltas.ts`) reads what it changes: arrivals, hand-overs, its threads. Develop's `chainBase` takes the turn and the arrivals and hand-overs from it (`turn`, `overrides`); `choiceHand`'s regex is only the fallback.
+      2. **A used option or step applies its own changes.** `directProposal` builds the proposal from the deltas (thread progressed, who arrived placed where the party is, items to their new holder) and sends it through the same review, apply and undo as an extraction. Measured through `/api/live/choice`: done in under 3 s with 0 model calls, and Take back reverses it. The GM's own text, notes and results are still extracted (Sonnet). Options logged before this change have no scaffold, so they're still extracted. Trade-off: anything new that appears only in the prose (a named walk-on) isn't added.
+      3. **Sensation causes are things, not thoughts.** `causeOf` drops a cause of more than 6 words or one with clause words ("that", "he", "never", "feels", "certain"…). The whole-body form reads "Bram's whole body tingles: the crossbow's aim" (it was "Bram feels…", which let B20 and B05 through).
+      4. **Pronouns** (`src/core/pronouns.ts`): from the gender trait, a title in the name ("Mother", "Sir"), or the description's own words; otherwise unknown, never guessed from a name. "she" or "he" now resolves to the last named character it could stand for. A character named as owner in their own sentence reads "her own" or "his own" (`ownPossessive`). Genders are set on the sample campaign's PCs and on the enriched copy; real Duradan has none yet (`entity set "<name>" gender=female`).
+      5. **A ledger of what's set up** (`StepRunner`): a turn may only ask about someone the choice or the chain has named, or use words they've used. Otherwise it becomes "what do you do?" (B42). No two steps open on the same condition (B21).
+      6. **Choice sides are typed:** `approach` and `or_approach` (talk, force, sneak, study, magic, item, move, wait). A check after a side holds to that side's skills (B29); an attack after a talking side becomes a check.
+      7. **Stall timeout:** a streamed call silent for 30 s is aborted (`LOOM_STALL_MS`), so the caller's retry runs; a non-streamed call times out at 120 s with one retry (`LOOM_CALL_TIMEOUT_MS`). Tested against a local server that never answers.
+      8. **Steers as requirements:**
+         - Grounded and quiet chains drop named arrivals; quiet turns a save or an attack into a question.
+         - A fight chain names who attacks (`foes`: hostile or unfriendly characters and factions within reach, or "walk-ons" with a few words). Code writes the final step: "Three Red Hand bandits attack. Everyone rolls initiative." It's marked as a fight, unless the last step already opened with an attack.
+      - 19 new crafted checks (203/203); the engine, world and adversarial suites pass.
+      - **To measure when credit is back:** Jacob's ticks on blind run 1; a rerun of the 8 × 6 set to see how far 3–8 close the gaps, especially on Haiku; and how often direct changes miss something an extraction would have caught.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

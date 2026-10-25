@@ -1,3 +1,4 @@
+import { couldBe, pronounsOf } from "./pronouns";
 import type { ScaffoldBeat, Tagger } from "./scaffold";
 
 // Typed slots (docs/design-2026-10-25-world-model.md §7). The model never writes a sentence with a
@@ -58,24 +59,27 @@ export function pcOpensClause(tagged: string, tagger: Tagger, except?: string): 
   // - after a comma, a phrase with no subject of its own: one opening on an -ing word, or a body
   //   part with no verb of its own ("…, one hand braced"). (A phrase opening on an -ing word
   //   belongs to the sentence's subject, which isn't always the last name: not read.)
-  const lastBefore = (at: number) => {
+  // With pronouns known, "she" stands for the last named character she could be ("…eyes Bram,
+  // and she…" is the guard, not Bram); unknown pronouns fall back to the last name.
+  const lastBefore = (at: number, word?: string) => {
     const named = [...tagged.slice(0, at).matchAll(/\{([^{}|]+)(?:\|[^{}]*)?\}/g)].map((x) => tagger.entityOf(x[1])).filter((e) => e?.type === "pc" || e?.type === "npc");
-    return named[named.length - 1];
+    const fits = word ? named.filter((e) => couldBe(word, pronounsOf(e!))) : named;
+    return fits[fits.length - 1];
   };
   const say = (who: string, at: number) => `${who} does something, through a word standing for them ("…${tagger.render(tagged.slice(at, at + 40)).trim()}…")`;
   const offsets = (re: RegExp) => [...tagged.matchAll(re)].map((m) => ({ m, at: m.index ?? 0 }));
   for (const { m, at } of offsets(/\b(he|she|they)\b(?!['’])/gi)) {
     if (!CLAUSE_START.test(tagger.render(tagged.slice(0, at)).trimEnd())) continue;
-    const who = lastBefore(at);
+    const who = lastBefore(at, m[1]);
     if (who?.type === "pc" && who.name !== except) return `${who.name} opens a clause, as if doing something ("…${m[0]} ${tagger.render(tagged.slice(at + m[0].length, at + 40)).trim()}…")`;
   }
-  for (const { m, at } of offsets(/\b(?:his|her|their)\s+(\w+)(?:\s+(\w+))?/gi)) {
-    if (!(BODY.test(m[1]) || BODY.test(m[2] ?? "")) || !CLAUSE_START.test(tagger.render(tagged.slice(0, at)).trimEnd())) continue;
-    const who = lastBefore(at);
+  for (const { m, at } of offsets(/\b(his|her|their)\s+(\w+)(?:\s+(\w+))?/gi)) {
+    if (!(BODY.test(m[2]) || BODY.test(m[3] ?? "")) || !CLAUSE_START.test(tagger.render(tagged.slice(0, at)).trimEnd())) continue;
+    const who = lastBefore(at, m[1]);
     if (who?.type === "pc" && who.name !== except) return say(who.name, at);
   }
-  for (const { at } of offsets(/\b(?:himself|herself|themselves|themself)\b/gi)) {
-    const who = lastBefore(at);
+  for (const { m, at } of offsets(/\b(?:himself|herself|themselves|themself)\b/gi)) {
+    const who = lastBefore(at, m[0]);
     if (who?.type === "pc" && who.name !== except) return say(who.name, at);
   }
   for (const { m, at } of offsets(/,\s+(?:one|a|both|his|her|their)\s+(?:\w+\s+)?(\w+)\s+(\w+ed|\w+ing)\b/gi)) {
@@ -119,10 +123,33 @@ export function expand(text: string, refs: Ref[], tagger: Tagger): { tagged: str
   return { tagged: named, problem };
 }
 
+// What a cause may be: a thing or a force, in a few words ("the river's cold grip", "the
+// figurine's pull"). A clause can carry a thought or a feeling ("the certainty that no blade can
+// touch him", "the fear he has never admitted to"), so a cause that reads as one is left out.
+const CLAUSE_WORDS = /\b(?:that|who|whom|whose|which|he|she|they|him|them|i|we|you|never|ever|feels?|felt|fears?|certain(?:ty)?|believes?|knows?|thinks?|wants?|hopes?|wonders?|remembers?|admit(?:s|ted)?|is|are|was|were|has|have|had|will|would|can|could|should|must)\b/i;
+export function causeOf(cause: string, refs: Ref[], tagger: Tagger): string {
+  const c = cause.trim().replace(/[.!]+$/, "");
+  if (!c) return "";
+  const tagged = expand(c, refs, tagger).tagged;
+  const words = tagger.render(tagged).split(/\s+/).filter(Boolean);
+  return words.length <= 6 && !CLAUSE_WORDS.test(tagger.render(tagged)) ? tagged : "";
+}
+
+/**
+ * A character named as owner inside their own sentence ("{Mother Ysolde} wipes {Mother Ysolde}'s
+ * hands") reads "her own hands", from their pronouns ("their own" when unknown).
+ */
+export function ownPossessive(actor: string, tagged: string, tagger: Tagger): string {
+  const e = tagger.entityOf(actor);
+  if (!e || (e.type !== "npc" && e.type !== "pc")) return tagged;
+  const own = pronounsOf(e)?.own ?? "their own";
+  return tagged.replace(/\{([^{}|]+)(?:\|[^{}]*)?\}['’]s\b/g, (whole, n: string) => (tagger.entityOf(n.trim())?.name === e.name ? own : whole));
+}
+
 /** A "happens" beat as a sentence, written by code. */
 export function renderHappens(h: Happens, refs: Ref[], tagger: Tagger): string {
-  const cause = h.cause.trim() ? expand(h.cause.trim().replace(/[.!]+$/, ""), refs, tagger).tagged : "";
-  if (h.part === "none") return cause ? `{${h.pc}} feels ${cause}.` : `A shiver runs through {${h.pc}}.`;
+  const cause = causeOf(h.cause, refs, tagger);
+  if (h.part === "none") return `{${h.pc}}'s whole body ${h.sense}${cause ? `: ${cause}` : ""}.`;
   // "eyes burn", "palm burns": the sensation agrees with the part.
   const plural = /^(?:hands|fingers|legs|eyes|ears|horns|scales)$/.test(h.part);
   const sense = plural ? PLURAL[h.sense] : h.sense;
@@ -150,7 +177,7 @@ export function fillSlots<O extends SlotOption>(o: O, tagger: Tagger): { option:
     }
     const r = expand(b.does, refs, tagger);
     if (r.problem) dropped.push(r.problem);
-    else setup.push({ ...b, does: r.tagged });
+    else setup.push({ ...b, does: ownPossessive(b.actor, r.tagged, tagger) });
   }
   if (!setup.length && dropped.length) problem = dropped[0];
   // A failure may move the PC who rolled; nobody else's PC.

@@ -1,6 +1,8 @@
 import { eq } from "drizzle-orm";
 import type { Chain, ChainStep } from "@/core/chain";
 import { db, schema } from "@/core/db/client";
+import { deltasOf } from "@/core/deltas";
+import { scaffoldFor } from "@/core/live";
 import type { Steer } from "@/core/moves";
 
 // Develop v2 on the table page: what a chain is developed from, and how chains are kept on the
@@ -45,6 +47,11 @@ export async function chainBase(entryId: number) {
     up = p.parentId;
   }
   const root = line[0];
+  // What the choice changed and the turn it ended on, from the engine's own scaffold when there is
+  // one (an option or a step), so nothing has to be read back out of the sentence.
+  const scaffold = await scaffoldFor(e);
+  const pcs = new Set((await db.select({ name: schema.entities.name, type: schema.entities.type }).from(schema.entities).where(eq(schema.entities.campaignId, e.campaignId))).filter((x) => x.type === "pc").map((x) => x.name));
+  const d = scaffold ? deltasOf(scaffold, () => true) : null;
   const before = line.slice(0, -1).map((x) => clip(`${x.choiceLabel ? `${x.choiceLabel}: ` : ""}${x.choice}`, 300)).filter((x) => x.trim());
   return {
     campaignId: e.campaignId,
@@ -52,6 +59,8 @@ export async function chainBase(entryId: number) {
     label: e.choiceLabel,
     text: e.choice || e.moment,
     from: e.choiceKind === "branch" || e.choiceKind === "result" ? ("step" as const) : ("option" as const),
+    turn: scaffold ? (scaffold.hand ?? null) : undefined,
+    overrides: d && (d.arrivals.length || d.handovers.length) ? { here: d.arrivals, away: [], inHand: d.handovers.filter((h) => pcs.has(h.to)).map((h) => ({ pc: h.to, item: h.item })), notInHand: [], rulesOn: [], rulesOff: [] } : undefined,
   };
 }
 

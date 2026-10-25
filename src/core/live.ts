@@ -1,7 +1,9 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
-import { applyProposal, numberItems, proposeRecapChanges, type ProposalFile } from "./recap";
+import { deltasOf, untag } from "./deltas";
+import type { ScaffoldOption } from "./improv";
+import { applyProposal, numberItems, proposeRecapChanges, type Proposal, type ProposalFile } from "./recap";
 import { reviewProposal, splitRisky } from "./review";
 import { undoBatch } from "./undo";
 
@@ -180,13 +182,60 @@ export function extractEntry(entryId: number) {
     .then(([e]) => (e ? queued(e.campaignId, () => runExtraction(e)) : undefined));
 }
 
+/**
+ * The engine's scaffold behind a logged choice: an improv option's (kept on the entry's options),
+ * or a Develop step's (kept on the chain it came from, on one of the entry's ancestors). Null for
+ * the GM's own text, notes and results.
+ */
+export async function scaffoldFor(e: Entry): Promise<ScaffoldOption | null> {
+  if (e.choiceKind === "option") return (e.options.find((o) => o.text === e.choice)?.scaffold as ScaffoldOption | undefined) ?? null;
+  if (e.choiceKind !== "branch") return null;
+  for (let up = e.parentId, hops = 0; up != null && hops < 10; hops++) {
+    const [a] = await db.select().from(schema.liveEntries).where(eq(schema.liveEntries.id, up));
+    if (!a) break;
+    for (const d of a.developments as { kind?: string; chains?: { steps: { when: string | null; text: string; scaffold: ScaffoldOption }[] }[] }[]) {
+      if (d?.kind !== "chain") continue;
+      for (const c of d.chains ?? []) for (const st of c.steps) if (`${st.when ? `${st.when} ` : ""}${st.text}` === e.choice) return st.scaffold;
+    }
+    up = a.parentId;
+  }
+  return null;
+}
+
+/**
+ * A scaffolded choice's changes as a proposal, built from its structure (deltas.ts), not read from
+ * its prose: the thread it moves, who arrives where the party is, which items change hands. It goes
+ * through the same review as an extraction, so risky changes still come up as questions.
+ */
+export async function directProposal(e: Entry, o: ScaffoldOption, text: string): Promise<Proposal> {
+  const ents = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, e.campaignId));
+  const [camp] = await db.select({ party: schema.campaigns.partyLocationId }).from(schema.campaigns).where(eq(schema.campaigns.id, e.campaignId));
+  const party = ents.find((x) => x.id === camp?.party)?.name ?? "";
+  const d = deltasOf(o, (n) => ents.some((x) => x.type === "item" && x.name === n));
+  // The quote for each change is the beat that makes it, as it reads in the log.
+  const quote = (name: string) => clip(untag(o.setup.find((b) => b.actor === name || b.does.includes(`{${name}`))?.does ?? e.choice), 110);
+  return {
+    entity_updates: party ? d.arrivals.map((name) => ({ name, status: "", attitude: "", importance: "", last_known_location: party, parent_location: "", traits: [], evidence: quote(name) })) : [],
+    relations: d.handovers.map((h) => ({ from: h.to, type: "holds", to: h.item, note: "", strength: 0, evidence: quote(h.item) })),
+    party_location: "",
+    party_evidence: "",
+    new_entities: [],
+    new_threads: [],
+    thread_updates: d.thread ? [{ thread: `T${d.thread}`, change: "progressed", note: clip(text.replace(/^The players: [^\n]*\nWhat happened: /, ""), 160), new_summary: "", evidence: clip(e.choice, 110) }] : [],
+    thread_links: [],
+    key_moments: [],
+  };
+}
+
 async function runExtraction(e: Entry) {
   try {
     // Undo what an earlier pick for this moment added, so changing your mind doesn't double up.
     if (e.batch) await undoBatch(e.campaignId, e.batch, { force: true });
     const text = `The players: ${e.moment}\nWhat happened: ${e.choice}`;
-    const res = await proposeRecapChanges(e.campaignId, text, undefined, { live: true });
-    const file: ProposalFile = await splitRisky({ kind: "live", campaignId: e.campaignId, sessionNumber: e.sessionNumber, recap: text, proposal: res.data });
+    // A choice Loom built applies its own changes; only the GM's own words need reading.
+    const scaffold = await scaffoldFor(e);
+    const proposal = scaffold ? await directProposal(e, scaffold, text) : (await proposeRecapChanges(e.campaignId, text, undefined, { live: true })).data;
+    const file: ProposalFile = await splitRisky({ kind: "live", campaignId: e.campaignId, sessionNumber: e.sessionNumber, recap: text, proposal });
     mkdirSync("data/proposals", { recursive: true });
     writeFileSync(proposalPath(e), JSON.stringify(file, null, 2));
     const reviewed = await reviewProposal(file);

@@ -285,6 +285,7 @@ export interface LiveOption {
   callback?: { id: number; title: string } | null;
   needs?: "roll" | "fight" | null;
   pillar?: string | null;
+  scaffold?: unknown; // the engine's scaffold for it (ScaffoldOption): what it changes, and the turn it ends on
 }
 export const liveEntries = sqliteTable("live_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),

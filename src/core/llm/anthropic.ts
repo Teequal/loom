@@ -60,6 +60,11 @@ export function outputFormat<T>(schema: z.ZodType<T>) {
 
 let client: Anthropic | undefined;
 
+// How long a streamed answer may go silent, and how long a whole non-streamed call may take,
+// before Loom gives up on it (the caller then retries or says so).
+const STALL_MS = Number(process.env.LOOM_STALL_MS ?? 30_000);
+const CALL_TIMEOUT_MS = Number(process.env.LOOM_CALL_TIMEOUT_MS ?? 120_000);
+
 // Models whose safety classifiers can (rarely) misfire on fantasy violence or magic. With
 // server-side fallback, a refused request is retried on a suitable model inside the same call.
 const SUPPORTS_FALLBACK = new Set(["claude-opus-5-5", "claude-sonnet-5-5"]);
@@ -93,9 +98,29 @@ export const anthropicProvider: LlmProvider = {
     if (req.onText || params.max_tokens > 16000) {
       const stream = client.beta.messages.stream(params);
       if (req.onText) stream.on("text", (_delta, snapshot) => req.onText!(snapshot));
-      response = await stream.finalMessage();
+      // A stream that goes quiet is aborted, so a dropped connection fails (and the caller's retry
+      // runs) instead of hanging the page. Any event, thinking included, counts as alive.
+      let stalled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const alive = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          stalled = true;
+          stream.abort();
+        }, STALL_MS);
+      };
+      alive();
+      stream.on("streamEvent", alive);
+      try {
+        response = await stream.finalMessage();
+      } catch (err) {
+        if (stalled) throw new Error(`The model stopped answering (nothing for ${STALL_MS / 1000} s)`);
+        throw err;
+      } finally {
+        clearTimeout(timer);
+      }
     } else {
-      response = await client.beta.messages.parse(params);
+      response = await client.beta.messages.parse(params, { timeout: CALL_TIMEOUT_MS, maxRetries: 1 });
     }
 
     if (response.stop_reason === "refusal") throw new Error("Model declined the request");

@@ -30,7 +30,7 @@ export const POST = streamRoute(
       exclude,
       model,
       tone,
-      overrides,
+      overrides: overrides ?? base.overrides,
       onStep: (index, step, n) => send({ type: "step", index, n, step: stepView(step) }),
       onChain: (chain, index) => send({ type: "chain", index, chain: chainView(chain) }),
       onDrop: (index) => send({ type: "drop", index }),
