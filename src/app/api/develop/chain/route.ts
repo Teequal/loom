@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { developChain } from "@/core/chain";
-import { STEERS } from "@/core/moves";
+import { STEERS, SURPRISES } from "@/core/moves";
 import { chainBase, chainView, keepChains, stepView } from "@/server/develop";
 import { overrides, streamRoute } from "@/server/route";
 
@@ -19,8 +19,9 @@ export const POST = streamRoute(
     model: z.enum(["haiku", "sonnet", "opus"]).optional(),
     tone: z.number().int().min(0).max(4).optional(),
     overrides: overrides.optional(),
+    surprises: z.enum(SURPRISES).optional(),
   }),
-  async ({ entryId, steer, words, count, devId, exclude, model, tone, overrides }, send) => {
+  async ({ entryId, steer, words, count, devId, exclude, model, tone, overrides, surprises }, send) => {
     const base = await chainBase(entryId);
     const r = await developChain(base.campaignId, {
       ...base,
@@ -31,6 +32,7 @@ export const POST = streamRoute(
       model,
       tone,
       overrides: overrides ?? base.overrides,
+      surprises,
       onStep: (index, step, n) => send({ type: "step", index, n, step: stepView(step) }),
       onChain: (chain, index) => send({ type: "chain", index, chain: chainView(chain) }),
       onDrop: (index) => send({ type: "drop", index }),

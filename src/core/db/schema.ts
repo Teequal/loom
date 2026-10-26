@@ -316,6 +316,7 @@ export interface LiveOption {
   needs?: "roll" | "fight" | null;
   pillar?: string | null;
   scaffold?: unknown; // the engine's scaffold for it (ScaffoldOption): what it changes, and the turn it ends on
+  surprise?: string | null; // built on a surprise move: why it's explicable
 }
 export const liveEntries = sqliteTable("live_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),

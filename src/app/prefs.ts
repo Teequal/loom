@@ -18,15 +18,16 @@ export interface Prefs {
   mix: MixId; // the kinds of option
   why: boolean; // show the "why this fits" line on options
   developOptions: number; // how many chains Develop writes (1-3)
+  surprises: "off" | "rare" | "sometimes" | "often"; // how often Loom slips in a surprise
 }
 
-export const DEFAULT_PREFS: Prefs = { chips: "chips", model: "haiku", tone: 1, mix: "mix", why: true, developOptions: 1 };
+export const DEFAULT_PREFS: Prefs = { chips: "chips", model: "haiku", tone: 1, mix: "mix", why: true, developOptions: 1, surprises: "rare" };
 
 export function resetPrefs() {
   for (const k of Object.keys(DEFAULT_PREFS) as (keyof Prefs)[]) setPref(k, DEFAULT_PREFS[k]);
 }
 
-const KEYS: { [K in keyof Prefs]: string } = { chips: "loom.chips", model: "loom.model", tone: "loom.tone", mix: "loom.mix", why: "loom.why", developOptions: "loom.developOptions" };
+const KEYS: { [K in keyof Prefs]: string } = { chips: "loom.chips", model: "loom.model", tone: "loom.tone", mix: "loom.mix", why: "loom.why", developOptions: "loom.developOptions", surprises: "loom.surprises" };
 
 export function readPrefs(): Prefs {
   const get = (k: keyof Prefs) => store.get(KEYS[k]);
@@ -42,6 +43,7 @@ export function readPrefs(): Prefs {
     mix: oneOf("mix", ["mix", "fights", "mystery", "light", "character"] as const, DEFAULT_PREFS.mix),
     why: get("why") === null ? DEFAULT_PREFS.why : get("why") === "1",
     developOptions: num("developOptions", 3, 1),
+    surprises: oneOf("surprises", ["off", "rare", "sometimes", "often"] as const, DEFAULT_PREFS.surprises),
   };
 }
 

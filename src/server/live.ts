@@ -23,6 +23,7 @@ export function entryView(e: Entry, titleOf = new Map<number, string>()) {
       callback: o.callback ?? null,
       needs: o.needs ?? null,
       pillar: o.pillar ?? null,
+      surprise: o.surprise ?? null,
     })),
     choiceKind: e.choiceKind,
     choiceLabel: e.choiceLabel,

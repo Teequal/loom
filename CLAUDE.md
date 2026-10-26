@@ -644,6 +644,27 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
 
         The interplays aren't move sources yet (step 5).
       - 11 crafted checks (253/253) and 29 interplay examples.
+    - [x] **Property model step 5: moves, offers and surprises** (`moves.ts`, 26 Oct). Step 4 (fill the data) was deferred at Jacob's choice.
+      - **New move kinds:** waver, strain, bargain, lash out, confide, comply, defect, choose a side, use it, infighting, character.
+        - Every interplay whose subject or other end is in play (here, or named in the moment) becomes a move. Its cast is those two, on a thread they're in. Its "because" is the interplay's handle, and it carries the interplay's offers.
+        - Notable situational properties of NPCs in play become up to two "character" moves ("Arlen Hoder would lie to them now (candour lies: …)").
+        - Someone named in the moment counts most (`focus`). A move from a pull shares a thread with other picks more easily, since it's about the person.
+      - **Offers** (`offersFor`), filled with names and shown in the moves block as "could offer:". Resists the charm: "Iresia makes a Charisma check to hold the charm; on a failure, it breaks". Conflicted: an Insight roll to read the hesitation. Fear over greed: "who do you remind them to fear?". Steadfast: persuasion is a contest.
+      - **Steers lean the new kinds:** heartfelt toward confide, waver and character; fight toward lash out and defect; story toward choose a side. Quiet leaves out lash out.
+      - **Surprises** (§7.8):
+        - a setting (off · rare · sometimes · often; default rare: 1 in 8, 1 in 4, 1 in 2);
+        - seeded by the campaign, the moment, how far the session has got and the steer, so asking again gives the same result;
+        - the seed also picks among the best three candidates. Candidates are weak (strength 1) pulls in play, extra property moves, an NPC's lesser goal, and someone with a pull who isn't here but could arrive. It replaces one picked move, marked SURPRISE in the moves block;
+        - the option built on it is ranked in, and its card shows a "Surprise" tag with the reason instead of the "why". Develop's chains carry it too.
+
+        Limit: on the page, the first three options stream in as written, so a surprise written fourth can still miss out.
+      - `LOOM_PROPERTY_MOVES=off` (with `LOOM_STANDING=off`) turns this off, for A/B runs.
+      - **Blind A/B on Haiku** (6 moments on the copy, with vs without the property moves and the block; surprises off; `data/runs/2026-10-26-property-moves-blind.md`):
+        - Claude preferred the "with" set in 5 of 6 (the sixth was close);
+        - with: Vex'ahlia strains against the charm, with a check for Iresia; Tomas stays devoted (without, he "eyes Darius warily"); Arlen is nervous about Varek and greedy about the figurines; Vex'ahlia is "torn between duty and something softer";
+        - 7.7 s vs 7.2 s, the same cost, 1 option dropped vs 3.
+      - **Surprises, live:** on "often", 1 of 6 asks showed one ("Vex'ahlia drifts out of the shadows, strained… Pip whispers that the woman looks sick"). The candidate pool was often empty before it was widened.
+      - 9 crafted checks (262/262).
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

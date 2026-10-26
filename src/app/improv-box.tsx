@@ -27,6 +27,7 @@ interface Card {
   callback: { id: number; title: string } | null;
   needs: "roll" | "fight" | null;
   pillar: string | null;
+  surprise?: string | null; // built on the session's surprise: why it's explicable
 }
 interface RecordFix {
   say: string;
@@ -314,7 +315,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       const res = await fetch("/api/improv", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaignId, moment: text, model, tone, mix, steer: again?.steer, overrides: corrections }),
+        body: JSON.stringify({ campaignId, moment: text, model, tone, mix, steer: again?.steer, overrides: corrections, surprises: prefs.surprises }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -1155,6 +1156,7 @@ function Headline({ card, n, onOpen }: { card: Card; n: number; onOpen: () => vo
       <button type="button" onClick={onOpen} className="group flex w-full items-baseline gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-left shadow-sm transition-colors hover:border-thread/60">
         <span className="w-4 shrink-0 text-[13px] text-muted">{n}</span>
         <span className="story min-w-0 flex-1 leading-snug">{card.headline}</span>
+        {card.surprise && <span className="shrink-0 rounded-full border border-thread/50 px-2 py-0.5 text-[11px] text-thread" title={card.surprise}>Surprise</span>}
         {card.flavour && <span className="shrink-0 rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
       </button>
     </li>
@@ -1241,7 +1243,12 @@ function OptionCard({
         <Linked text={card.text} />
       </p>
       <RefChips refs={[...threadRefs(card.threads), ...(card.callback ? [{ kind: "moment" as const, id: card.callback.id, name: `Callback: ${card.callback.title}` }] : [])]} />
-      {card.why && showWhy && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
+      {card.surprise && (
+        <p className="mt-2 text-[13px] text-thread">
+          <span className="font-medium">A surprise.</span> <span className="italic text-muted">{card.surprise.replace(/^a lesser goal surfaces: /, "")}</span>
+        </p>
+      )}
+      {card.why && showWhy && !card.surprise && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
       <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
         {state !== "used" ? (
           <button type="button" onClick={onUse} disabled={!canUse} className="btn-secondary font-medium">

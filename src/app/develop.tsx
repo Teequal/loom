@@ -41,6 +41,7 @@ interface Chain {
   callback: { id: number; title: string } | null;
   steps: Step[];
   canGoBack: boolean;
+  surprise?: string | null;
 }
 interface ChainDev {
   kind: "chain";
@@ -123,6 +124,7 @@ export function Develop({
           exclude: more ? slots.flatMap((s) => (s.chain ? [s.chain.move] : [])) : undefined,
           model: developModel(live.model),
           tone: live.tone,
+          surprises: prefs.surprises,
         },
         (e) => {
           // Chains are numbered as they stream; shown in order, after any already on screen.
@@ -351,6 +353,7 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
         <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2">
           <h3 className="text-[13px] font-semibold uppercase tracking-wide">{chain.label}</h3>
           {chain.flavour && <span className="rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{FLAVOUR[chain.flavour] ?? chain.flavour}</span>}
+          {chain.surprise && <span className="rounded-full border border-thread/50 px-2 py-0.5 text-[11px] text-thread" title={chain.surprise}>Surprise</span>}
         </div>
       )}
       <ol className={`relative ml-2.5 border-l border-thread/40 ${busy && !preview ? "opacity-50" : ""}`}>

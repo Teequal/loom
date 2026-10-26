@@ -78,6 +78,23 @@ export function SettingsBoard() {
           </Field>
         </Section>
 
+        <Section title="Surprises">
+          <Field label="How often">
+            <Choice
+              label="Surprises"
+              options={[
+                { id: "off", label: "Off" },
+                { id: "rare", label: "Rare" },
+                { id: "sometimes", label: "Sometimes" },
+                { id: "often", label: "Often" },
+              ]}
+              value={p.surprises}
+              onChange={(v) => setPref("surprises", v as typeof p.surprises)}
+            />
+            <p className="mt-1 text-xs text-muted">Now and then, one option takes an unexpected turn the records can still explain, like a minor bond outweighing a goal. It&apos;s marked, with why.</p>
+          </Field>
+        </Section>
+
         <Section title="Planning ahead">
           <Field label="Develop writes">
             <Choice

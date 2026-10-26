@@ -24,7 +24,7 @@ export const isChainDev = (d: unknown): d is ChainDevelopment => !!d && typeof d
 
 /** What the page sees of a step or a chain: everything but the scaffold, which stays on the server. */
 export const stepView = (s: ChainStep) => ({ when: s.when, text: s.text, to: s.to, needs: s.needs });
-export const chainView = (c: KeptChain) => ({ label: c.label, headline: c.headline, why: c.why, flavour: c.flavour, move: c.move, threads: c.threads, callback: c.callback, steps: c.steps.map(stepView), canGoBack: !!c.previous?.length });
+export const chainView = (c: KeptChain) => ({ surprise: c.surprise ?? null, label: c.label, headline: c.headline, why: c.why, flavour: c.flavour, move: c.move, threads: c.threads, callback: c.callback, steps: c.steps.map(stepView), canGoBack: !!c.previous?.length });
 export const developmentView = (d: unknown) => (isChainDev(d) ? { kind: "chain" as const, id: d.id, steer: d.steer, words: d.words, chains: d.chains.map(chainView) } : d);
 
 async function entry(entryId: number) {

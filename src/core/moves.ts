@@ -1,6 +1,8 @@
 import type { SelectedThread } from "./retrieval";
 import { momentumOf, paceOf, ruleUsesOf } from "./world/derived";
 import { activityOf, heat, presenceOf, type View } from "./world/engine";
+import { interplaysOf, type Interplay } from "./world/interplays";
+import { propertyOf } from "./world/properties";
 import { THREAD_ROLES } from "./world/links";
 import type { AnyNode, NodeKey, Thread } from "./world/nodes";
 
@@ -11,7 +13,10 @@ import type { AnyNode, NodeKey, Thread } from "./world/nodes";
 // its cast (who may act in it, who may only arrive) and the reason, in code's words. The model
 // picks moves and writes them; it doesn't decide who's in the scene.
 
-export type MoveKind = "payoff" | "complication" | "arrival" | "hint" | "collision" | "rule" | "callback" | "wildcard";
+export type MoveKind =
+  | "payoff" | "complication" | "arrival" | "hint" | "collision" | "rule" | "callback" | "wildcard"
+  // From the property model: what an interplay or a notable property makes likely (§7.3).
+  | "waver" | "strain" | "bargain" | "lash out" | "confide" | "comply" | "defect" | "choose a side" | "use it" | "infighting" | "character";
 
 export interface CastMember {
   name: string;
@@ -29,23 +34,36 @@ export interface Move {
   because: string; // the engine's reason, in plain words
   score: number;
   callback?: number; // a key moment's id, for callback moves
+  source?: string; // the interplay or property it comes from ("conflicted", "candour")
+  offers?: string[]; // hand-offs it can offer the players ("Iresia makes a Charisma check to hold the charm")
+  surprise?: string; // set when this is the session's surprise: why it's explicable
 }
 
 const endKey = (e: { kind: string; id: number }) => `${e.kind}:${e.id}` as NodeKey;
 const ARRIVING_ROLES = new Set(["seeker", "rival", "cause", "creditor", "informant", "promisee", "debtor", "ally", "witness", "guardian"]);
 const HINT_ROLES = new Set(["clue", "informant", "witness", "carrier", "source"]);
-const WEIGHT: Record<MoveKind, number> = { collision: 1, rule: 0.9, payoff: 0.8, arrival: 0.6, callback: 0.5, complication: 0.5, hint: 0.4, wildcard: 0 };
+const WEIGHT: Record<MoveKind, number> = {
+  collision: 1, rule: 0.9, payoff: 0.8, arrival: 0.6, callback: 0.5, complication: 0.5, hint: 0.4, wildcard: 0,
+  strain: 0.9, waver: 0.8, "choose a side": 0.8, defect: 0.7, confide: 0.7, comply: 0.7, bargain: 0.6, "lash out": 0.6, "use it": 0.6, infighting: 0.5, character: 0.5,
+};
+// An interplay's move names, as move kinds.
+const INTERPLAY_KIND: Record<string, MoveKind> = { "comply under pressure": "comply" };
+
+// How often a surprise move is offered (§7.8): the GM's setting, as a chance per ask.
+export const SURPRISES = ["off", "rare", "sometimes", "often"] as const;
+export type Surprises = (typeof SURPRISES)[number];
+export const SURPRISE_CHANCE: Record<Surprises, number> = { off: 0, rare: 1 / 8, sometimes: 1 / 4, often: 1 / 2 };
 
 // How the GM wants to take a Develop: each leans the move kinds (−1 or less leaves a kind out).
 export const STEERS = ["fight", "heartfelt", "epic", "grounded", "quiet", "story"] as const;
 export type Steer = (typeof STEERS)[number];
 const STEER_WEIGHT: Record<Steer, Partial<Record<MoveKind, number>>> = {
-  fight: { complication: 0.6, arrival: 0.5, collision: 0.3, hint: -0.4, callback: -0.3 },
-  heartfelt: { callback: 0.8, payoff: 0.4, hint: -0.2, arrival: -0.3, rule: -0.4 },
-  epic: { collision: 0.8, payoff: 0.5, rule: 0.4, arrival: 0.3, hint: -0.4 },
-  grounded: { hint: 0.4, complication: 0.2, collision: -0.3, rule: -0.2, arrival: -1 },
-  quiet: { hint: 0.5, callback: 0.5, complication: -0.4, rule: -0.4, collision: -0.5, arrival: -1 },
-  story: { payoff: 0.6, collision: 0.4, arrival: 0.2 },
+  fight: { complication: 0.6, arrival: 0.5, collision: 0.3, hint: -0.4, callback: -0.3, "lash out": 0.6, defect: 0.3, confide: -0.4 },
+  heartfelt: { callback: 0.8, payoff: 0.4, hint: -0.2, arrival: -0.3, rule: -0.4, confide: 0.6, waver: 0.5, character: 0.5, "lash out": -0.5 },
+  epic: { collision: 0.8, payoff: 0.5, rule: 0.4, arrival: 0.3, hint: -0.4, "choose a side": 0.5, strain: 0.4 },
+  grounded: { hint: 0.4, complication: 0.2, collision: -0.3, rule: -0.2, arrival: -1, "lash out": -0.3, comply: 0.3 },
+  quiet: { hint: 0.5, callback: 0.5, complication: -0.4, rule: -0.4, collision: -0.5, arrival: -1, confide: 0.4, "lash out": -1, strain: -0.3 },
+  story: { payoff: 0.6, collision: 0.4, arrival: 0.2, "choose a side": 0.5, waver: 0.2 },
 };
 
 interface Part {
@@ -62,6 +80,7 @@ export function findMoves(
     liveRules: { name: string; why: string; sourceName: string | null }[];
     limit?: number;
     steer?: Steer;
+    surprise?: { chance: number; seed: string }; // an occasional surprise move (§7.8)
     toward?: Set<number>; // threads closest to where the GM wants the story to go
     exclude?: string[]; // moves already used ("kind:thread"), for another take
   },
@@ -140,6 +159,68 @@ export function findMoves(
     if (t) add({ kind: "callback", threads: [t.id], cast: castOf(partsOf(t)), because: `it can call back "${cb.title}"`, score: 0.8 + WEIGHT.callback, callback: cb.id });
   }
 
+  // The property model's moves (§7.3): what an interplay makes likely (Vex'ahlia strains against the
+  // charm; Arlen complies out of fear), and what someone's notable situational properties make
+  // likely here (Arlen would lie to them now). Only for those in play: here, or named in the moment.
+  const named = new Set([...v.reading.broughtIn, ...v.reading.referred, ...v.reading.contacted, ...v.reading.acting]);
+  const inPlay = (k?: NodeKey) => !!k && (presenceOf(v, k, memo).role === "here" || named.has(node(k)?.name ?? ""));
+  // Someone the moment names is what the moment is about: their pulls count most.
+  const focus = (k?: NodeKey) => (k && named.has(node(k)?.name ?? "") ? 1 : k && inPlay(k) ? 0.5 : 0);
+  const threadFor = (keys: (NodeKey | undefined)[]) => threads.find((t) => partsOf(t).some((p) => keys.includes(p.node.key as NodeKey))) ?? threads[0];
+  const minor: Omit<Move, "id" | "resting">[] = []; // explicable, but not the obvious read: surprise candidates
+  const propertyMoves = process.env.LOOM_PROPERTY_MOVES !== "off"; // for A/B runs
+  for (const i of propertyMoves ? interplaysOf(v) : []) {
+    if (!inPlay(i.subject) && !inPlay(i.other)) {
+      // Someone with a pull who isn't here, but could come: not an obvious move, but an
+      // explicable surprise (they arrive, and the records say why).
+      const subj = node(i.subject);
+      const t = threadFor([i.subject, i.other]);
+      const cast = subj ? castOf([{ node: subj, role: "involved", secret: false }]) : [];
+      if (t && cast.some((c) => c.can === "arrive")) minor.push({ kind: "arrival", threads: [t.id], cast, because: `${subj!.name} arrives, and it shows: ${i.handle}`, score: 0.8 + i.strength * 0.3, source: i.id });
+      continue;
+    }
+    const t = threadFor([i.subject, i.other]);
+    if (!t) continue;
+    const people = [node(i.subject), i.other ? node(i.other) : undefined].filter((n): n is AnyNode => !!n).map((n) => ({ node: n, role: "involved", secret: false }));
+    const cast = castOf(people).length ? castOf(people) : castOf(partsOf(t));
+    const subject = node(i.subject)!.name;
+    for (const m of i.moves) {
+      const kind = (INTERPLAY_KIND[m] ?? m) as MoveKind;
+      if (!(kind in WEIGHT)) continue;
+      const move = { kind, threads: [t.id], cast, because: `${subject}: ${i.handle}${i.secret ? " (rests on a GM secret: let it show, never state it)" : ""}`, score: 1 + i.strength * 0.4 + Math.max(focus(i.subject), focus(i.other) * 0.6) + WEIGHT[kind], source: i.id, offers: offersFor(v, i) };
+      add(move);
+      if (i.strength === 1) minor.push(move); // a weak pull: also a surprise candidate
+    }
+  }
+  // Notable situational properties of NPCs in play, as moves of their own (at most two).
+  const NOTABLE: Record<string, Record<string, string>> = {
+    candour: { lies: "would lie to them now", evades: "would dodge the question" },
+    courage: { reckless: "is brave to the point of recklessness here", cowed: "is too frightened to stand up here" },
+    restraint: { snaps: "is close to snapping" },
+    susceptibility: { pliable: "could be talked into almost anything right now" },
+    generosity: { gives: "would give freely" },
+  };
+  const propMoves: Omit<Move, "id" | "resting">[] = [];
+  for (const n of propertyMoves ? v.g.nodes.values() : []) {
+    if (n.kind !== "character" || n.side !== "npc" || !inPlay(n.key as NodeKey)) continue;
+    for (const [prop, bands] of Object.entries(NOTABLE)) {
+      const p = propertyOf(v, n.key as NodeKey, prop);
+      const say = p?.band ? bands[p.band] : undefined;
+      const t = say && threadFor([n.key as NodeKey]);
+      if (!say || !t) continue;
+      propMoves.push({ kind: "character", threads: [t.id], cast: castOf([{ node: n, role: "involved", secret: false }]), because: `${n.name} ${say} (${p!.name} ${p!.band}: ${p!.because.slice(0, 2).join("; ")})`, score: 1.2 + focus(n.key as NodeKey) + WEIGHT.character, source: prop });
+    }
+  }
+  for (const m of propMoves.sort((a, b) => b.score - a.score).slice(0, 2)) add(m);
+  minor.push(...propMoves.slice(2));
+  // A lesser goal of someone in play: explicable, rarely the obvious read.
+  for (const n of v.g.nodes.values()) {
+    if (n.kind !== "character" || n.side !== "npc" || !inPlay(n.key as NodeKey)) continue;
+    const lesser = n.mind.goals.filter((g) => g.priority >= 2 && (!g.status || g.status === "active"))[0];
+    const t = lesser && threadFor([n.key as NodeKey]);
+    if (lesser && t) minor.push({ kind: "character", threads: [t.id], cast: castOf([{ node: n, role: "involved", secret: false }]), because: `a lesser goal surfaces: ${n.name} also wants to ${lesser.text}`, score: 1, source: "lesser goal" });
+  }
+
   // A busy lead costs a move a little, so quieter characters get more of the stage.
   for (const m of moves) m.score -= 0.3 * m.cast.filter((c) => c.busy).length;
   // The GM's steer leans the kinds; a heartfelt take favours a character's own condition, and
@@ -180,7 +261,8 @@ export function findMoves(
       let s = m.score;
       for (const p of picked) {
         if (p.kind === m.kind) s -= 0.4;
-        if (p.threads[0] === m.threads[0]) s -= 0.6;
+        // A move from someone's pull is about them, not the thread: it shares a thread more easily.
+        if (p.threads[0] === m.threads[0]) s -= m.source ? 0.2 : 0.6;
         s -= 0.15 * m.cast.filter((c) => p.cast.some((x) => x.name === c.name)).length;
       }
       return { m, s };
@@ -188,6 +270,15 @@ export function findMoves(
     adjusted.sort((a, b) => b.s - a.s);
     picked.push(adjusted[0].m);
     pool.splice(pool.indexOf(adjusted[0].m), 1);
+  }
+  // The occasional surprise (§7.8): seeded by the moment, so asking again gives the same result. One
+  // picked move gives way to the best explicable-but-unexpected one: a weak interplay, a notable
+  // property, a lesser goal. Never anything that breaks a law: they're all built from the records.
+  if (opts.surprise && opts.surprise.chance > 0 && seeded(opts.surprise.seed) < opts.surprise.chance) {
+    const pool = minor.filter((m) => !picked.some((p) => p.because === m.because)).sort((a, b) => b.score - a.score);
+    // Which one is chance too (among the best few), so the same pull doesn't surprise every time.
+    const pick = pool[Math.floor(seeded(`${opts.surprise.seed}|pick`) * Math.min(3, pool.length))];
+    if (pick && picked.length) picked[picked.length - 1] = { ...pick, resting: [], surprise: pick.because };
   }
   // Always one open move, for the model's own idea, on the strongest thread with whoever's here.
   if (threads[0]) {
@@ -204,6 +295,34 @@ export function findMoves(
 
 /** A move's identity across calls (ids like "M2" are per call). */
 export const moveKey = (m: Pick<Move, "kind" | "threads">) => `${m.kind}:${m.threads.join("+")}`;
+
+// A number in [0, 1) from a string, the same every time (for seeded surprises).
+function seeded(seed: string) {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+  return ((h >>> 0) % 10000) / 10000;
+}
+
+// The hand-offs an interplay can offer the players (§7.6), with names filled in.
+function offersFor(v: View, i: Interplay): string[] {
+  const other = i.other ? v.g.nodes.get(i.other) : undefined;
+  const subject = v.g.nodes.get(i.subject)?.name ?? "they";
+  const pcOther = other?.kind === "character" && other.side === "pc" ? other.name : null;
+  switch (i.id) {
+    case "resists the charm":
+      return pcOther ? [`${pcOther} makes a Charisma check to hold the charm; on a failure, it breaks`] : [];
+    case "conflicted":
+      return [`a Wisdom (Insight) notice roll to read ${subject}'s hesitation`];
+    case "fear over greed":
+      return [`a question: who do you remind ${subject} to fear?`];
+    case "steadfast":
+      return [`persuading ${subject} against their goal is a contest, not a question`];
+    case "the pull":
+      return [`a sensation: the item calls to its holder (never the use itself, for a PC)`];
+    default:
+      return [];
+  }
+}
 
 function dedupe(cast: CastMember[]) {
   const out = new Map<string, CastMember>();
@@ -223,6 +342,8 @@ export function movesBlock(moves: Move[], titleOf: Map<number, string>) {
         support.length && `support (here, one line at most): ${support.map((c) => c.name).join(", ")}`,
         m.resting.length && `resting (here, but not in this move): ${m.resting.join(", ")}`,
         `because: ${m.because}`,
+        m.offers?.length && `could offer: ${m.offers.join("; ")}`,
+        m.surprise && "SURPRISE: the GM asked for one now and then; build exactly one option on this move, and keep it explicable",
       ]
         .filter(Boolean)
         .join(" · ");

@@ -11,7 +11,7 @@ import { planSlips } from "./plan-agency";
 import { listMoments, momentLine } from "./moments";
 import { personalLines, spotlightScore, tableSeats } from "./players";
 import { buildScene, type Scene } from "./scene";
-import { findMoves, movesBlock, type Move } from "./moves";
+import { findMoves, movesBlock, SURPRISE_CHANCE, type Move, type Surprises } from "./moves";
 import { derivedLines } from "./world/derived";
 import { interplayLine, interplaysOf } from "./world/interplays";
 import type { NodeKey } from "./world/nodes";
@@ -149,6 +149,7 @@ export interface ImprovOption {
   why: string;
   callback: { id: number; title: string } | null;
   scaffold: ScaffoldOption; // kept for the flavour pass
+  surprise?: string | null; // built on the surprise move: why it's explicable
 }
 
 // How names go in and what a scaffold is: shared by improv options and Develop's chain steps.
@@ -599,6 +600,7 @@ export interface ImprovOptions {
   tone?: number; // 0 grounded … 4 theatrical (default 1: Jacob found the default a bit theatrical)
   mix?: Mix; // which kinds of option to offer; default a mix
   steer?: string; // a one-tap nudge from the GM: "darker", "bring in Zara"
+  surprises?: Surprises; // how often a surprise move is offered (default rare)
   overrides?: Overrides; // the GM's corrections to who's here and what's in hand (the chips)
   focused?: boolean; // a tighter scene and fewer threads (cheapest); the default is wide
   threads?: number; // send exactly this many threads (plus any tied to what the moment names)
@@ -814,7 +816,10 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   const P = await prepareMoment(campaignId, moment, { ...opts, mode });
   const { threads, scene, lists, seats, lines, callbacks, titleOf, mentioned, meaning, meaningNote, provider, base, sessionNumber } = P;
   // The engine's moves for this moment: what could happen, on which threads, with whom (moves.ts).
-  const moves = findMoves(scene.situation.view, threads, { callbacks, liveRules: liveRulesOf(scene) });
+  // A surprise now and then (the GM's setting), seeded by the moment and how far the session has
+  // got, so asking the same thing again gives the same answer.
+  const surprise = { chance: SURPRISE_CHANCE[opts.surprises ?? "rare"], seed: `${campaignId}|${moment}|${scene.situation.view.g.log.length}|${opts.steer ?? ""}` };
+  const moves = findMoves(scene.situation.view, threads, { callbacks, liveRules: liveRulesOf(scene), surprise });
   const OptionsSchema = optionsSchema({ moves: moves.map((m) => m.id), threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`) });
   const prompt = `${contextPrompt(P, moves)}
 ${lengthFor(moment)}
@@ -858,6 +863,8 @@ ${moment}`;
       return m ? { id: m.id, title: m.title } : null;
     })(),
     scaffold: o,
+    // Built on the surprise move: say so, with why it's explicable.
+    surprise: moves.find((m) => m.id === o.move)?.surprise ?? null,
   });
 
   // Ask once; if fewer than two options survive the checks, ask once more. Each option is checked
@@ -921,7 +928,9 @@ ${moment}`;
   // Options already on screen keep their place.
   // A leaned mix (action, light…) keeps the options of that kind first.
   const score = (o: ScaffoldOption) =>
-    spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama") + (mentioned.has(o.hand_off.to) ? 0.7 : 0) + (wanted.length && o.flavour && wanted.includes(o.flavour) ? 2 : 0);
+    spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama") + (mentioned.has(o.hand_off.to) ? 0.7 : 0) + (wanted.length && o.flavour && wanted.includes(o.flavour) ? 2 : 0) +
+    // An option on the surprise move is shown when it's written: the GM asked for surprises.
+    (moves.find((m) => m.id === o.move)?.surprise ? 5 : 0);
   let kept = [...shown, ...accepted.filter((o) => !shown.includes(o)).sort((a, b) => score(b) - score(a))].slice(0, 3);
   const safety = await safetyCheck(lines, kept.map((o) => renderOption(o, lists.tagger)));
   if (safety.call) calls.push(safety.call);

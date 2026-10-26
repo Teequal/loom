@@ -4,6 +4,7 @@ import { callLlm, type LlmResult } from "./llm";
 import { db, schema } from "./db/client";
 import { PILLARS } from "./db/schema";
 import { deltasOf, taggedNames, untag } from "./deltas";
+import { SURPRISE_CHANCE, type Surprises } from "./moves";
 import { findMoves, moveKey, type Move, type Steer } from "./moves";
 import { planSlips } from "./plan-agency";
 import { fillSlots, pcOpensClause } from "./slots";
@@ -65,6 +66,7 @@ export interface Chain {
   threads: { id: number; title: string }[];
   callback: { id: number; title: string } | null;
   steps: ChainStep[];
+  surprise?: string | null; // built on the surprise move: why it's explicable
 }
 
 export interface ChainInput {
@@ -80,6 +82,7 @@ export interface ChainInput {
   model?: string;
   overrides?: Overrides;
   refine?: Refine; // rework a chain in place instead of writing new ones
+  surprises?: Surprises; // how often a surprise move is offered (default rare)
   turn?: Hand | null; // the players' turn the choice ended on, from its scaffold (undefined: read it from the text)
   onStep?: (index: number, step: ChainStep, n: number) => void; // each step as soon as it's written and checked
   onChain?: (c: Chain, index: number) => void; // each chain once complete: its title, headline and why
@@ -403,7 +406,7 @@ export async function developChain(campaignId: number, input: ChainInput) {
   const refine = input.refine;
   const count = refine ? 1 : Math.max(1, Math.min(3, input.count ?? 1));
   const steer = input.steer ?? null;
-  let moves = findMoves(p.scene.situation.view, p.threads, { callbacks: p.callbacks, liveRules: liveRulesOf(p.scene), steer: steer ?? undefined, toward: steer === "story" ? towardDirection(p) : undefined, exclude: input.exclude, limit: Math.max(4, count + 2) });
+  let moves = findMoves(p.scene.situation.view, p.threads, { callbacks: p.callbacks, liveRules: liveRulesOf(p.scene), steer: steer ?? undefined, toward: steer === "story" ? towardDirection(p) : undefined, exclude: input.exclude, limit: Math.max(4, count + 2), surprise: refine ? undefined : { chance: SURPRISE_CHANCE[input.surprises ?? "rare"], seed: `${campaignId}|${input.text}|${steer ?? input.words ?? ""}|${p.scene.situation.view.g.log.length}` } });
   // A rework stays on the chain's move; "bring in X" puts X in its cast, to arrive if they aren't here.
   const bring = refine && /^bring in /i.test(refine.how) ? refine.how.replace(/^bring in /i, "").trim() : null;
   if (refine) {
@@ -521,7 +524,7 @@ ${!turn ? 'None: opens_on is "start".' : ROLLS.has(turn.kind) ? 'The roll above.
     const label = c.label.trim() || t.render(t.tag(c.headline)).split(/\s+/).slice(0, 5).join(" ") || "Next";
     const headline = [t.render(t.tag(c.headline)), run.steps[0].scaffold.setup[0] ? renderBeat(run.steps[0].scaffold.setup[0], t).replace(/[.!?]$/, "") : "", label].find(fine) ?? label;
     const cb = p.callbacks.find((m) => `M${m.id}` === c.callback?.trim());
-    const chain: Chain = { label, headline, why: t.render(t.tag(c.why)), flavour: c.flavour ?? null, move: move ? moveKey(move) : (refine?.chain.move ?? c.thread), threads: ids.map((id) => ({ id, title: titleOf.get(id)! })), callback: cb ? { id: cb.id, title: cb.title } : null, steps: run.steps };
+    const chain: Chain = { label, headline, why: t.render(t.tag(c.why)), flavour: c.flavour ?? null, move: move ? moveKey(move) : (refine?.chain.move ?? c.thread), threads: ids.map((id) => ({ id, title: titleOf.get(id)! })), callback: cb ? { id: cb.id, title: cb.title } : null, steps: run.steps, surprise: move?.surprise ?? refine?.chain.surprise ?? null };
     accepted.push(chain);
     input.onChain?.(chain, index);
   };
