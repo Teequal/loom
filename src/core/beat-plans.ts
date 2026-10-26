@@ -337,3 +337,101 @@ export function planMoves(v: View, moves: Move[], opts: { size?: number; spent?:
   }
   return { plans, dropped };
 }
+
+// ---------- Soft plans: an anchor per option, the rest written freely ----------
+// The engine picks, per move, the one or two facts most worth landing in THIS moment (never a
+// thread's summary, ranked by fit with what the players just did), and says what each character in
+// play must never do. The model names the option's anchor, says in one line how it lands here, and
+// writes the beats freely from the cast. Code checks the anchor landed.
+
+const STOP = new Set("that this with from into their there they them then over your what when while have been were will just about after before which would could should party".split(" "));
+const words = (s: string) => new Set((s.toLowerCase().match(/[a-z'’]{4,}/g) ?? []).map((w) => w.replace(/['’]s$/, "")).filter((w) => !STOP.has(w)));
+const KIND_WEIGHT: Partial<Record<PayloadKind, number>> = { pull: 3, property: 3, secret: 2.5, payoff: 2.5, knowledge: 2, stakes: 2, goal: 2, belief: 2, deadline: 1.5, item: 1.5, state: 1.5, fear: 1.5, aim: 1.5, bond: 1, clock: 1, hazard: 1 };
+
+export interface Anchor {
+  id: string; // "M2.a1"
+  move: string;
+  owner: string | null;
+  kind: PayloadKind;
+  about: string;
+  secret: boolean;
+  score: number;
+  why: string[]; // how it scored, for the trace
+}
+
+/** The facts each move could anchor an option on, best fit with the moment first (up to 2). */
+export function anchorsFor(v: View, moves: Move[], moment: string, opts: { spent?: Set<string> } = {}) {
+  const said = words(moment);
+  const taken = new Map<string, number>();
+  const out = new Map<string, Anchor[]>();
+  for (const m of moves) {
+    const scored = payloadsFor(v, m, opts.spent)
+      .filter((p) => p.kind !== "summary" && p.kind !== "free")
+      .map((p) => {
+        const owner = p.owner ? (v.g.nodes.get(p.owner)?.name ?? null) : null;
+        const overlap = [...words(p.about)].filter((w) => said.has(w));
+        const why: string[] = [`${p.kind} +${KIND_WEIGHT[p.kind] ?? 1}`];
+        let score = KIND_WEIGHT[p.kind] ?? 1;
+        if (overlap.length) (score += 1.5 * overlap.length), why.push(`shares "${overlap.join('", "')}" with the moment +${1.5 * overlap.length}`);
+        if (owner && moment.toLowerCase().includes(owner.split(/[\s,]+/)[0].toLowerCase())) (score += 2), why.push(`${owner} is named in the moment +2`);
+        if (m.source && (p.key.endsWith(`:pull:${m.source}`) || p.key.includes(`:prop:${m.source}:`))) (score += 2), why.push("the move's own source +2");
+        if (p.spent) (score -= 3), why.push("delivered already this session −3");
+        if (taken.has(p.key)) (score -= 1), why.push("another move anchors on it −1");
+        return { p, owner, score, why };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 2);
+    out.set(
+      m.id,
+      scored.map((s, i) => {
+        taken.set(s.p.key, 1);
+        const about = s.p.about.replace(/\s*The players don['’]t know\.?/g, "").replace(/^(.+?) keeps a secret: Secretly also "([^"]+)": /, '$1 is secretly "$2": ');
+        return { id: `${m.id}.a${i + 1}`, move: m.id, owner: s.owner, kind: s.p.kind, about, secret: s.p.secret, score: Math.round(s.score * 10) / 10, why: s.why };
+      }),
+    );
+  }
+  return out;
+}
+
+/** What each NPC in play must never do here, with why: the behaviour bounds, and allies don't threaten the party. */
+export function neverLines(v: View, names: string[]) {
+  const pcs = [...v.g.nodes.values()].filter((x) => isChar(x) && x.side === "pc");
+  const dummy = (k: NodeKey): Payload => ({ key: "", kind: "free", owner: k, about: "", secret: false, act: "respond", object: null, spent: false, rank: 0 });
+  const lines: string[] = [];
+  for (const name of [...new Set(names)]) {
+    const n = v.g.find(name);
+    if (!isChar(n) || n.side !== "npc") continue;
+    const k = n.key as NodeKey;
+    const never = new Set<string>();
+    for (const pc of pcs) {
+      const r = boundBreak(v, k, "threaten", pc.key as NodeKey, dummy(k));
+      if (r) never.add(`harm or threaten ${pc.name} (${r.replace(`${n.name} `, "").replace(/, and.*$/, "")})`);
+      const ref = boundBreak(v, k, "refuse", pc.key as NodeKey, { ...dummy(k), object: pc.key as NodeKey });
+      if (ref) never.add(`refuse ${pc.name} (charmed by them)`);
+    }
+    const ally = (n.stance ?? 0) > 0 || pcs.some((pc) => (v.g.pairs.get(`${k}|${pc.key}`)?.weights.warmth ?? 0) > 1);
+    if (ally) never.add("threaten or rob the party (an ally)");
+    const goal = n.mind.goals.filter((g) => !g.status || g.status === "active").sort((a, b) => a.priority - b.priority)[0];
+    if (goal && (goal.commitment ?? 0) >= 2 && !boundsFor(v, k).allowed.includes("act-against-goal")) never.add(`give up "${goal.text}"`);
+    if (never.size) lines.push(`- ${n.name} never: ${[...never].join("; ")}`);
+  }
+  return lines;
+}
+
+/** Whether an option's text lands its anchor: shares enough of the anchor's own words. */
+export function anchorLanded(a: Anchor, text: string) {
+  const t = words(text);
+  const own = [...words(a.about)].filter((w) => !(a.owner ?? "").toLowerCase().includes(w));
+  const hits = own.filter((w) => t.has(w));
+  return { landed: hits.length >= Math.min(2, own.length), hits };
+}
+
+export function anchorsBlock(anchors: Map<string, Anchor[]>, never: string[]) {
+  const lines = [...anchors].filter(([, a]) => a.length).flatMap(([m, as]) => [`${m}:`, ...as.map((a) => `- ${a.id} ${a.owner ? `[${a.owner}] ` : ""}${a.about}${a.secret ? " [GM secret: hint, never state]" : ""}`)]);
+  return `\nANCHORS (the engine's pick of facts worth landing in this moment, per move)\n${lines.join("\n")}\n${never.length ? `\nIN CHARACTER (whatever the option, these never happen)\n${never.join("\n")}\n` : ""}`;
+}
+
+export const SOFT_TEXT = `- anchor: the one fact this option lands, from its move's ANCHORS. intent: one line, written before the beats, on how that fact lands in THIS moment, answering what the players just did ("Arlen answers, but he's scared of Varek, so he gives the street up nervously"). Then write the beats freely from the move's cast, in character, so that the anchor clearly lands; nothing in IN CHARACTER happens.`;
+
+export type PlanMode = "off" | "hard" | "soft";
+export const planMode = (flag?: boolean | "soft"): PlanMode => (flag === "soft" ? "soft" : flag === true ? "hard" : flag === false ? "off" : process.env.LOOM_BEAT_PLANS === "soft" ? "soft" : process.env.LOOM_BEAT_PLANS === "on" ? "hard" : "off");

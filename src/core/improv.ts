@@ -1,4 +1,4 @@
-import { applyPlans, beatPlansOn, planMoves, plansBlock, PLAN_TEXT, spentThisSession, type PlanBeat } from "./beat-plans";
+import { anchorLanded, anchorsBlock, anchorsFor, applyPlans, neverLines, planMode, planMoves, plansBlock, PLAN_TEXT, SOFT_TEXT, spentThisSession, type Anchor, type PlanBeat } from "./beat-plans";
 import { ACTS } from "./acts";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -38,6 +38,8 @@ export interface ScaffoldOption {
   hand?: Hand; // what the model chose, in parts
   refs?: Ref[]; // who and what the sentences name, with the part each plays ({1}, {2} in the text)
   move?: string; // the engine's move it builds on ("M2"), from moves.ts
+  anchor?: string; // soft plans: the anchor fact it lands ("M2.a1")
+  intent?: string; // soft plans: how that fact lands in this moment, in the model's words
   // That move, as it was: kept with the scaffold so a used choice knows what it was (table nudges).
   moveInfo?: { kind: string; source?: string; cast: { name: string; can: string; part?: string }[] };
   on_fail: { target: string; effect: string };
@@ -202,7 +204,7 @@ ${SCAFFOLD_TEXT}
 
 const nonEmpty = (xs: string[], fallback: string): [string, ...string[]] => (xs.length ? (xs as [string, ...string[]]) : [fallback]);
 
-export type SchemaLists = { moves: string[]; threads: string[]; nameable: string[]; npcActors: string[]; absentActors: string[]; outcomeActors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[]; plans?: string[] };
+export type SchemaLists = { moves: string[]; threads: string[]; nameable: string[]; npcActors: string[]; absentActors: string[]; outcomeActors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[]; plans?: string[]; anchors?: string[] };
 
 /** The shapes a scaffold is built from, each with only the values allowed right now. */
 export function scaffoldParts(lists: SchemaLists) {
@@ -249,6 +251,8 @@ function optionsSchema(lists: SchemaLists) {
     options: z.array(
       z.object({
         move,
+        // Soft plans: the fact this option lands, and how, decided before the beats are written.
+        ...(lists.anchors?.length ? { anchor: z.enum(nonEmpty(lists.anchors, "none")), intent: z.string() } : {}),
         thread,
         also_ties_to: z.array(thread),
         label: z.string(),
@@ -620,7 +624,7 @@ export interface ImprovOptions {
   // page can show the first one in ~2 s instead of waiting for all of them. With safety lines set,
   // options are held until the safety check has seen them.
   onOption?: (o: ImprovOption) => void;
-  beatPlans?: boolean; // the engine plans each beat (beat-plans.ts); default from LOOM_BEAT_PLANS
+  beatPlans?: boolean | "soft"; // true: the engine plans each beat; "soft": an anchor per option (beat-plans.ts); default from LOOM_BEAT_PLANS
   onTrace?: (stage: "prompt" | "raw", data: unknown) => void; // for a step-by-step view of one call (debugging, explainers)
 }
 
@@ -837,14 +841,19 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   // Beat plans: the engine decides what each beat delivers (who, which act, which fact).
   const plans = new Map<string, PlanBeat[]>();
   const planDropped: { about: string; why: string }[] = [];
-  if (beatPlansOn(opts.beatPlans)) {
+  const planning = planMode(opts.beatPlans);
+  // Soft plans: an anchor fact per option, chosen in code to fit the moment; the beats are free.
+  const anchors = planning === "soft" ? anchorsFor(scene.situation.view, moves, moment, { spent: spentThisSession(scene.situation.view) }) : new Map<string, Anchor[]>();
+  const never = planning === "soft" ? neverLines(scene.situation.view, moves.flatMap((m) => m.cast.map((c) => c.name))) : [];
+  const anchorIds = [...anchors.values()].flat().map((a) => a.id);
+  if (planning === "hard") {
     const pl = planMoves(scene.situation.view, moves, { size: 3, spent: spentThisSession(scene.situation.view) });
     for (const [k, b] of pl.plans) plans.set(k, b);
     planDropped.push(...pl.dropped);
   }
   const planIds = [...plans.values()].flat().map((b) => b.id);
-  const OptionsSchema = optionsSchema({ moves: moves.map((m) => m.id), threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`), plans: planIds });
-  const prompt = `${contextPrompt(P, moves)}${planIds.length ? `${plansBlock(scene.situation.view, plans)}\nPLANNED BEATS\n${PLAN_TEXT}\n` : ""}
+  const OptionsSchema = optionsSchema({ moves: moves.map((m) => m.id), threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`), plans: planIds, anchors: anchorIds });
+  const prompt = `${contextPrompt(P, moves)}${planIds.length ? `${plansBlock(scene.situation.view, plans)}\nPLANNED BEATS\n${PLAN_TEXT}\n` : ""}${anchorIds.length ? `${anchorsBlock(anchors, never)}\nSOFT PLAN\n${SOFT_TEXT}\n` : ""}
 ${lengthFor(moment)}
 MIX: ${MIXES[opts.mix ?? "mix"]}${
     opts.steer
@@ -1014,5 +1023,15 @@ IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}
     .slice(0, 2)
     .map((e) => `bring in ${e.name.split(",")[0]}`);
   const steers = ["darker", "funnier", "smaller stakes", ...bring];
-  return { options, steers, dropped: rejected.length, rejected, plans: { beats: planIds.length, skipped: planDropped, sentences: droppedSentences }, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes, fixes: lists.fixes, quiet: new Map(seats.map((x) => [x.pc.name, x.quietFor])), meaning: meaningSummary(meaning, base.entities, sessionNumber, provider?.model ?? null, meaningNote) };
+  return { options, steers, dropped: rejected.length, rejected, plans: {
+      beats: planIds.length,
+      skipped: planDropped,
+      sentences: droppedSentences,
+      anchors: Object.fromEntries(anchors),
+      never,
+      landed: options.map((o) => {
+        const a = [...anchors.values()].flat().find((x) => x.id === o.scaffold.anchor);
+        return { move: o.scaffold.move, anchor: o.scaffold.anchor ?? null, intent: o.scaffold.intent ?? null, ownMove: !!a && a.move === o.scaffold.move, ...(a ? anchorLanded(a, o.option) : { landed: false, hits: [] }) };
+      }),
+    }, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes, fixes: lists.fixes, quiet: new Map(seats.map((x) => [x.pc.name, x.quietFor])), meaning: meaningSummary(meaning, base.entities, sessionNumber, provider?.model ?? null, meaningNote) };
 }
