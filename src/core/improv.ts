@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { callLlm, type LlmResult } from "./llm";
 import { findMentions, loadThreadContexts, retrieveThreads, selectThreads, type SelectedThread, type ThreadContext } from "./retrieval";
-import { PILLARS, type Pillar } from "./db/schema";
+import type { Pillar } from "./db/schema";
 import { db, schema } from "./db/client";
 import { embeddingProvider, ensureEmbeddings, searchByMeaning, type MeaningSearch } from "./embeddings";
 import { BUDGETS, distancesFrom } from "./graph";
