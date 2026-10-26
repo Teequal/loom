@@ -1,3 +1,4 @@
+import { recordInterplayChanges } from "./interplay-history";
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "./db/client";
@@ -413,6 +414,8 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
     moments++;
   }
 
+  // What these changes start or end between characters (conflicted, devoted…), in the same batch.
+  await recordInterplayChanges(campaignId, batch).catch(() => {});
   return { counts, warnings, entityResult, moments, batch };
 }
 

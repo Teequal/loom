@@ -61,6 +61,7 @@ export const Character = Base.extend({
   status: z.enum(["alive", "dead", "missing", "captured", "transformed", "unknown"]).optional(),
   importance: z.enum(["major", "minor", "walk-on"]).optional(),
   stance: SCALE.optional(), // towards the party: -3 hostile … +3 devoted (from attitude)
+  interplayOverrides: z.array(z.object({ id: z.string(), on: z.boolean(), other: z.string().optional() })).optional(), // the DM's word on an interplay
   identity: z.object({
     race: z.string().optional(),
     occupation: z.string().optional(), // class for PCs
@@ -147,6 +148,7 @@ export const Faction = Base.extend({
   plan: z.string().optional(),
   clock: z.object({ filled: z.number(), of: z.number() }).optional(), // "3 of 6"
   aims: z.array(Goal),
+  interplayOverrides: z.array(z.object({ id: z.string(), on: z.boolean(), other: z.string().optional() })).optional(),
   aggression: level(0, 3).optional(),
   alert: level(0, 3).optional(),
 });

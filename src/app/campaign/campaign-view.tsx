@@ -13,6 +13,7 @@ import { batchLabel, Header, Note, post, store, useCampaigns } from "../shell";
 // following connections.
 
 interface Overview {
+  tensions?: { name: string; kind: string; handle: string; strength: number; subject: { id: number; name: string } | null; other: { id: number; name: string } | null; by: string }[];
   campaign: { id: number; name: string; direction: string; tone: string; party: string | null; partyId: number | null; date: string; safety: string[]; autoApprove: boolean };
   latestSession: number;
   threads: {
@@ -180,6 +181,20 @@ function Loom({ campaignId }: { campaignId: number }) {
         </Panel>
         <Panel title="Gone quiet" hint="untouched for 2+ sessions">
           <RefList items={quiet.slice(0, 7).map((t) => ({ r: { kind: "thread" as const, id: t.id, name: t.title, sub: `${t.kind} thread` }, meta: `since s${t.lastTouched}` }))} empty="Nothing has gone quiet." />
+        </Panel>
+        <Panel title="Tensions in play" hint="worked out from how they stand">
+          {data.tensions?.length ? (
+            <ul className="space-y-1.5 text-[13.5px]">
+              {data.tensions.slice(0, 6).map((t, i) => (
+                <li key={i}>
+                  <RefLink r={{ kind: "entity", id: t.subject!.id, name: t.subject!.name, sub: t.name }} /> <span className="text-xs text-muted">{t.name}{t.by === "dm" ? " ✎" : ""}</span>
+                  <span className="block text-xs text-muted">{t.handle}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted">None yet. They come from goals, dispositions and how characters stand toward each other.</p>
+          )}
         </Panel>
         <Panel title="Who matters">
           <RefList items={figures.slice(0, 8).map((e) => ({ r: { kind: "entity" as const, id: e.id, name: e.name, sub: TYPE_LABEL[e.type], status: e.status }, meta: e.attitude ?? "" }))} empty="No major figures marked yet." />

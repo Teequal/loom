@@ -620,6 +620,30 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - `entity why "<name>" ["<moment>"]` gives every property and its terms, including for a given scene.
       - **On the enriched copy:** when Varek walks in, Arlen Hoder's pressure becomes "pressed" (afraid of Varek) and his candour "lies". Tomas's resolve gains "Pip is in this". Vex'ahlia's susceptibility is "resistant", though charmed by Iresia.
       - 12 crafted checks (242/242). Properties don't reach any prompt yet; that comes with interplays (step 3).
+    - [x] **Property model step 3: interplays** (`src/core/world/interplays.ts`, 26 Oct).
+      - **The table** (`INTERPLAYS`), the first 14:
+        - on one character: conflicted, resists the charm, cornered, secret strain, fear over greed, steadfast;
+        - on a pair: devoted, hollow loyalty, torn loyalties, unrequited, mutual distrust;
+        - across: rivals in purpose, faction fracture, the pull.
+
+        Each row's `find` reads the properties and pair weights and returns a strength (1–3), a handle ("torn: means to finish the ritual, but has come to like Iresia"), the reasons, its move kinds, the bounds it tightens or loosens, its offers, and whether it rests on a GM secret.
+      - **Examples run as tests:** each row has examples (fires and doesn't fire) in a small spec language. `world/test-graph.ts` builds them as in-memory graphs with no database. `npm run test:engine` runs all 29.
+      - **Overlaps** (`boundsFor`): alignments tighten bounds, and tensions loosen only what `LOOSENABLE` allows. Nothing loosens harming the charmer, or turning on someone they're devoted to.
+      - **History:** `recordInterplayChanges` logs starts and ends to the change log (kind `interplay`). It runs after every proposal is applied (recaps, live choices, direct changes), after undo, and after CLI writes. Entity history reads "now conflicted: …" or "no longer conflicted".
+      - **The DM's word:** `traits.interplay_overrides` switches one on or off per character, and optionally per other. CLI: `entity interplay "<name>" <id> on|off|auto [with="<other>"]`.
+      - **In prompts:** improv and Develop get a HOW THEY STAND block (`standingBlock`) for whoever is in play (moves' casts, who the moment names, NPCs here). It lists their interplays (up to 3 in improv, 5 in Develop), with the moves each suggests, and the notable bands of their properties. `LOOM_STANDING=off` leaves it out, for A/B runs.
+      - **Shown:**
+        - the inspector's "Pulls" section;
+        - the campaign page's "Tensions in play" panel;
+        - `entity why` lists interplays too.
+      - **On the enriched copy:** Vex'ahlia is conflicted and resists the charm; Arlen Hoder fears Varek more than he loves money; Tomas is devoted to Darius.
+      - **Live A/B on Haiku** (4 moments on the copy, with and without the block; `data/runs/2026-10-26-interplays-ab.md`):
+        - a clear win where the tension is direct (Vex'ahlia strains against the charm, with a check for Iresia to hold it);
+        - weak elsewhere: Arlen's fear over greed barely shows;
+        - about 10 s against 8 s, over only 4 calls each.
+
+        The interplays aren't move sources yet (step 5).
+      - 11 crafted checks (253/253) and 29 interplay examples.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

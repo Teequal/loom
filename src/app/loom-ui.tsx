@@ -582,6 +582,7 @@ function EntityView({ n }: { n: Node }) {
           Part of <RefLink r={n.partOf} />
         </p>
       )}
+      <Interplays items={n.interplays} />
       <Properties items={n.properties} />
       <Section
         title="Ties"
@@ -749,6 +750,29 @@ function Properties({ items }: { items?: { name: string; band: string; because: 
               ))}
             </ul>
           </details>
+        </li>
+      )}
+    />
+  );
+}
+
+// Tensions and alignments with others (or within), worked out from how they stand; never stored.
+function Interplays({ items }: { items?: { name: string; kind: string; handle: string; strength: number; because: string[]; by: string; secret: boolean; other: Ref | null }[] }) {
+  if (!items?.length) return null;
+  return (
+    <Section
+      title="Pulls"
+      items={items}
+      initial={4}
+      render={(i: NonNullable<typeof items>[number], k) => (
+        <li key={k} className="text-[13.5px]">
+          <span className="font-medium">{i.name}</span>
+          <span className="ml-1 text-[11.5px] text-muted">{i.kind}{i.by === "dm" ? " · ✎ yours" : ""}</span>
+          {i.secret && <Lock />}
+          <span className="block text-muted">
+            <Linked text={i.handle} />
+          </span>
+          <span className="block text-xs text-muted">{i.because.join(" · ")}</span>
         </li>
       )}
     />

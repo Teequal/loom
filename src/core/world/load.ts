@@ -157,6 +157,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     meta: extra.meta ?? {},
   });
 
+  const overrides = (t: EntityTraits) => (t.interplay_overrides ?? []).map((o) => ({ id: o.id, on: o.on, other: o.other != null ? entityKey(o.other) : undefined }));
   // A goal as the engine reads it: its target as a node key.
   const goalNode = (g: NonNullable<EntityTraits["goals"]>[number]) => ({ ...g, target: g.target != null ? entityKey(g.target) : undefined });
 
@@ -174,6 +175,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
           status: e.status ?? undefined,
           importance: e.importance ?? undefined,
           stance: e.attitude != null ? STANCE[e.attitude] : undefined,
+          interplayOverrides: overrides(t),
           identity: {
             race: t.race, occupation: t.occupation, level: (() => { const l = num(t.level); return l && l >= 1 && l <= 20 ? l : undefined; })(), age: t.age, gender: t.gender,
             alignment: t.alignment, background: t.background, appearance: list(t.appearance), voice: t.voice, personality: list(t.personality_traits), languages: list(t.languages),
@@ -210,7 +212,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
       add({ ...b, kind, status: e.status ?? undefined, placeType: t.location_type, scale: scaleOf(t.location_type, e.name), hazards: list(t.hazards), atmosphere: list(t.atmosphere), danger: t.danger }, b.key);
     } else if (kind === "faction") {
       const clock = String(t.clock ?? "").match(/(\d+)\s*(?:of|\/)\s*(\d+)/);
-      add({ ...b, kind, status: e.status ?? undefined, stance: e.attitude != null ? STANCE[e.attitude] : undefined, goal: t.faction_goal, plan: t.plan, clock: clock ? { filled: Number(clock[1]), of: Number(clock[2]) } : undefined, aims: (t.aims ?? []).map(goalNode), aggression: t.aggression, alert: t.alert }, b.key);
+      add({ ...b, kind, status: e.status ?? undefined, stance: e.attitude != null ? STANCE[e.attitude] : undefined, goal: t.faction_goal, plan: t.plan, clock: clock ? { filled: Number(clock[1]), of: Number(clock[2]) } : undefined, aims: (t.aims ?? []).map(goalNode), interplayOverrides: overrides(t), aggression: t.aggression, alert: t.alert }, b.key);
     } else {
       add({ ...b, kind: "other", status: e.status ?? undefined }, b.key);
     }

@@ -112,7 +112,7 @@ export const INPUTS: Record<string, Input> = {
     const m = ch?.side === "pc" ? momentumOf(c.v).get(ch.name) : undefined;
     return m?.band ? { value: m.band === "on a roll" ? 1 : -1, label: `${m.band} (${m.because.join(", ")})` } : null;
   },
-  captured: (c) => (c.node.kind === "character" && c.node.status === "captured" ? { value: 2, label: "captured" } : null),
+  captured: (c) => (c.node.kind === "character" && c.node.status === "captured" ? { value: 3, label: "captured" } : null),
   charmed: (c) => {
     const ch = asChar(c);
     const cond = ch && bodyOf(c.v, ch).conditions.find((x) => /^charmed/i.test(x.name));

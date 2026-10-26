@@ -4,6 +4,7 @@ import { type EntityTraits, hasTrait, traitText } from "./entity-fields";
 import { historyOf } from "./history";
 import { momentumOf } from "./world/derived";
 import { propertiesOf } from "./world/properties";
+import { interplaysFor } from "./world/interplays";
 import type { View } from "./world/engine";
 import type { NodeKey } from "./world/nodes";
 import { activityOf, viewOf } from "./world/engine";
@@ -108,6 +109,13 @@ async function entityNode(campaignId: number, id: number) {
   // The property model: what they're like and how they stand, worked out (never stored), with why.
   const nodeKey = graph.entityKey(e.id);
   const properties = nodeKey ? propertiesView(view, nodeKey) : [];
+  const interplays = nodeKey
+    ? interplaysFor(view, nodeKey, true).map((i) => {
+        const other = i.subject === nodeKey ? i.other : i.subject;
+        const o = other ? graph.nodes.get(other) : undefined;
+        return { name: i.name, kind: i.kind, handle: i.handle, strength: i.strength, because: i.because, by: i.by, secret: i.secret, other: o ? L.entRef(o.id) : null };
+      })
+    : [];
   // Where it is, as a chain of places (the Ritual Site › the Time Pocket › the Woods).
   const chain: NodeRef[] = [];
   for (let cur = e.actualLocationId ?? e.lastKnownLocationId ?? (e.type === "location" ? e.parentId : null), hops = 0; cur != null && hops < 6; hops++) {
@@ -148,6 +156,7 @@ async function entityNode(campaignId: number, id: number) {
     activity: activity && { band: activity.band, lastSession: activity.lastSession },
     momentum: momentum?.band ? { band: momentum.band, because: momentum.because } : null,
     properties,
+    interplays,
     description: e.description,
     aliases: e.aliases,
     where: chain,

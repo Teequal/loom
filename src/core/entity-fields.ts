@@ -90,6 +90,8 @@ export const TraitsSchema = z
     state: z.object({ confidence: scale, fear: level03, anger: level03, hope: level03, strain: level03 }).partial(),
     // Who caused a condition, and at whom it's aimed: "charmed by Iresia", "frightened of Varek".
     condition_sources: z.array(z.object({ condition: z.string(), by: z.number().int().optional(), target: z.number().int().optional() })),
+    // The DM's word on an interplay for this character: on or off, whatever the numbers say ("other": an entity id).
+    interplay_overrides: z.array(z.object({ id: z.string(), on: z.boolean(), other: z.number().int().optional() })),
     wants: list,
     fears: list,
     ideals: list,
@@ -140,7 +142,7 @@ export type EntityTraits = z.infer<typeof TraitsSchema>;
 export const TRAIT_KEYS = Object.keys(TraitsSchema.shape) as (keyof EntityTraits)[];
 // Structured traits: written by the DM, the CLI, the table or a reviewed inference pass, never as
 // "key: text" by the extractor (its schema can't express them yet).
-export const STRUCTURED_TRAITS = new Set<string>(["goals", "beliefs", "mood", "disposition", "state", "condition_sources", "power", "pull", "cost_severity", "cost_grows", "aims", "aggression", "alert", "danger"]);
+export const STRUCTURED_TRAITS = new Set<string>(["goals", "beliefs", "mood", "disposition", "state", "condition_sources", "power", "pull", "cost_severity", "cost_grows", "aims", "aggression", "alert", "danger", "interplay_overrides"]);
 // Arrays whose items carry stable ids, and the letter their ids start with.
 export const ID_LISTS: Record<string, string> = { goals: "g", beliefs: "b", aims: "a" };
 export const LIST_TRAITS = new Set<string>([

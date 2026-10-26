@@ -13,6 +13,9 @@ import { personalLines, spotlightScore, tableSeats } from "./players";
 import { buildScene, type Scene } from "./scene";
 import { findMoves, movesBlock, type Move } from "./moves";
 import { derivedLines } from "./world/derived";
+import { interplayLine, interplaysOf } from "./world/interplays";
+import type { NodeKey } from "./world/nodes";
+import { propertiesOf } from "./world/properties";
 import { BODY_PARTS, expand, fillSlots, pcOpensClause, SENSATIONS, type Ref } from "./slots";
 import type { Overrides, RecordFix } from "./situation";
 export type { RecordFix };
@@ -730,6 +733,35 @@ export type Prepared = Awaited<ReturnType<typeof prepareMoment>>;
 
 export const liveRulesOf = (scene: Scene) => scene.situation.effects.filter((e) => e.live).map((e) => ({ name: e.effect.name, why: e.why, sourceName: e.sourceName }));
 
+// Bands not worth a line: the middle of each property.
+const QUIET_BANDS = new Set(["mixed", "steady", "neutral", "at ease", "holds", "half-truths", "trades", "resistant", "none", "holding", "unknown", "quiet"]);
+
+/**
+ * How the people in play stand (the property model, §7.2): the interplays among them, strongest
+ * first, and the properties of each that are worth saying, all worked out by the engine with
+ * their reasons. Who's in play: the moves' casts, who the moment names, and NPCs here. Improv gets
+ * up to 3 interplays and 3 people; Develop up to 5 and 4.
+ */
+export function standingBlock(p: Prepared, moves: Move[], unit = "option") {
+  if (process.env.LOOM_STANDING === "off") return ""; // for A/B runs
+  const v = p.scene.situation.view;
+  const [maxInter, maxPeople] = unit === "chain" ? [5, 4] : [3, 3];
+  const names = new Set([...moves.flatMap((m) => m.cast.map((c) => c.name)), ...v.reading.broughtIn, ...v.reading.referred, ...v.reading.acting, ...p.lists.npcActors]);
+  const keys = [...names].map((n) => v.g.find(n)).filter((n): n is NonNullable<typeof n> => !!n && (n.kind === "character" || n.kind === "faction")).map((n) => n.key as NodeKey);
+  const inPlay = new Set(keys);
+  const inter = interplaysOf(v).filter((i) => inPlay.has(i.subject) || (i.other && inPlay.has(i.other))).slice(0, maxInter);
+  const people = keys
+    .map((k) => ({ k, props: propertiesOf(v, k).filter((x) => x.band && !QUIET_BANDS.has(x.band) && x.because.length).slice(0, 3) }))
+    .filter((x) => x.props.length)
+    .slice(0, maxPeople);
+  if (!inter.length && !people.length) return "";
+  const lines = [
+    ...inter.map((i) => `- ${interplayLine(v, i)}${i.moves.length ? `: a move could ${i.moves.join(" or ")}` : ""}.`),
+    ...people.map(({ k, props }) => `- ${v.g.nodes.get(k)!.name}: ${props.map((x) => `${x.name} ${x.band} (${x.because.slice(0, 2).join("; ")})`).join(" · ")}.`),
+  ];
+  return `\nHOW THEY STAND (worked out by the engine from the records; let it shape what they do, never state it as a label)\n${lines.join("\n")}\n`;
+}
+
 /** The prompt's context: the scene, who may act, the threads, the engine's moves and the rest. */
 export function contextPrompt(p: Prepared, moves: Move[], unit = "option") {
   return `${p.scene.text}
@@ -745,7 +777,7 @@ ${p.threads.map((t) => (t.detail === "full" ? threadBlock(t, p.titleOf, p.typeOf
 
 MOVES (the engine's picks for this moment: build each ${unit} on a different one)
 ${movesBlock(moves, p.titleOf)}
-${(() => {
+${standingBlock(p, moves, unit)}${(() => {
     const lately = derivedLines(p.scene.situation.view);
     return lately.length ? `\nLATELY (worked out from this session, not recorded)\n${lately.map((l) => `- ${l}`).join("\n")}\n` : "";
   })()}${p.sceneBlock}${p.callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${p.callbacks.map(momentLine).join("\n")}\n` : ""}${p.tableBlock ? `\n${p.tableBlock}\n` : ""}

@@ -3,6 +3,11 @@ import { db, schema } from "@/core/db/client";
 import { updateCampaign } from "@/core/entities";
 import { type EntityTraits, hasTrait, traitText } from "@/core/entity-fields";
 import { listMoments, setMomentStatus } from "@/core/moments";
+import { readMoment } from "@/core/moment-reading";
+import { viewOf } from "@/core/world/engine";
+import { interplaysOf } from "@/core/world/interplays";
+import { loadGraph } from "@/core/world/load";
+import type { NodeKey } from "@/core/world/nodes";
 
 // Everything in the loom for one campaign, shaped for the campaign page: the story's direction,
 // threads with their history, the cast, key moments, sessions, and what's been done with Loom.
@@ -73,7 +78,20 @@ export async function overview(campaignId: number) {
   const moments = await listMoments(campaignId, ["key", "suggested"]);
   const party = campaign.partyLocationId ? (nameOf.get(campaign.partyLocationId) ?? null) : null;
 
+  // The strongest tensions and alignments across the cast, worked out (never stored), for prep.
+  const g = await loadGraph(campaignId);
+  const v = viewOf(g, readMoment([], ""));
+  const ref = (k?: string) => {
+    const n = k ? g.nodes.get(k as NodeKey) : undefined;
+    return n && (n.kind === "character" || n.kind === "faction" || n.kind === "item" || n.kind === "place") ? { id: n.id, name: n.name } : null;
+  };
+  const tensions = interplaysOf(v)
+    .slice(0, 10)
+    .map((i) => ({ name: i.name, kind: i.kind, handle: i.handle, strength: i.strength, subject: ref(i.subject), other: ref(i.other), by: i.by }))
+    .filter((i) => i.subject);
+
   return {
+    tensions,
     campaign: { id: campaign.id, name: campaign.name, direction: campaign.direction, tone: campaign.tone, party, partyId: campaign.partyLocationId, date: campaign.inGameDate, safety: campaign.safetyLines, autoApprove: campaign.autoApprove },
     latestSession: Math.max(0, ...sessions.map((s) => s.number)),
     threads: threadViews,

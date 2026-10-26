@@ -33,6 +33,8 @@ import { readMoment } from "@/core/moment-reading";
 import { viewOf } from "@/core/world/engine";
 import { loadGraph } from "@/core/world/load";
 import { propertiesOf, propertyLine } from "@/core/world/properties";
+import { INTERPLAYS, interplayLine, interplaysFor } from "@/core/world/interplays";
+import { recordInterplayChanges } from "@/core/interplay-history";
 
 const DM = { source: "dm" as const };
 
@@ -231,6 +233,7 @@ entity set "<name>" field=value [field=value …] [--secret field,field]
   Sub-properties by path: disposition.boldness=2  state.anger=1  goals.g1.intent=-2  goals.g1.target="<name>"
     (see the ids with: entity show "<name>"; dispositions: compassion honesty boldness temper pride greed curiosity discipline faith fidelity)
 entity why "<name>" ["<a moment>"]   the properties worked out for them (intent, resolve, courage…), and why
+entity interplay "<name>" <conflicted|devoted|…> on|off|auto [with="<other>"]   your word on an interplay, whatever the numbers say
 entity goal "<name>" "<goal text>" [priority=1-3] [intent=-3…3] [commitment=0-3]   adds a goal (a faction's aim)
 entity merge "<duplicate>" "<real one>" [--secret]   two records are the same character; the duplicate's names become aliases
   --secret: the players don't know; the identity is kept GM-only and the duplicate's threads aren't linked to the real one`;
@@ -296,6 +299,7 @@ export async function entityCommand(campaignId: number, args: string[]) {
         const value = await subValue(campaignId, path, raw);
         report(await setSubProperty(e.id, path, value, { ...DM, secret: secret?.includes(path) ? [`traits.${path}`] : undefined }));
       }
+      if (dotted.length) await recordInterplayChanges(campaignId);
       if (dotted.length === kv.length) return;
       const patch = await buildPatch(campaignId, kv.filter(([k]) => !k.includes(".")));
       if (patch.status && !(ENTITY_STATUSES[e.type] as readonly string[]).includes(patch.status)) {
@@ -319,7 +323,26 @@ export async function entityCommand(campaignId: number, args: string[]) {
         console.log(`  ${propertyLine(p)}`);
         for (const t of p.terms) console.log(`      ${t.known ? `${t.value > 0 ? "+" : ""}${t.value}`.padStart(5) : "    ?"}  ${t.label}`);
       }
+      const ins = key ? interplaysFor(v, key, true) : [];
+      if (ins.length) {
+        console.log("\n  Interplays");
+        for (const i of ins) console.log(`    ${i.kind === "tension" ? "⇄" : "="} ${interplayLine(v, i)} · strength ${i.strength} · ${i.because.join("; ")}${i.moves.length ? ` · moves: ${i.moves.join(", ")}` : ""}`);
+      }
       return;
+    }
+    case "interplay": {
+      // entity interplay "<name>" <id> on|off|auto [with="<other>"]: the DM's word on an interplay.
+      const [name, which, state] = pos;
+      if (!name || !which || !["on", "off", "auto"].includes(state ?? "")) return console.log(ENTITY_USAGE);
+      const def = INTERPLAYS.find((d) => d.id === which.replace(/-/g, " "));
+      if (!def) return console.log(`Interplays: ${INTERPLAYS.map((d) => d.id.replace(/ /g, "-")).join(", ")}`);
+      const e = await findEntity(campaignId, name);
+      const other = Object.fromEntries(kv).with ? (await findEntity(campaignId, Object.fromEntries(kv).with)).id : undefined;
+      const rest = (e.traits.interplay_overrides ?? []).filter((o) => !(o.id === def.id && o.other === other));
+      const next = state === "auto" ? rest : [...rest, { id: def.id, on: state === "on", ...(other ? { other } : {}) }];
+      report(await updateEntity(e.id, { traits: { interplay_overrides: next } }, DM));
+      await recordInterplayChanges(campaignId);
+      return console.log(state === "auto" ? `${e.name}: ${def.id} is worked out from the records again.` : `${e.name}: ${def.id} is ${state}, whatever the numbers say.`);
     }
     case "goal": {
       // entity goal "<name>" "<text>" [priority=1] [intent=-2] [commitment=3]: adds a goal (or an aim, for a faction).
@@ -366,7 +389,9 @@ export async function relateCommand(campaignId: number, args: string[], remove =
     const from = await findEntity(campaignId, named[0]);
     const to = await findEntity(campaignId, named[1]);
     const weights = Object.fromEntries(PAIR_WEIGHTS.filter((w) => w in kvAll).map((w) => [w, kvAll[w] === "" ? null : Number(kvAll[w])]));
-    return report(await setPairWeights(campaignId, from.id, to.id, weights, DM));
+    report(await setPairWeights(campaignId, from.id, to.id, weights, DM));
+    await recordInterplayChanges(campaignId);
+    return;
   }
   const [fromName, typeRaw, toName] = named;
   if (!fromName || !typeRaw || !toName) return console.log(RELATE_USAGE);

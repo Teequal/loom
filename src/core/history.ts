@@ -59,7 +59,11 @@ export async function historyOf(campaignId: number, entity: { id: number; name: 
   return all.map((r) => {
     const field = r.field.replace(/^traits\./, "").replace(/LocationId$/, " location").replace(/Id$/, "").replace(/_/g, " ");
     const text =
-      r.kind === "field"
+      r.kind === "interplay"
+        ? (r.after as { on?: boolean; name?: string; handle?: string })?.on
+          ? `now ${(r.after as { name: string }).name}: ${(r.after as { handle: string }).handle}`
+          : `no longer ${(r.after as { name?: string })?.name ?? "so"}`
+        : r.kind === "field"
         ? `${field}: ${show(r.field, r.before)} → ${show(r.field, r.after)}`
         : r.kind === "created"
           ? "first recorded"

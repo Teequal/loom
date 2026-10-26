@@ -2,6 +2,7 @@ import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import { RELATION_LAWS } from "./rules";
 import { setPath } from "./sub-properties";
+import { recordInterplayChanges } from "./interplay-history";
 
 // Undo from the change log. Every write records what it was before; undo puts it back and marks
 // the change as undone (history keeps it, so the record stays honest).
@@ -138,6 +139,8 @@ async function reverse(c: Change): Promise<string | null> {
         if (after?.eventId != null) await db.delete(schema.threadEvents).where(eq(schema.threadEvents.id, Number(after.eventId)));
       }
       return null;
+    case "interplay":
+      return null; // a record of an interplay starting or stopping; it follows its parts, nothing to put back
     case "link-added":
       if (after?.from != null) {
         await db.delete(schema.threadLinks).where(and(eq(schema.threadLinks.fromThreadId, Number(after.from)), eq(schema.threadLinks.toThreadId, Number(after.to))));
@@ -183,10 +186,14 @@ export async function undoChanges(changes: Change[], opts: { force?: boolean } =
 
 export async function undoBatch(campaignId: number, batch: string, opts: { force?: boolean } = {}) {
   const rows = await db.select().from(schema.stateChanges).where(and(eq(schema.stateChanges.campaignId, campaignId), eq(schema.stateChanges.batch, batch)));
-  return { ...(await undoChanges(rows, opts)), total: rows.length };
+  const r = { ...(await undoChanges(rows, opts)), total: rows.length };
+  await recordInterplayChanges(campaignId).catch(() => {}); // what undoing it starts or ends
+  return r;
 }
 
 export async function undoOne(campaignId: number, id: number, opts: { force?: boolean } = {}) {
   const rows = await db.select().from(schema.stateChanges).where(and(eq(schema.stateChanges.campaignId, campaignId), eq(schema.stateChanges.id, id)));
-  return { ...(await undoChanges(rows, opts)), total: rows.length };
+  const r = { ...(await undoChanges(rows, opts)), total: rows.length };
+  await recordInterplayChanges(campaignId).catch(() => {});
+  return r;
 }

@@ -169,7 +169,7 @@ export const stateChanges = sqliteTable("state_changes", {
   sessionId: integer("session_id").references(() => sessions.id), // the session it happened in, or the latest one at the time
   subject: text("subject").notNull(), // "Monk figurine", "Salaena holds Monk figurine", "campaign"
   entityId: integer("entity_id").references(() => entities.id, { onDelete: "set null" }),
-  kind: text("kind", { enum: ["field", "relation-added", "relation-removed", "relation-changed", "created", "thread-created", "thread-updated", "link-added", "moment-added"] }).notNull(),
+  kind: text("kind", { enum: ["field", "relation-added", "relation-removed", "relation-changed", "created", "thread-created", "thread-updated", "link-added", "moment-added", "interplay"] }).notNull(),
   field: text("field").notNull().default(""),
   before: text("before", { mode: "json" }).$type<unknown>(),
   after: text("after", { mode: "json" }).$type<unknown>(),
