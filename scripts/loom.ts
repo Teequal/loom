@@ -1,7 +1,7 @@
 // Loom command-line tool for the Phase 1 spike. Run with: npm run loom -- <command>
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import { desc, eq, max } from "drizzle-orm";
+import { desc, eq, isNull, max } from "drizzle-orm";
 import { z } from "zod";
 import { costSummary } from "@/core/costs";
 import { db, initDb, schema } from "@/core/db/client";
@@ -26,6 +26,7 @@ import { seedFixture } from "@/core/seed";
 import { suggest } from "@/core/suggest";
 import { listThreads } from "@/core/threads";
 import { campaignCommand, entityCommand, relateCommand, threadCommand } from "./entity-cli";
+import { inviteCommand } from "./invite-cli";
 import { momentCommand } from "./moments-cli";
 import { playerCommand } from "./players-cli";
 import { ruleCommand } from "./rules-cli";
@@ -88,6 +89,7 @@ Engine
   score <blind-report.md>    Count your ticks in a blind report per model
   ping                       Make one small LLM call to check the API key and logging
   costs                      Show LLM calls, latency and cost so far
+  invite add|list|cap|revoke Invite testers when Loom is shared (see docs/sharing.md)
 
   --model takes haiku, sonnet, opus, fable or a full model id.
   Defaults: recap, suggest, enrich, flavor = opus; improv = sonnet; everything else = haiku.`;
@@ -190,7 +192,8 @@ async function reviewAndApply(original: ProposalFile, path: string) {
 }
 
 async function latestCampaignId() {
-  const [c] = await db.select().from(schema.campaigns).orderBy(desc(schema.campaigns.id)).limit(1);
+  // Your own most recent campaign, never an invited tester's.
+  const [c] = await db.select().from(schema.campaigns).where(isNull(schema.campaigns.testerId)).orderBy(desc(schema.campaigns.id)).limit(1);
   return c?.id;
 }
 
@@ -540,6 +543,10 @@ async function main() {
       });
       console.log(res.data.summary);
       console.log(`\n${res.model} · ${res.latencyMs} ms · ${res.inputTokens} in / ${res.outputTokens} out · ${usd(res.costUsd)}`);
+      break;
+    }
+    case "invite": {
+      await inviteCommand(args);
       break;
     }
     case "costs": {

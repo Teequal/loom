@@ -581,7 +581,7 @@ ${!turn ? 'None: opens_on is "start".' : ROLLS.has(turn.kind) ? 'The roll above.
       calls.push(res);
       for (const [i, c] of res.data.chains.entries()) if (i >= seen) finish(base + i, c);
     } catch (err) {
-      if (err instanceof Error && /credit has run out/.test(err.message)) throw err;
+      if (err instanceof Error && /credit has run out|AI allowance|switched off/.test(err.message)) throw err;
       for (const [i, l] of live) if (i >= base && l.run.steps.length && !accepted.some((c) => c.steps === l.run.steps)) input.onDrop?.(i);
       log.push({ label: `attempt ${attempt + 1}`, reason: `unusable answer (${err instanceof Error ? err.message.slice(0, 300) : "error"}…)` });
     }

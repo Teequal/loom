@@ -1,6 +1,6 @@
 import { desc, eq } from "drizzle-orm";
 import { db, schema } from "@/core/db/client";
-import { FIXTURE_NAME } from "@/core/seed";
+import { FIXTURE_NAME, SAMPLE_NAME } from "@/core/seed";
 import { liveEntries, liveSessionNumber } from "@/core/live";
 import { developmentView } from "./develop";
 
@@ -55,7 +55,7 @@ export async function liveState(campaignId: number) {
     session,
     autoApprove: !!camp?.auto,
     empty: !thread && !entity,
-    sample: camp?.name === FIXTURE_NAME,
+    sample: camp?.name === FIXTURE_NAME || camp?.name === SAMPLE_NAME,
     entries,
     lastTime: entries.length || (!thread && !entity) ? null : await lastTime(campaignId, session),
   };

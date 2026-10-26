@@ -74,7 +74,10 @@ export function useCampaigns() {
   useEffect(() => {
     fetch("/api/campaigns")
       .then((r) => r.json())
-      .then(({ campaigns }: { campaigns: Campaign[] }) => {
+      .then(async ({ campaigns }: { campaigns: Campaign[] }) => {
+        // Someone new (an invited tester, say) starts with one empty campaign, so they land on the
+        // welcome and its ways in, not an empty page.
+        if (!campaigns.length) campaigns = [(await post<{ campaign: Campaign }>("/api/campaigns", { name: "My campaign" })).campaign];
         setCampaigns(campaigns);
         const saved = Number(store.get("loom.campaign"));
         setId(

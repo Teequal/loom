@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { asWho } from "@/core/access";
+import { mayTouch, NEEDS_INVITE, NOT_YOURS, whoIs } from "./access";
 import { dbReady } from "./db";
 
 // One shape for the JSON API routes: validate the body, run, and turn failures into a short
@@ -9,10 +11,13 @@ export function jsonRoute<S extends z.ZodType, R>(schema: S, run: (body: z.infer
     if (!parsed.success) return Response.json({ error: parsed.error.issues[0]?.message ?? "That request didn't make sense." }, { status: 400 });
     try {
       await dbReady();
-      return Response.json(await run(parsed.data));
+      const who = await whoIs(request);
+      if (!who) return NEEDS_INVITE();
+      if (!(await mayTouch(who, parsed.data))) return NOT_YOURS();
+      return Response.json(await asWho(who, () => run(parsed.data)));
     } catch (err) {
       console.error(err);
-      const message = err instanceof Error && /credit has run out|expired|already saved|open question|no open threads|no session|any more|isn.t recorded|isn.t|can.t/i.test(err.message) ? err.message : failure;
+      const message = err instanceof Error && /credit has run out|AI allowance|switched off|expired|already saved|open question|no open threads|no session|any more|isn.t recorded|isn.t|can.t/i.test(err.message) ? err.message : failure;
       return Response.json({ error: message }, { status: 500 });
     }
   };
@@ -42,6 +47,9 @@ export function streamRoute<S extends z.ZodType>(schema: S, run: (body: z.infer<
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return Response.json({ error: parsed.error.issues[0]?.message ?? "That request didn't make sense." }, { status: 400 });
     await dbReady();
+    const who = await whoIs(request);
+    if (!who) return NEEDS_INVITE();
+    if (!(await mayTouch(who, parsed.data))) return NOT_YOURS();
     const encoder = new TextEncoder();
     // If the page goes away mid-stream (a reload, a phone locking), the work still finishes and is
     // saved; there's just no one left to tell.
@@ -60,10 +68,10 @@ export function streamRoute<S extends z.ZodType>(schema: S, run: (body: z.infer<
           }
         };
         try {
-          send({ type: "done", ...(await run(parsed.data, send)) });
+          send({ type: "done", ...(await asWho(who, () => run(parsed.data, send))) });
         } catch (err) {
           console.error(err);
-          send({ type: "error", message: err instanceof Error && /credit has run out|any more|isn.t on this/i.test(err.message) ? err.message : failure });
+          send({ type: "error", message: err instanceof Error && /credit has run out|AI allowance|switched off|any more|isn.t on this/i.test(err.message) ? err.message : failure });
         } finally {
           if (!gone) controller.close();
         }

@@ -1,3 +1,4 @@
+import { checkAllowance } from "../access";
 import { db, schema } from "../db/client";
 import { anthropicProvider } from "./anthropic";
 import type { LlmProvider, LlmRequest, LlmResult } from "./types";
@@ -65,6 +66,8 @@ function costOf(modelId: string, inputTokens: number, outputTokens: number) {
 // The one entry point every feature uses. Times the call and logs it, success or failure.
 export async function callLlm<T>(req: LlmRequest<T>): Promise<LlmResult<T>> {
   const model = modelFor(req);
+  // An invited tester's calls stop at their allowance (access.ts); the owner's never do.
+  const testerId = await checkAllowance(req.campaignId);
   const started = performance.now();
   try {
     const res = await provider.complete(req, model);
@@ -72,6 +75,7 @@ export async function callLlm<T>(req: LlmRequest<T>): Promise<LlmResult<T>> {
     const costUsd = costOf(res.model, res.inputTokens, res.outputTokens);
     await db.insert(schema.llmCalls).values({
       campaignId: req.campaignId ?? null,
+      testerId,
       feature: req.feature,
       model: res.model,
       latencyMs,
@@ -84,6 +88,7 @@ export async function callLlm<T>(req: LlmRequest<T>): Promise<LlmResult<T>> {
   } catch (err) {
     await db.insert(schema.llmCalls).values({
       campaignId: req.campaignId ?? null,
+      testerId,
       feature: req.feature,
       model,
       latencyMs: Math.round(performance.now() - started),

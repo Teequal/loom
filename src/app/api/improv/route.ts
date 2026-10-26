@@ -4,6 +4,8 @@ import { SURPRISES } from "@/core/moves";
 import { beginSession, logAsk } from "@/core/live";
 import { loadThreadContexts } from "@/core/retrieval";
 import { dbReady } from "@/server/db";
+import { asWho } from "@/core/access";
+import { mayTouch, NEEDS_INVITE, NOT_YOURS, whoIs } from "@/server/access";
 import { overrides } from "@/server/route";
 
 const Body = z.object({
@@ -42,15 +44,27 @@ export async function POST(request: Request) {
   if (!parsed.success) return Response.json({ error: "Type what the players just did." }, { status: 400 });
   const { campaignId, moment, model, tone, mix, steer, overrides, surprises } = parsed.data;
   await dbReady();
+  const who = await whoIs(request);
+  if (!who) return NEEDS_INVITE();
+  if (!(await mayTouch(who, parsed.data))) return NOT_YOURS();
   await beginSession(campaignId);
   const titleOf = new Map((await loadThreadContexts(campaignId)).map((t) => [t.id, t.title]));
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (event: object) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+      // If the page goes away mid-stream, the moment is still logged; there's just no one to tell.
+      let gone = false;
+      const send = (event: object) => {
+        if (gone) return;
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        } catch {
+          gone = true;
+        }
+      };
       try {
-        const result = await improv(campaignId, moment, "ranked", model, { tone, mix, steer, overrides, surprises, onOption: (o) => send({ type: "option", option: card(o, titleOf) }) });
+        const result = await asWho(who, () => improv(campaignId, moment, "ranked", model, { tone, mix, steer, overrides, surprises, onReading: (r) => send({ type: "reading", reading: r }), onOption: (o) => send({ type: "option", option: card(o, titleOf) }) }));
         // Every moment asked about goes in the session log; using an option is a separate step.
         const entry = await logAsk(
           campaignId,
@@ -74,9 +88,9 @@ export async function POST(request: Request) {
         });
       } catch (err) {
         console.error(err);
-        send({ type: "error", message: err instanceof Error && /credit has run out/.test(err.message) ? err.message : "Loom couldn't come up with options this time. Try again." });
+        send({ type: "error", message: err instanceof Error && /credit has run out|AI allowance|switched off/.test(err.message) ? err.message : "Loom couldn't come up with options this time. Try again." });
       } finally {
-        controller.close();
+        if (!gone) controller.close();
       }
     },
   });

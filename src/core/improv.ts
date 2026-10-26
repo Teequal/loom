@@ -677,6 +677,15 @@ export interface ImprovOptions {
   onOption?: (o: ImprovOption) => void;
   beatPlans?: boolean | "soft"; // true: the engine plans each beat; "soft": an anchor per option (beat-plans.ts); default from LOOM_BEAT_PLANS
   onTrace?: (stage: "prompt" | "raw", data: unknown) => void; // for a step-by-step view of one call (debugging, explainers)
+  onReading?: (r: MomentRead) => void; // what Loom picked out before writing, for the page to show while it writes
+}
+
+/** What Loom picked out of the moment and the records before the model writes: names only. */
+export interface MomentRead {
+  who: string[]; // the players' characters the moment is about
+  near: string[]; // characters here who could take part
+  place: string | null;
+  threads: string[]; // the strongest threads in play
 }
 
 // The complete objects so far in the "options" array of a JSON answer that's still being written.
@@ -902,6 +911,16 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   // got, so asking the same thing again gives the same answer.
   const surprise = { chance: SURPRISE_CHANCE[opts.surprises ?? "rare"], seed: `${campaignId}|${moment}|${scene.situation.view.g.log.length}|${opts.steer ?? ""}` };
   const moves = findMoves(scene.situation.view, threads, { callbacks, liveRules: liveRulesOf(scene), surprise });
+  {
+    const s = scene.situation;
+    const typeOf = new Map(s.entities.map((e) => [e.name, e.type]));
+    opts.onReading?.({
+      who: [...s.acting],
+      near: [...s.here].filter((n) => typeOf.get(n) === "npc").slice(0, 4),
+      place: s.party?.name ?? null,
+      threads: threads.slice(0, 3).map((t) => t.title),
+    });
+  }
   // Beat plans: the engine decides what each beat delivers (who, which act, which fact).
   const plans = new Map<string, PlanBeat[]>();
   const planDropped: { about: string; why: string }[] = [];
@@ -1026,7 +1045,7 @@ ${moment}`;
     try {
       res = await callLlm({ feature: "improv", campaignId, system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true, onText });
     } catch (err) {
-      if (err instanceof Error && /credit has run out/.test(err.message)) throw err; // retrying won't help
+      if (err instanceof Error && /credit has run out|AI allowance|switched off/.test(err.message)) throw err; // retrying won't help
       rejected.push({ label: `attempt ${attempt + 1}`, reason: `unusable answer (${err instanceof Error ? err.message.slice(0, 60) : "error"}…)` });
       continue;
     }

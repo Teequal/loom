@@ -1,6 +1,6 @@
 "use client";
 
-import { Weaving } from "./weave";
+import { Reading } from "./reading";
 import { useEffect, useRef, useState } from "react";
 import { type Encounter, FightPanel } from "./fight";
 import { Icon } from "./icons";
@@ -192,7 +192,13 @@ export function Develop({
 
       {!picking && (
         <div className="mt-2 space-y-4">
-          {busy === "new" && !chains.length && <Weaving label={`Weaving where this goes… ${elapsed} s`} className="py-2" />}
+          {busy === "new" && !chains.length && (
+            <Reading
+              className="py-2"
+              steps={[{ label: "Leaning", items: [words.trim() || STEERS.find((x) => x.id === steer)?.label || "Loom's pick"] }, { label: "Following", items: ["what the players can do next"] }]}
+              final={`Writing where it goes · ${elapsed} s`}
+            />
+          )}
           {chains.map((slot, i) => (
             <ChainCard
               key={`${devId}-${i}-${slot.chain?.move ?? "x"}`}
@@ -211,7 +217,7 @@ export function Develop({
               <Icon name="plus" size={12} /> Another take
             </button>
           )}
-          {busy === "more" && <Weaving label={`Another take… ${elapsed} s`} />}
+          {busy === "more" && <Reading final={`Another take · ${elapsed} s`} />}
           {llm && (
             <p className="text-[11px] text-muted">
               {prefs.costs && `${llm.model.replace(/^claude-/, "")} · ${llm.seconds.toFixed(1)} s · $${llm.costUsd.toFixed(4)}`}
@@ -400,7 +406,7 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
         })}
         {(writing || busy.startsWith("swap")) && (
           <li className="relative pb-1 pl-5">
-            <Weaving label={busy ? `Rewriting… ${elapsed} s` : "The next step…"} />
+            <Reading final={busy ? `Rewriting · ${elapsed} s` : "The next step"} />
           </li>
         )}
       </ol>
@@ -419,7 +425,7 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
                 <Icon name="undo" size={12} /> Back
               </button>
             )}
-            {busy && <Weaving label={`Reworking… ${elapsed} s`} />}
+            {busy && <Reading final={`Reworking · ${elapsed} s`} />}
           </div>
           {reworking && (
           <div className="rise mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px]">

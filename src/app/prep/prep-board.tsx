@@ -1,6 +1,6 @@
 "use client";
 
-import { Weaving } from "../weave";
+import { Reading } from "../reading";
 import { usePrefs } from "../prefs";
 import { useCallback, useEffect, useState } from "react";
 import { Linked, LoomProvider, RefChips, useLoom } from "../loom-ui";
@@ -254,7 +254,11 @@ function Board({ campaignId }: { campaignId: number }) {
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
               <span className="text-xs text-muted">
                 {busy === "reading" ? (
-                  <Weaving label={`Reading your notes into the loom… ${elapsed} s`} />
+                  <Reading
+                    every={5000}
+                    steps={[{ label: "Notes", items: ["reading what happened"] }, { label: "Finding", items: ["threads", "characters", "places"] }, { label: "Checking", items: ["against what's already in the loom"] }]}
+                    final={`Writing up the changes · ${elapsed} s`}
+                  />
                 ) : live?.used ? (
                   <button type="button" onClick={wrapAsIs} disabled={!!busy || !!live.openQuestions || !!live.results.length} className="underline-offset-2 hover:text-foreground hover:underline disabled:opacity-40 disabled:no-underline">
                     Nothing to add: wrap up as it is
@@ -424,7 +428,14 @@ function Board({ campaignId }: { campaignId: number }) {
             {busy === "ideas" ? `Thinking… ${elapsed} s` : ideas ? "New ideas" : "Get prep ideas"}
           </button>
         </div>
-        {busy === "ideas" && <Weaving label="Looking for threads that pay each other off…" className="mb-3" />}
+        {busy === "ideas" && (
+          <Reading
+            className="mb-3"
+            every={4500}
+            steps={[{ label: "Reading", items: ["the threads in play"] }, { label: "Looking for", items: ["threads that pay each other off"] }, { label: "Then", items: ["something for each player"] }]}
+            final="Writing your prep"
+          />
+        )}
         {!ideas && busy !== "ideas" && <p className="text-sm text-muted">Payoffs between threads already in play, something for each player, and ways back into quiet threads. About half a minute.</p>}
         {ideas && saved.prep?.at && <p className="-mt-1 mb-3 text-xs text-muted">Kept from {savedWhen(saved.prep.at)}. They stay here until you ask for new ones.</p>}
         {ideas && (
@@ -645,7 +656,7 @@ function FreshIdeas({ campaignId, initial, at }: { campaignId: number; initial: 
           <Icon name="sparkle" /> {busy ? `Thinking… ${elapsed} s` : fresh ? "More ideas" : "Suggest something new"}
         </button>
       </div>
-      {busy && <Weaving label="Spinning something new from what's already here…" className="mb-3" />}
+      {busy && <Reading className="mb-3" every={4000} steps={[{ label: "Reading", items: ["where the story is heading"] }, { label: "Looking for", items: ["what's already here to build on"] }]} final="Writing something new" />}
       {!fresh && !busy && <p className="text-sm text-muted">New themes, threads, characters and hidden connections that fit where the story is heading. Add the ones you like to the loom.</p>}
       {error && <p className="text-sm text-danger">{error}</p>}
       {fresh && when && <p className="-mt-1 mb-3 text-xs text-muted">Kept from {savedWhen(when)}.</p>}

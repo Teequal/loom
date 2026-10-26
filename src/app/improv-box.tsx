@@ -1,6 +1,6 @@
 "use client";
 
-import { Weaving } from "./weave";
+import { Reading, type ReadStep } from "./reading";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Choice, Field, Steps, Switch, Tune } from "./controls";
@@ -161,6 +161,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const [empty, setEmpty] = useState(false);
   // A new campaign shows its ways in first; the box comes when the GM chooses to start at the table.
   const [atTable, setAtTable] = useState(false);
+  const [read, setRead] = useState<{ who: string[]; near: string[]; place: string | null; threads: string[] } | null>(null); // what Loom picked out, shown while it writes
   const [unravelling, setUnravelling] = useState(false); // the moment the unchosen options come apart
   const [lastTime, setLastTime] = useState<LastTime | null>(null); // where things stood, for a session not yet begun
   const [opening, setOpening] = useState<Opening | null>(null); // a hook just started
@@ -315,6 +316,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
     setSteered(again?.steer ?? "");
     setPlaceholder("What did the players just do?");
     setCards([]);
+    setRead(null);
     setDone(null);
     setError("");
     setOpen(null);
@@ -343,7 +345,8 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
         buffer = lines.pop() ?? "";
         for (const line of lines.filter(Boolean)) {
           const event = JSON.parse(line);
-          if (event.type === "option") setCards((cs) => [...cs, event.option]);
+          if (event.type === "reading") setRead(event.reading);
+          else if (event.type === "option") setCards((cs) => [...cs, event.option]);
           else if (event.type === "done") setDone(event);
           else if (event.type === "error") throw new Error(event.message);
         }
@@ -502,7 +505,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
               title="Enter"
               className="btn-primary shrink-0 text-sm"
             >
-              {status === "running" ? "Weaving…" : "Find threads"}
+              {status === "running" ? "Reading…" : "Find threads"}
             </button>
           </div>
         </form>
@@ -610,9 +613,12 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                 />
               );
             })}
-            {Array.from({ length: pending }, (_, i) => (
-              <li key={`pending-${i}`} aria-hidden className="thread-slot h-12 rounded-xl border border-line bg-surface/60" style={{ "--delay": `${i * 0.35}s` } as React.CSSProperties} />
-            ))}
+            {/* Before the first option: what Loom picked out, a step at a time. After it, one quiet line. */}
+            {pending > 0 && (
+              <li className={cards.length ? "pt-1" : "py-1"}>
+                <Reading steps={cards.length ? [] : readSteps(read)} final={cards.length ? `Writing ${pending === 1 ? "one more" : `${pending} more`}` : "Writing three ways forward"} />
+              </li>
+            )}
           </ol>
           {current?.choiceKind && cards.some((c) => !(current.choiceKind === "option" && current.choice === c.text)) && (
             <button type="button" onClick={() => setShowOthers(!showOthers)} className="btn-tertiary mt-2 flex text-sm">
@@ -781,6 +787,16 @@ const HOOK_STAGES = [
   { id: "reading", label: "Reading it into the loom" },
   { id: "weaving", label: "Weaving the threads together" },
 ];
+// What Loom read in the moment, as the steps it shows while writing: names only, never how.
+function readSteps(r: { who: string[]; near: string[]; place: string | null; threads: string[] } | null): ReadStep[] {
+  if (!r) return [];
+  return [
+    { label: "Who", items: [...r.who, ...r.near.filter((n) => !r.who.includes(n))].slice(0, 4) },
+    { label: "Where", items: r.place ? [r.place] : [] },
+    { label: "Threads", items: r.threads, chips: true },
+  ];
+}
+
 function HookStages({ stage, title }: { stage: string; title?: string }) {
   const at = Math.max(0, HOOK_STAGES.findIndex((x) => x.id === stage));
   return (
@@ -920,8 +936,7 @@ function Welcome({
           <Icon name="sparkle" /> {busy === "hook" ? `Inventing a world… ${elapsed} s` : party.trim() || theme.trim() ? "Invent the hook" : "Start from a random hook"}
         </button>
         {busy === "hook" && (
-          <div className="mt-4 flex items-center gap-5">
-            <Weaving className="scale-125" />
+          <div className="mt-4">
             <HookStages stage={stage.stage} title={stage.title} />
           </div>
         )}
@@ -1249,7 +1264,7 @@ function Branches({ parent, live, onOpen }: { parent: Entry; live: Live; onOpen?
 
 // What using a choice did to the loom. Questions live in the tray above the box.
 function LoomStatus({ entry, compact = false }: { entry: Entry; compact?: boolean }) {
-  if (entry.status === "extracting") return <Weaving label="Weaving it into the loom…" className={compact ? "" : "mt-3"} />;
+  if (entry.status === "extracting") return <Reading final="Adding it to the loom" className={compact ? "" : "mt-3"} />;
   if (entry.status === "failed") return <p className={`${compact ? "" : "mt-3"} text-xs text-danger`}>Couldn&apos;t add this to the loom. It&apos;s still in the session log for wrap-up.</p>;
   if (entry.status !== "done") return null;
   if (compact) return <span className="text-xs text-muted">{entry.summary.length ? `${entry.summary.length} added to the loom` : "Logged"}{entry.questions.length ? ` · ${entry.questions.length} to answer above` : ""}</span>;
@@ -1322,7 +1337,7 @@ function OptionCard({
   return (
     <li
       id={state === "used" ? "chosen" : undefined}
-      className={`rise group scroll-mt-40 rounded-xl border bg-surface p-4 shadow-sm transition-opacity ${state === "used" ? "stitched border-thread/60" : "border-line"} ${state === "other" ? "opacity-55 hover:opacity-100" : ""}`}
+      className={`rise group scroll-mt-40 rounded-xl border bg-surface p-4 shadow-sm transition-opacity ${state === "used" ? "border-thread/60" : "border-line"} ${state === "other" ? "opacity-55 hover:opacity-100" : ""}`}
     >
       <div className="mb-2 flex items-start justify-between gap-3">
         {/* The headline stays the option's name; tapping it folds the card back while choosing. */}

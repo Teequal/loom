@@ -139,91 +139,50 @@ select.quiet {
   }
 }
 
-/* ---------- Weaving: Loom's own "working on it" ---------- */
-/* Warp threads stand still; weft threads are drawn across them one row at a time, building a small
-   woven band, then the band clears and starts again. */
-.weave {
-  color: var(--thread);
+/* ---------- Reading: Loom's "working on it" ---------- */
+/* Each thing Loom picked out rises in, a name at a time; the line it's writing breathes. */
+.read-step {
+  animation: rise 320ms ease-out both;
 }
-.weave .warp {
-  stroke: currentColor;
-  opacity: 0.3;
+.read-item {
+  display: inline;
+  animation: read-in 360ms ease-out both;
 }
-.weave .weft {
-  stroke: currentColor;
-  stroke-dasharray: 80;
-  stroke-dashoffset: 80;
-  animation: weft 3.6s cubic-bezier(0.55, 0, 0.35, 1) infinite;
-}
-.weave .weft:nth-of-type(2) {
-  animation-delay: 0.6s;
-}
-.weave .weft:nth-of-type(3) {
-  animation-delay: 1.2s;
-}
-.weave .shuttle {
-  fill: currentColor;
-  animation: shuttle 1.2s ease-in-out infinite alternate;
-}
-@keyframes weft {
-  0% {
-    stroke-dashoffset: 80;
-    opacity: 1;
-  }
-  35% {
-    stroke-dashoffset: 0;
-  }
-  85% {
-    stroke-dashoffset: 0;
-    opacity: 1;
-  }
-  100% {
-    stroke-dashoffset: 0;
-    opacity: 0;
-  }
-}
-@keyframes shuttle {
+@keyframes read-in {
   from {
-    transform: translateX(0);
+    opacity: 0;
+    filter: blur(2px);
   }
   to {
-    transform: translateX(52px);
+    opacity: 1;
+    filter: none;
   }
 }
-
-/* A slot an option is being woven into: one thread drawn across, again and again. */
-.thread-slot {
-  position: relative;
-  overflow: hidden;
+.read-dots {
+  display: inline-flex;
+  gap: 3px;
 }
-.thread-slot::after {
-  content: "";
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  top: 50%;
-  height: 1.5px;
-  background: linear-gradient(90deg, transparent, var(--thread) 20%, var(--thread) 80%, transparent);
-  transform-origin: left;
-  animation: lay-thread 1.8s ease-in-out infinite;
-  animation-delay: var(--delay, 0s);
-  opacity: 0.55;
+.read-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--thread);
+  animation: read-dot 1.2s ease-in-out infinite;
 }
-@keyframes lay-thread {
-  0% {
-    transform: scaleX(0);
-    opacity: 0;
-  }
-  15% {
-    opacity: 0.55;
-  }
-  60% {
-    transform: scaleX(1);
-    opacity: 0.55;
-  }
+.read-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.read-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes read-dot {
+  0%,
+  70%,
   100% {
-    transform: scaleX(1);
-    opacity: 0;
+    opacity: 0.25;
+  }
+  35% {
+    opacity: 1;
   }
 }
 
@@ -269,40 +228,11 @@ select.quiet {
   }
 }
 
-/* The option you chose is stitched into the story: a running stitch along its top edge. */
-.stitched {
-  position: relative;
-}
-.stitched::before {
-  content: "";
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  top: -1px;
-  height: 2px;
-  border-radius: 1px;
-  background: repeating-linear-gradient(90deg, var(--thread) 0 7px, transparent 7px 11px);
-  transform-origin: left;
-  animation: stitch 650ms ease-out both;
-}
-@keyframes stitch {
-  from {
-    transform: scaleX(0);
-  }
-  to {
-    transform: scaleX(1);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .weave .weft,
-  .weave .shuttle,
-  .thread-slot::after,
-  .stitched::before {
+  .read-step,
+  .read-item,
+  .read-dots i {
     animation: none;
-  }
-  .weave .weft {
-    stroke-dashoffset: 0;
   }
   .unravel,
   .unravel > * {

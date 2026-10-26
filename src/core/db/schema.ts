@@ -36,6 +36,8 @@ export const campaigns = sqliteTable("campaigns", {
   // At the table: apply risky changes without asking (still logged, still undoable).
   autoApprove: integer("auto_approve", { mode: "boolean" }).notNull().default(false),
   // The latest prep ideas and fresh ideas, kept so leaving the Prep page doesn't lose them.
+  // Whose campaign it is when Loom is shared with invited testers; empty means the owner's.
+  testerId: integer("tester_id"),
   savedIdeas: text("saved_ideas", { mode: "json" }).$type<{ prep?: { at: string; session: number; data: unknown }; fresh?: { at: string; session: number; data: unknown } }>(),
   // Superseded by the effects table (structured house rules); kept until old data is migrated.
   mechanics: text("mechanics", { mode: "json" }).$type<CampaignMechanic[]>().notNull().default([]),
@@ -276,10 +278,23 @@ export const threadEvents = sqliteTable("thread_events", {
   createdAt: createdAt(),
 });
 
+// People invited to try Loom: each gets a link with their code, their own campaigns, and a cap on
+// what their model calls may cost. The owner's code sees the owner's campaigns.
+export const testers = sqliteTable("testers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  code: text("code").notNull().unique(),
+  owner: integer("owner", { mode: "boolean" }).notNull().default(false),
+  capUsd: real("cap_usd").notNull().default(2),
+  createdAt: createdAt(),
+  revokedAt: text("revoked_at"),
+});
+
 // Every LLM call, for latency and cost tracking.
 export const llmCalls = sqliteTable("llm_calls", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   campaignId: integer("campaign_id"), // which campaign it was for, when known (activity and cost per campaign)
+  testerId: integer("tester_id"), // who asked, when Loom is shared with invited testers (their spending cap)
   feature: text("feature").notNull(),
   model: text("model").notNull(),
   latencyMs: integer("latency_ms").notNull(),

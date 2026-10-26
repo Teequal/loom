@@ -1,17 +1,27 @@
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
 
 export const FIXTURE_NAME = "Fixture: The Potion Swap";
+export const SAMPLE_NAME = "Sample: The Potion Swap"; // a tester's own copy
 
 // A small hand-written campaign built around the canonical example from CLAUDE.md.
 // The DM's real fix (give each player the other's cure) is deliberately NOT stored:
 // Loom should be able to find it from these threads.
-export async function seedFixture() {
-  // Reuse the fixture's id so reseeding doesn't make it the "most recent" campaign.
-  const [old] = await db.select().from(schema.campaigns).where(eq(schema.campaigns.name, FIXTURE_NAME));
-  await db.delete(schema.campaigns).where(eq(schema.campaigns.name, FIXTURE_NAME));
-
-  const [campaign] = await db.insert(schema.campaigns).values({ id: old?.id, name: FIXTURE_NAME }).returning();
+/**
+ * The potion fixture. With no tester, it replaces the owner's copy (reusing its id, so reseeding
+ * doesn't make it the "most recent" campaign). An invited tester gets a copy of their own, under
+ * its own name, which a reseed never touches.
+ */
+export async function seedFixture(testerId: number | null = null) {
+  let campaign: typeof schema.campaigns.$inferSelect;
+  if (testerId == null) {
+    const own = and(eq(schema.campaigns.name, FIXTURE_NAME), isNull(schema.campaigns.testerId));
+    const [old] = await db.select().from(schema.campaigns).where(own);
+    await db.delete(schema.campaigns).where(own);
+    [campaign] = await db.insert(schema.campaigns).values({ id: old?.id, name: FIXTURE_NAME }).returning();
+  } else {
+    [campaign] = await db.insert(schema.campaigns).values({ name: SAMPLE_NAME, testerId }).returning();
+  }
   const campaignId = campaign.id;
 
   const [s1, s2] = await db

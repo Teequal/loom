@@ -818,8 +818,8 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - **Last time:** a fresh session's table shows the last session's notes (without the log's own labels), the threads in play and kept prep collisions, until the first moment.
   - **Plain words:** no "walk-on", "s0", "+/~" or "link:" in what DMs read. "Tone" (wording) is now "Drama". Costs and timings sit behind Settings › Behind the scenes (off by default). Rules works on Settings. Pronouns: "they" or the name when a PC's gender isn't recorded.
   - **Feel:**
-    - **Weaving** (`src/app/weave.tsx`): a small loom (warp lines, weft drawn row by row, a shuttle) replaces spinners and "…" while Loom writes.
-    - **Unravel:** when an option is used, the others fray and fold away into "N other options"; the used card gets a stitched top edge. Pending option slots lay in like threads. All respect reduced motion.
+    - **Reading steps** (`src/app/reading.tsx`, replacing the weaving motif and the stitched edge, which Jacob didn't like): while Loom writes, it shows what it picked out, a step at a time, then "Writing three ways forward". For improv these are real: the server sends a `reading` event before the model writes (`onReading` in `improv.ts`: who's acting and who's near, where, the top 3 threads as chips). Names only, never how. Develop and Prep show steps in plain words.
+    - **Unravel:** when an option is used, the others fray and fold away into "N other options". Respects reduced motion.
     - **Readable notes** (`src/app/notes-view.tsx`, `parseNotes`): pasted recaps get headings (title-like lines), "Topic:" bullets as subheads with their bullets tucked under, "Key: value" bullets with the key set off, and every name linked. The table log reads as moments (italic) with what happened beneath, and Then / Result marked. Used in the inspector's session view and the campaign's Sessions tab.
     - **Inspector:** characters read in sections with icons (Who they are, What drives them, What they carry), with a glance row (where, part of, health, mood, conditions). The property model folds under "Personality and feelings". A session's threads are grouped (new / moved on / resolved). History reads "session 10 · power: 3 (was 2)".
   - **Fixed along the way:**
@@ -827,6 +827,15 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
     - The campaign overview scrolled sideways at phone width (a grid column grew to its widest card).
     - A descriptive name opening a sentence gets an article ("The cloud giant shifts…"; `asSubject` in `improv.ts`).
   - Tested in the browser on a throwaway campaign (deleted afterwards), desktop and phone: hook to table, use and unravel, a one-tap result, the 72-change undo with "delete", notes and inspector on the enriched copy. 363/363 crafted checks; engine tests, lint and types are clean.
+
+- [x] **Step 18: Invite testing from this Mac** (27 Oct; Jacob chose a tunnel over Fly.io or Vercel + Turso, and a space of their own per tester). How-to: [docs/sharing.md](docs/sharing.md).
+  - **Hosting:** `npm run share` runs the production build on port 3100 with `LOOM_INVITES=on`, a Cloudflare quick tunnel (`cloudflared`, installed with brew; a new `trycloudflare.com` address each start) and `caffeinate`. The dev server on 3000 is unchanged.
+  - **Invites** (`testers` table, migration `0015`; `npm run loom -- invite add|list|cap|revoke|restore|remove`): `/join/<code>` sets a 60-day cookie. `--owner` is Jacob's own link from outside.
+  - **Who's outside:** a request with `cf-connecting-ip` (always added by the tunnel) needs a working invite; home and this Mac don't. Pages are gated in `src/proxy.ts`, the API in `jsonRoute`/`streamRoute` and the custom routes.
+  - **Their own space:** `campaigns.tester_id`. `mayTouch` (`src/server/access.ts`) checks every campaign, entry, character, thread and key moment a request names. Someone with no campaigns gets "My campaign" and the welcome; the sample is their own copy ("Sample: The Potion Swap"), and a reseed only replaces the owner's fixture. The CLI's default campaign is never a tester's.
+  - **Spending cap:** `callLlm` checks the allowance first (`checkAllowance` in `src/core/access.ts`, default US$2) and records `llm_calls.tester_id`. Who's asking follows the request through `AsyncLocalStorage` (so background extraction counts), with the campaign's tester as the fallback. At the cap: "You've used this test's AI allowance…".
+  - **Also:** the improv stream keeps working (and logging) if the page goes away.
+  - **Tested through the real tunnel:** no invite gives 401 on pages and API; a bad link 404; a tester sees only their own campaigns (Duradan's prep and inspector give 403); their sample copy; an ask recorded against them; the cap stops calls politely; revoking closes the pages. Warm, through the tunnel: what Loom read at once, first option 2.5 s, all three 4.5 s (the first ask after a start ~8 s). Test invites were removed afterwards.
 
 ## Entity model build (docs/entity-model.md)
 
