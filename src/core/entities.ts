@@ -7,8 +7,11 @@ import {
   type FieldMetaMap,
   type RelationType,
   type Source,
+  ID_LISTS,
   TraitsSchema,
 } from "./entity-fields";
+import { PAIR_WEIGHTS, type PairWeight } from "./db/schema";
+import { checkValue, getPath, setPath, specOf, withIds, type EntityType } from "./sub-properties";
 import { logChanges } from "./history";
 import { OPPOSITE_TIES, RELATION_LAWS } from "./rules";
 
@@ -47,7 +50,9 @@ function planWrites(current: Record<string, unknown>, meta: FieldMetaMap, change
 
   for (const [field, value] of Object.entries(changes)) {
     if (value === undefined || same(current[field], value)) continue;
-    if (opts.source === "extracted") {
+    // Only the DM writes freely: extraction, the table and inference fill blanks and propose
+    // over the DM's own values, and never erase.
+    if (opts.source !== "dm") {
       if (isBlank(value)) continue; // blanks beat guesses: extraction never erases
       if (meta[field]?.source === "dm") {
         result.proposed.push({ field, current: current[field], proposed: value });
@@ -113,6 +118,11 @@ export async function updateEntity(entityId: number, patch: EntityPatch, opts: W
       throw new Error(`"${String((patch.traits as Record<string, unknown>)[key])}" isn't a valid ${key.replace(/_/g, " ")}.${allowed}`);
     }
     traits = parsed.data;
+    // Goals, beliefs and aims keep stable ids, so a sub-property of one can be found and undone.
+    for (const [key, prefix] of Object.entries(ID_LISTS)) {
+      const next = (traits as Record<string, unknown>)[key] as { id?: string; text: string }[] | undefined;
+      if (next) (traits as Record<string, unknown>)[key] = withIds(next, (entity.traits as Record<string, unknown>)[key] as { id?: string; text: string }[] | undefined, prefix);
+    }
   }
 
   // Flatten traits to "traits.<key>" so each attribute carries its own provenance.
@@ -320,7 +330,7 @@ async function upsertRelation(campaignId: number, input: RelationInput, opts: Wr
 }
 
 // Removes a relationship; a two-way one is removed in both directions.
-export async function removeRelation(relationId: number, source: "dm" | "extracted" = "dm", batch?: string) {
+export async function removeRelation(relationId: number, source: Source = "dm", batch?: string) {
   const [rel] = await db.select().from(schema.entityRelations).where(eq(schema.entityRelations.id, relationId));
   if (!rel) return;
   await db.delete(schema.entityRelations).where(eq(schema.entityRelations.id, relationId));
@@ -462,4 +472,59 @@ export async function mergeEntities(campaignId: number, fromId: number, intoId: 
   await db.delete(schema.entities).where(eq(schema.entities.id, fromId));
   await logChanges([{ campaignId, subject: into.name, entityId: intoId, kind: "field", field: "merged", before: from.name, after: into.name, source: "dm" }]);
   return { from, into, moved, notes: result.notes ?? [], keptDescription: from.description && into.description && !opts.secret ? from.description : null };
+}
+
+/**
+ * Sets one sub-property ("disposition.boldness", "goals.g2.intent", "state.anger") with its own
+ * provenance and history, under the usual rule: the DM always writes; extraction, the table and
+ * inference fill blanks and propose over the DM's value. null clears it (the DM only).
+ */
+export async function setSubProperty(entityId: number, path: string, value: unknown, opts: WriteOptions): Promise<WriteResult> {
+  const [entity] = await db.select().from(schema.entities).where(eq(schema.entities.id, entityId));
+  if (!entity) throw new Error(`No entity with id ${entityId}`);
+  const spec = specOf(path);
+  if (!spec) throw new Error(`"${path}" isn't a known property`);
+  const problem = checkValue(spec, value, entity.type as EntityType);
+  if (problem) throw new Error(problem);
+  const traits = (entity.traits ?? {}) as Record<string, unknown>;
+  // A list item ("goals.g2") has to exist before a property of it can be set.
+  if (path.split(".").length > 2 && getPath(traits, path.split(".").slice(0, 2).join(".")) == null) throw new Error(`${entity.name} has no ${path.split(".").slice(0, 2).join(" ")}`);
+  const field = `traits.${path}`;
+  const { apply, nextMeta, result } = planWrites({ [field]: getPath(traits, path) }, entity.fieldMeta, { [field]: value }, opts);
+  if (!(field in apply)) return result;
+  const next = setPath(traits, path, value);
+  if (!next) throw new Error(`${entity.name} has no ${path}`);
+  if (TraitsSchema.safeParse(next).success === false) throw new Error(`"${String(value)}" doesn't fit ${path}`);
+  await db.update(schema.entities).set({ traits: next as EntityTraits, fieldMeta: nextMeta }).where(eq(schema.entities.id, entityId));
+  await logChanges([{ campaignId: entity.campaignId, sessionId: opts.sessionId, subject: entity.name, entityId: entity.id, kind: "field", field, before: getPath(traits, path) ?? null, after: value ?? null, source: opts.source, batch: opts.batch }]);
+  return result;
+}
+
+/**
+ * Sets how A stands toward B (warmth, trust, fear, respect, debt, loyalty), one direction of the
+ * pair, each weight with its own provenance and history. Same rule as everything else: the DM
+ * always writes; other sources fill blanks and propose over the DM's values.
+ */
+export async function setPairWeights(campaignId: number, fromEntityId: number, toEntityId: number, weights: Partial<Record<PairWeight, number | null>>, opts: WriteOptions): Promise<WriteResult> {
+  if (fromEntityId === toEntityId) throw new Error("Weights are between two different characters");
+  const ents = await db.select().from(schema.entities).where(and(eq(schema.entities.campaignId, campaignId), inArray(schema.entities.id, [fromEntityId, toEntityId])));
+  const from = ents.find((e) => e.id === fromEntityId);
+  const to = ents.find((e) => e.id === toEntityId);
+  if (!from || !to) throw new Error("Both must be in this campaign");
+  for (const [w, v] of Object.entries(weights)) {
+    if (!PAIR_WEIGHTS.includes(w as PairWeight)) throw new Error(`"${w}" isn't a weight (${PAIR_WEIGHTS.join(", ")})`);
+    const [lo, hi] = w === "fear" || w === "debt" || w === "loyalty" ? [0, 3] : [-3, 3];
+    if (v != null && !(Number.isInteger(v) && v >= lo && v <= hi)) throw new Error(`${w} is a whole number from ${lo} to ${hi}`);
+  }
+  const [row] = await db.select().from(schema.pairWeights).where(and(eq(schema.pairWeights.fromEntityId, fromEntityId), eq(schema.pairWeights.toEntityId, toEntityId)));
+  const current: Record<string, unknown> = Object.fromEntries(PAIR_WEIGHTS.map((w) => [w, row?.[w] ?? null]));
+  const { apply, nextMeta, result } = planWrites(current, row?.fieldMeta ?? {}, weights, opts);
+  if (!Object.keys(apply).length) return result;
+  const values = Object.fromEntries(Object.entries(apply).map(([w, v]) => [w, v ?? null]));
+  if (row) await db.update(schema.pairWeights).set({ ...values, fieldMeta: nextMeta }).where(eq(schema.pairWeights.id, row.id));
+  else await db.insert(schema.pairWeights).values({ campaignId, fromEntityId, toEntityId, ...values, fieldMeta: nextMeta });
+  await logChanges(
+    Object.entries(apply).map(([w, v]) => ({ campaignId, sessionId: opts.sessionId, subject: `${from.name} → ${to.name}`, entityId: fromEntityId, kind: "field" as const, field: `pair.${toEntityId}.${w}`, before: current[w] ?? null, after: v ?? null, source: opts.source, batch: opts.batch })),
+  );
+  return result;
 }

@@ -580,6 +580,26 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - the 14 interplays to start;
         - inference and test data on the enriched copy only;
         - interplays computed, not stored, with their starts and ends in the change log and per-character DM overrides.
+    - [x] **Property model step 1: registry and storage** (26 Oct).
+      - **The registry** (`src/core/sub-properties.ts`, `SUB_PROPERTIES`) gives every sub-property's path, range, meaning and allowed sources: ten dispositions, five states, goal weights (intent, commitment, target, status, secret), belief conviction, item power, pull, cost severity and cost-grows, faction aims, aggression and alert, place danger. `specOf`, `checkValue`, `getPath` and `setPath` (list items by id), and `withIds` for stable ids.
+      - **Storage:**
+        - `TraitsSchema` gains `disposition`, `state`, `condition_sources` and the item, faction and place keys. Goals, beliefs and aims get ids (`g1`, `b1`, `a1`) and weights.
+        - New `pair_weights` table (migration `0012`): warmth, trust, fear, respect, debt, loyalty, one row per direction, each with its own `field_meta`. Threads gain `urgency`.
+        - Sources gain `table` and `inferred`. Only the DM writes freely; every other source fills blanks and proposes over DM values.
+        - Structured keys are kept out of the text extractor (`STRUCTURED_TRAITS`).
+      - **Writes:** `setSubProperty` (one path, with its own provenance and history) and `setPairWeights`. Undo restores nested paths and weights.
+      - **Engine:**
+        - nodes carry `mind.disposition` and `mind.state`, goals with weights, conditions with `by`/`target`, item, faction and place values, and thread urgency;
+        - `Graph.pairs` holds the recorded weights;
+        - `world/props.ts`: `subOf` (value, known, source, session) and `weightsOf` (recorded, else defaults implied by the relationship types and by a "frightened of" condition, marked as defaults).
+      - **CLI:**
+        - `entity set "<name>" disposition.boldness=2 goals.g1.intent=-2 state.anger=1`;
+        - `entity goal "<name>" "<text>" priority= intent= commitment=`;
+        - `relate "<A>" "<B>" warmth= trust= fear= respect= debt= loyalty=`;
+        - `entity show` lists goals with their ids and weights, dispositions, states, condition sources and "How they stand".
+      - **Enriched copy:** `scenarios/private/duradan-properties.ts 12` writes 73 starter values (Vex'ahlia charmed by Iresia but committed to her ritual; Tomas devoted to Darius; Arlen greedy but afraid of Varek; factions' aims; the figurines' pull). It refuses any campaign but the copy.
+      - 17 new crafted checks (230/230); world, engine and adversarial suites pass.
+      - **Not built yet:** properties (step 2), interplays (step 3), and display in the inspector.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

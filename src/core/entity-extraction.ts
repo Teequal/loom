@@ -7,6 +7,7 @@ import {
   ENTITY_STATUSES,
   IMPORTANCE,
   LIST_TRAITS,
+  STRUCTURED_TRAITS,
   RELATION_TYPES,
   TRAIT_KEYS,
   TraitsSchema,
@@ -21,7 +22,7 @@ import { RELATION_LAWS } from "./rules";
 // Everything is applied as source "extracted", so the DM's own entries are never overwritten.
 
 // Traits extraction may propose. Settings the DM controls (possession: single or shared) are left out.
-const EXTRACTABLE_TRAITS = TRAIT_KEYS.filter((k) => k !== "possession") as [string, ...string[]];
+const EXTRACTABLE_TRAITS = TRAIT_KEYS.filter((k) => k !== "possession" && !STRUCTURED_TRAITS.has(k)) as [string, ...string[]];
 
 export const EntityUpdateSchema = z.object({
   name: z.string(),

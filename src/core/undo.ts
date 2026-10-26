@@ -1,6 +1,7 @@
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import { RELATION_LAWS } from "./rules";
+import { setPath } from "./sub-properties";
 
 // Undo from the change log. Every write records what it was before; undo puts it back and marks
 // the change as undone (history keeps it, so the record stays honest).
@@ -37,6 +38,27 @@ export async function latestBatch(campaignId: number) {
 
 async function setField(c: Change, value: unknown) {
   const field = c.field;
+  // A pair weight ("pair.<to>.<weight>"): how the entity stands toward another.
+  if (field.startsWith("pair.") && c.entityId != null) {
+    const [, to, weight] = field.split(".");
+    const [row] = await db.select().from(schema.pairWeights).where(and(eq(schema.pairWeights.fromEntityId, c.entityId), eq(schema.pairWeights.toEntityId, Number(to))));
+    if (!row) return;
+    const meta = { ...row.fieldMeta };
+    if (value == null) delete meta[weight];
+    await db.update(schema.pairWeights).set({ [weight]: value ?? null, fieldMeta: meta }).where(eq(schema.pairWeights.id, row.id));
+    return;
+  }
+  // A nested sub-property ("traits.goals.g2.intent", "traits.disposition.boldness").
+  if (field.startsWith("traits.") && field.split(".").length > 2 && c.entityId != null) {
+    const [e] = await db.select().from(schema.entities).where(eq(schema.entities.id, c.entityId));
+    if (!e) return;
+    const traits = setPath(e.traits as Record<string, unknown>, field.slice(7), value ?? null);
+    if (!traits) return;
+    const meta = { ...e.fieldMeta };
+    if (value == null) delete meta[field];
+    await db.update(schema.entities).set({ traits: traits as typeof e.traits, fieldMeta: meta }).where(eq(schema.entities.id, e.id));
+    return;
+  }
   if (c.entityId != null && c.subject !== "campaign") {
     const [e] = await db.select().from(schema.entities).where(eq(schema.entities.id, c.entityId));
     if (!e) return;

@@ -15,6 +15,10 @@ export const THREAD_STATUSES = ["open", "progressing", "resolved"] as const;
 export const ENTITY_TYPES = ["pc", "npc", "location", "item", "faction", "other"] as const;
 export const THREAD_CHANGES = ["new", "progressed", "resolved", "edited"] as const;
 
+// Where a value came from: the DM, an extraction from notes, a nudge from the table, or a reviewed
+// one-off inference.
+export const SOURCES = ["dm", "extracted", "table", "inferred"] as const;
+
 const createdAt = () => text("created_at").notNull().default(sql`(datetime('now'))`);
 
 // Every value records where it came from (see FieldMeta); manual entries win over extraction.
@@ -102,11 +106,36 @@ export const entityRelations = sqliteTable(
     strength: integer("strength").notNull().default(0), // -3 … +3
     secret: integer("secret", { mode: "boolean" }).notNull().default(false),
     sinceSessionId: integer("since_session_id").references(() => sessions.id),
-    source: text("source", { enum: ["dm", "extracted"] }).notNull(),
+    source: text("source", { enum: SOURCES }).notNull(),
     createdAt: createdAt(),
   },
   (t) => [uniqueIndex("entity_relations_unique").on(t.fromEntityId, t.toEntityId, t.type)],
 );
+
+// How A stands toward B, as weights (the property model's pair sub-properties): one row per
+// direction of a pair. Relationship types stay in entity_relations; a weight not set here falls
+// back to what the types imply (world/props.ts), shown as a default. Each weight has its own
+// provenance in field_meta ("warmth": {source, sessionId, at}).
+export const pairWeights = sqliteTable(
+  "pair_weights",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+    fromEntityId: integer("from_entity_id").notNull().references(() => entities.id, { onDelete: "cascade" }),
+    toEntityId: integer("to_entity_id").notNull().references(() => entities.id, { onDelete: "cascade" }),
+    warmth: integer("warmth"), // −3 hostile … +3 affectionate
+    trust: integer("trust"), // −3 suspicious … +3 trusting
+    fear: integer("fear"), // 0–3
+    respect: integer("respect"), // −3 contempt … +3 admiration
+    debt: integer("debt"), // 0–3: how much A owes B
+    loyalty: integer("loyalty"), // 0–3: how bound A is to B
+    fieldMeta: fieldMeta(),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("pair_weights_unique").on(t.fromEntityId, t.toEntityId)],
+);
+export const PAIR_WEIGHTS = ["warmth", "trust", "fear", "respect", "debt", "loyalty"] as const;
+export type PairWeight = (typeof PAIR_WEIGHTS)[number];
 
 // Structured house rules and effects (docs/loom-model.md §3c). An effect belongs to a source
 // (an item, a place, a creature kind, a thread) or to the whole campaign, and says when it fires
@@ -127,7 +156,7 @@ export const effects = sqliteTable("effects", {
   duration: text("duration").notNull().default(""),
   rule: text("rule").notNull().default(""), // the rule in plain words, as the DM would say it
   secret: integer("secret", { mode: "boolean" }).notNull().default(false),
-  source: text("source", { enum: ["dm", "extracted"] }).notNull(),
+  source: text("source", { enum: SOURCES }).notNull(),
   createdAt: createdAt(),
 });
 
@@ -144,7 +173,7 @@ export const stateChanges = sqliteTable("state_changes", {
   field: text("field").notNull().default(""),
   before: text("before", { mode: "json" }).$type<unknown>(),
   after: text("after", { mode: "json" }).$type<unknown>(),
-  source: text("source", { enum: ["dm", "extracted"] }).notNull(),
+  source: text("source", { enum: SOURCES }).notNull(),
   batch: text("batch"), // groups the changes from one recap, enrich or command, so they can be undone together
   threadId: integer("thread_id").references(() => threads.id, { onDelete: "set null" }),
   undoneAt: text("undone_at"), // set when this change was reversed with undo
@@ -187,7 +216,7 @@ export const keyMoments = sqliteTable("key_moments", {
   entityIds: text("entity_ids", { mode: "json" }).$type<number[]>().notNull().default([]),
   threadIds: text("thread_ids", { mode: "json" }).$type<number[]>().notNull().default([]),
   status: text("status", { enum: ["key", "suggested", "dismissed"] }).notNull().default("key"),
-  source: text("source", { enum: ["dm", "extracted"] }).notNull(),
+  source: text("source", { enum: SOURCES }).notNull(),
   createdAt: createdAt(),
 });
 
@@ -206,6 +235,7 @@ export const threads = sqliteTable("threads", {
   deadline: text("deadline").notNull().default(""), // "before the Moons align"
   stakes: text("stakes").notNull().default(""), // what happens if it's ignored
   stakesLevel: integer("stakes_level"), // 1 (a loose end) … 5 (the campaign turns on it)
+  urgency: integer("urgency"), // 0–3: how soon it bites, for the GM to set when there's no hard deadline
   secret: integer("secret", { mode: "boolean" }).notNull().default(false), // GM-only thread
   fieldMeta: fieldMeta(),
   createdAt: createdAt(),

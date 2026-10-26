@@ -1,5 +1,6 @@
 import { eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db/client";
+import { PAIR_WEIGHTS, type PairWeight } from "../db/schema";
 import type { EntityTraits, FieldMetaMap } from "../entity-fields";
 import { LINK_TYPES, Link, THREAD_ROLES } from "./links";
 import { AnyNode, CONDITIONS_5E, type FieldMeta, keyOf, type NodeKey, type NodeKind } from "./nodes";
@@ -25,6 +26,8 @@ export interface Graph {
   record: { session: number; text: string; weight: number }[];
   /** The live log as events, oldest first: what was used, who rolled what, how it turned out. */
   log: LogEvent[];
+  /** How A stands toward B, as recorded weights with their provenance, by "fromKey|toKey". */
+  pairs: Map<string, { weights: Partial<Record<PairWeight, number>>; meta: Partial<Record<PairWeight, FieldMeta>> }>;
 }
 
 /**
@@ -92,6 +95,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     db.select().from(schema.keyMoments).where(eq(schema.keyMoments.campaignId, campaignId)),
     db.select().from(schema.effects).where(eq(schema.effects.campaignId, campaignId)),
   ]);
+  const pairRows = await db.select().from(schema.pairWeights).where(eq(schema.pairWeights.campaignId, campaignId));
   const live = await db
     .select({
       id: schema.liveEntries.id,
@@ -134,7 +138,10 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
   const metaOf = (fm: FieldMetaMap) => {
     const out: Record<string, FieldMeta> = {};
     for (const [field, m] of Object.entries(fm ?? {})) {
-      const path = PATH[field] ?? field.replace(/^traits\./, "");
+      // Sub-properties of the mind ("traits.disposition.boldness", "traits.goals.g2.intent") live
+      // under mind in the node.
+      const nested = /^traits\.(disposition|state|goals|beliefs)\./.test(field) ? `mind.${field.slice(7)}` : null;
+      const path = nested ?? PATH[field] ?? field.replace(/^traits\./, "");
       out[path] = { source: m.source, session: sNo(m.sessionId), ...(m.secret ? { known: "gm" as const } : {}) };
     }
     return out;
@@ -149,6 +156,9 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     notes: "",
     meta: extra.meta ?? {},
   });
+
+  // A goal as the engine reads it: its target as a node key.
+  const goalNode = (g: NonNullable<EntityTraits["goals"]>[number]) => ({ ...g, target: g.target != null ? entityKey(g.target) : undefined });
 
   // ---------- Nodes from entities ----------
   for (const e of entities) {
@@ -170,14 +180,20 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
           },
           body: {
             health: e.status === "dead" ? "dead" : t.health,
-            conditions: list(t.conditions).map((c) => ({ name: c, is5e: (CONDITIONS_5E as readonly string[]).includes(c.toLowerCase().split(/[\s(]/)[0]) })),
+            conditions: list(t.conditions).map((c) => {
+              // Who caused it, and at whom it's aimed, when recorded ("charmed by Iresia").
+              const src = (t.condition_sources ?? []).find((x) => x.condition.toLowerCase() === c.toLowerCase());
+              return { name: c, is5e: (CONDITIONS_5E as readonly string[]).includes(c.toLowerCase().split(/[\s(]/)[0]), by: src?.by != null ? entityKey(src.by) : undefined, target: src?.target != null ? entityKey(src.target) : undefined };
+            }),
           },
           mind: {
             mood: t.mood,
             // Ranked goals where recorded; a single "goal" line counts as the top one.
-            goals: [...(t.goals ?? []), ...list(t.goal).filter((g) => !(t.goals ?? []).some((x) => x.text === g)).map((g) => ({ text: g, priority: 1 }))],
+            goals: [...(t.goals ?? []).map(goalNode), ...list(t.goal).filter((g) => !(t.goals ?? []).some((x) => x.text === g)).map((g) => ({ text: g, priority: 1 }))],
             wants: list(t.wants), fears: list(t.fears), flaws: list(t.flaws), ideals: list(t.ideals), bonds: list(t.bonds),
             beliefs: t.beliefs ?? [],
+            disposition: t.disposition ?? {},
+            state: t.state ?? {},
           },
           abilities: list(t.abilities).map((a) => ({ name: a })),
           gear: list(t.gear),
@@ -189,12 +205,12 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
         b.key,
       );
     } else if (kind === "item") {
-      add({ ...b, kind, status: e.status ?? undefined, properties: { known: t.known_properties, true: t.true_properties, cost: t.cost, rarity: t.rarity }, sharedPossession: t.possession === "shared" }, b.key);
+      add({ ...b, kind, status: e.status ?? undefined, properties: { known: t.known_properties, true: t.true_properties, cost: t.cost, rarity: t.rarity, power: t.power, pull: t.pull, costSeverity: t.cost_severity, costGrows: t.cost_grows }, sharedPossession: t.possession === "shared" }, b.key);
     } else if (kind === "place") {
-      add({ ...b, kind, status: e.status ?? undefined, placeType: t.location_type, scale: scaleOf(t.location_type, e.name), hazards: list(t.hazards), atmosphere: list(t.atmosphere) }, b.key);
+      add({ ...b, kind, status: e.status ?? undefined, placeType: t.location_type, scale: scaleOf(t.location_type, e.name), hazards: list(t.hazards), atmosphere: list(t.atmosphere), danger: t.danger }, b.key);
     } else if (kind === "faction") {
       const clock = String(t.clock ?? "").match(/(\d+)\s*(?:of|\/)\s*(\d+)/);
-      add({ ...b, kind, status: e.status ?? undefined, stance: e.attitude != null ? STANCE[e.attitude] : undefined, goal: t.faction_goal, plan: t.plan, clock: clock ? { filled: Number(clock[1]), of: Number(clock[2]) } : undefined }, b.key);
+      add({ ...b, kind, status: e.status ?? undefined, stance: e.attitude != null ? STANCE[e.attitude] : undefined, goal: t.faction_goal, plan: t.plan, clock: clock ? { filled: Number(clock[1]), of: Number(clock[2]) } : undefined, aims: (t.aims ?? []).map(goalNode), aggression: t.aggression, alert: t.alert }, b.key);
     } else {
       add({ ...b, kind: "other", status: e.status ?? undefined }, b.key);
     }
@@ -210,6 +226,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
         status: t.status === "progressing" ? "building" : t.status,
         stakes: { level: t.stakesLevel ?? undefined, ifIgnored: t.stakes || undefined },
         deadline: t.deadline ? { text: t.deadline } : undefined,
+        urgency: t.urgency ?? undefined,
         steps: threadEvents.filter((ev) => ev.threadId === t.id).map((ev) => ({ session: sNo(ev.sessionId), change: ev.change, note: ev.note })),
         payoffs: t.payoffIdeas,
         secret: t.secret,
@@ -241,7 +258,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     const k = entityKey(id);
     return k ? { kind: k.split(":")[0], id } : null;
   };
-  const metaFrom = (source: "dm" | "extracted", session?: number | null, secret?: boolean): FieldMeta => ({ source, session: session ?? null, ...(secret ? { known: "gm" as const } : {}) });
+  const metaFrom = (source: FieldMeta["source"], session?: number | null, secret?: boolean): FieldMeta => ({ source, session: session ?? null, ...(secret ? { known: "gm" as const } : {}) });
 
   // Relationships: two-way ones are stored both ways today; here they're one link.
   const seenTwoWay = new Set<string>();
@@ -343,6 +360,16 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     entityKey,
     problems,
     log: liveLog(live),
+    pairs: new Map(
+      pairRows.flatMap((r) => {
+        const from = entityKey(r.fromEntityId);
+        const to = entityKey(r.toEntityId);
+        if (!from || !to) return [];
+        const weights = Object.fromEntries(PAIR_WEIGHTS.filter((w) => r[w] != null).map((w) => [w, r[w] as number]));
+        const meta = Object.fromEntries(Object.entries(r.fieldMeta ?? {}).map(([w, m]) => [w, { source: m.source, session: sNo(m.sessionId), ...(m.secret ? { known: "gm" as const } : {}) }]));
+        return [[`${from}|${to}`, { weights, meta }] as const];
+      }),
+    ),
     // The notes count fully; what was used at the table counts fully; a moment only asked about
     // counts a little.
     record: [

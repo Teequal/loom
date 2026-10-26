@@ -8,12 +8,13 @@ import {
   ENTITY_STATUSES,
   type EntityTraits,
   type FieldMeta,
+  ID_LISTS,
   LIST_TRAITS,
   RELATION_TYPES,
   type RelationType,
   TRAIT_KEYS,
 } from "@/core/entity-fields";
-import { ENTITY_TYPES } from "@/core/db/schema";
+import { ENTITY_TYPES, PAIR_WEIGHTS } from "@/core/db/schema";
 import { TOGGLES, toggleValue, type ToggleName, togglesText } from "@/core/rules";
 import {
   type EntityPatch,
@@ -24,9 +25,23 @@ import {
   updateThread,
   type WriteResult,
   mergeEntities,
+  setPairWeights,
+  setSubProperty,
 } from "@/core/entities";
+import { specOf } from "@/core/sub-properties";
 
 const DM = { source: "dm" as const };
+
+// A sub-property's value from the command line: a number, yes/no, a name (for a target), or empty to clear.
+async function subValue(campaignId: number, path: string, raw: string) {
+  const spec = specOf(path);
+  if (!spec) throw new Error(`"${path}" isn't a known property. Try e.g. disposition.boldness, state.anger, goals.g1.intent`);
+  if (raw === "") return null;
+  if (spec.type === "bool") return /^(?:y|yes|true|1)$/i.test(raw);
+  if (spec.type === "entity") return (await findEntity(campaignId, raw)).id;
+  if (spec.type === "enum") return raw;
+  return Number(raw);
+}
 
 // Friendly names on the command line → column names in the database.
 const LOCATION_KEYS: Record<string, "lastKnownLocationId" | "actualLocationId" | "parentId"> = {
@@ -45,7 +60,7 @@ export const splitList = (v: string) =>
 // "key=value" arguments → [key, value] pairs; everything else is left for the caller.
 export function pairs(args: string[]) {
   return args
-    .filter((a) => /^[a-z_-]+=/i.test(a))
+    .filter((a) => /^[a-z0-9_.-]+=/i.test(a))
     .map((a) => {
       const i = a.indexOf("=");
       return [a.slice(0, i).toLowerCase(), a.slice(i + 1)] as const;
@@ -60,7 +75,7 @@ export const positional = (args: string[]) => {
       if (takesValue) i++;
       continue;
     }
-    if (!/^[a-z_-]+=/i.test(args[i])) out.push(args[i]);
+    if (!/^[a-z0-9_.-]+=/i.test(args[i])) out.push(args[i]);
   }
   return out;
 };
@@ -144,10 +159,45 @@ async function showEntity(campaignId: number, query: string) {
   ].filter(Boolean);
   if (where.length) console.log(`\nWhere\n${where.join("\n")}`);
 
+  const signed = (n: unknown) => (typeof n === "number" && n > 0 ? `+${n}` : String(n));
+  const all = await db.select({ id: schema.entities.id, name: schema.entities.name }).from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
   const traits = Object.entries(e.traits).filter(([, v]) => !(Array.isArray(v) ? v.length === 0 : v === "" || v == null));
   if (traits.length) {
     console.log("\nTraits");
-    for (const [k, v] of traits) console.log(`  ${k.replace(/_/g, " ")}: ${Array.isArray(v) ? v.join("; ") : v}${m(`traits.${k}`)}`);
+    for (const [k, v] of traits) {
+      // Goals, beliefs and aims: one line each, with the id that addresses it and its weights.
+      if (k in ID_LISTS && Array.isArray(v)) {
+        console.log(`  ${k}:`);
+        for (const it of v as Record<string, unknown>[]) {
+          const weights = Object.entries(it)
+            .filter(([w]) => !["id", "text"].includes(w))
+            .map(([w, x]) => `${w} ${w === "target" ? (all.find((o) => o.id === x)?.name ?? x) : w === "intent" ? signed(x) : String(x)}${m(`traits.${k}.${it.id}.${w}`)}`);
+          console.log(`    ${it.id ?? "?"}  ${it.text}${weights.length ? `  [${weights.join(", ")}]` : ""}`);
+        }
+        continue;
+      }
+      if (k === "condition_sources" && Array.isArray(v)) {
+        const name = (x: unknown) => all.find((o) => o.id === x)?.name ?? x;
+        console.log(`  condition sources: ${(v as { condition: string; by?: number; target?: number }[]).map((c) => `${c.condition}${c.by != null ? ` by ${name(c.by)}` : ""}${c.target != null ? ` at ${name(c.target)}` : ""}`).join("; ")}${m(`traits.${k}`)}`);
+        continue;
+      }
+      if (v && typeof v === "object" && !Array.isArray(v)) {
+        console.log(`  ${k}: ${Object.entries(v).map(([x, n]) => `${x} ${k === "disposition" || x === "confidence" ? signed(n) : String(n)}${m(`traits.${k}.${x}`)}`).join(", ")}`);
+        continue;
+      }
+      console.log(`  ${k.replace(/_/g, " ")}: ${Array.isArray(v) ? v.map((x) => (typeof x === "object" ? JSON.stringify(x) : x)).join("; ") : v}${m(`traits.${k}`)}`);
+    }
+  }
+  // How they stand toward others, and others toward them (the pair weights).
+  const weighs = await db.select().from(schema.pairWeights).where(eq(schema.pairWeights.campaignId, campaignId));
+  const mine = weighs.filter((w) => w.fromEntityId === e.id || w.toEntityId === e.id);
+  if (mine.length) {
+    console.log("\nHow they stand");
+    for (const w of mine) {
+      const name = (id: number) => all.find((o) => o.id === id)?.name ?? `#${id}`;
+      const parts = PAIR_WEIGHTS.filter((x) => w[x] != null).map((x) => `${x} ${signed(w[x])}${w.fieldMeta[x]?.source === "dm" ? " ✎" : w.fieldMeta[x] ? " ⚙" : ""}`);
+      console.log(`  ${name(w.fromEntityId)} → ${name(w.toEntityId)}: ${parts.join(", ")}`);
+    }
   }
 
   if (card.relations.length) {
@@ -174,6 +224,9 @@ entity set "<name>" field=value [field=value …] [--secret field,field]
   Location fields take a location's name: last-known=, actual=, parent=
   List fields take a comma- or semicolon-separated list: ${[...LIST_TRAITS].join(", ")}
   An empty value clears a field: voice=
+  Sub-properties by path: disposition.boldness=2  state.anger=1  goals.g1.intent=-2  goals.g1.target="<name>"
+    (see the ids with: entity show "<name>"; dispositions: compassion honesty boldness temper pride greed curiosity discipline faith fidelity)
+entity goal "<name>" "<goal text>" [priority=1-3] [intent=-3…3] [commitment=0-3]   adds a goal (a faction's aim)
 entity merge "<duplicate>" "<real one>" [--secret]   two records are the same character; the duplicate's names become aliases
   --secret: the players don't know; the identity is kept GM-only and the duplicate's threads aren't linked to the real one`;
 
@@ -231,11 +284,29 @@ export async function entityCommand(campaignId: number, args: string[]) {
     case "set": {
       if (!pos[0] || !kv.length) return console.log(ENTITY_USAGE);
       const e = await findEntity(campaignId, pos[0]);
-      const patch = await buildPatch(campaignId, kv);
+      // Sub-properties are set one by one, each with its own provenance: "disposition.boldness=2",
+      // "goals.g1.intent=-2", "state.anger=1". An empty value clears one.
+      const dotted = kv.filter(([k]) => k.includes("."));
+      for (const [path, raw] of dotted) {
+        const value = await subValue(campaignId, path, raw);
+        report(await setSubProperty(e.id, path, value, { ...DM, secret: secret?.includes(path) ? [`traits.${path}`] : undefined }));
+      }
+      if (dotted.length === kv.length) return;
+      const patch = await buildPatch(campaignId, kv.filter(([k]) => !k.includes(".")));
       if (patch.status && !(ENTITY_STATUSES[e.type] as readonly string[]).includes(patch.status)) {
         throw new Error(`Status for ${e.name} (${e.type.toUpperCase()}) is one of: ${ENTITY_STATUSES[e.type].join(", ")}`);
       }
       return report(await updateEntity(e.id, patch, { ...DM, secret }));
+    }
+    case "goal": {
+      // entity goal "<name>" "<text>" [priority=1] [intent=-2] [commitment=3]: adds a goal (or an aim, for a faction).
+      if (!pos[0] || !pos[1]) return console.log(ENTITY_USAGE);
+      const e = await findEntity(campaignId, pos[0]);
+      const key = e.type === "faction" ? "aims" : "goals";
+      const opts = Object.fromEntries(kv);
+      const before = ((e.traits as Record<string, unknown>)[key] as { text: string }[] | undefined) ?? [];
+      const goal = { text: pos[1], priority: Number(opts.priority ?? 1), ...(opts.intent ? { intent: Number(opts.intent) } : {}), ...(opts.commitment ? { commitment: Number(opts.commitment) } : {}) };
+      return report(await updateEntity(e.id, { traits: { [key]: [...before, goal] } as EntityTraits }, { ...DM, secret }));
     }
     case "merge": {
       if (!pos[0] || !pos[1]) return console.log(ENTITY_USAGE);
@@ -254,6 +325,7 @@ export async function entityCommand(campaignId: number, args: string[]) {
 }
 
 const RELATE_USAGE = `relate "<from>" <type> "<to>" [note="…"] [strength=-3…3] [--secret]
+relate "<from>" "<to>" warmth=… trust=… fear=… respect=… debt=… loyalty=…   how one stands toward the other (one direction)
 unrelate "<from>" <type> "<to>"
   Types: ${RELATION_TYPES.join(", ")}`;
 
@@ -264,7 +336,16 @@ function relationType(raw: string | undefined): RelationType {
 }
 
 export async function relateCommand(campaignId: number, args: string[], remove = false) {
-  const [fromName, typeRaw, toName] = positional(args);
+  // Weights between two ("relate A B warmth=1 trust=-1"): how A stands toward B.
+  const kvAll = Object.fromEntries(pairs(args));
+  const named = positional(args);
+  if (named.length === 2 && !remove && PAIR_WEIGHTS.some((w) => w in kvAll)) {
+    const from = await findEntity(campaignId, named[0]);
+    const to = await findEntity(campaignId, named[1]);
+    const weights = Object.fromEntries(PAIR_WEIGHTS.filter((w) => w in kvAll).map((w) => [w, kvAll[w] === "" ? null : Number(kvAll[w])]));
+    return report(await setPairWeights(campaignId, from.id, to.id, weights, DM));
+  }
+  const [fromName, typeRaw, toName] = named;
   if (!fromName || !typeRaw || !toName) return console.log(RELATE_USAGE);
   const type = relationType(typeRaw);
   const from = await findEntity(campaignId, fromName);
