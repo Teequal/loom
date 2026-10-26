@@ -539,7 +539,18 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
          - Grounded and quiet chains drop named arrivals; quiet turns a save or an attack into a question.
          - A fight chain names who attacks (`foes`: hostile or unfriendly characters and factions within reach, or "walk-ons" with a few words). Code writes the final step: "Three Red Hand bandits attack. Everyone rolls initiative." It's marked as a fight, unless the last step already opened with an attack.
       - 19 new crafted checks (203/203); the engine, world and adversarial suites pass.
-      - **To measure when credit is back:** Jacob's ticks on blind run 1; a rerun of the 8 × 6 set to see how far 3–8 close the gaps, especially on Haiku; and how often direct changes miss something an extraction would have caught.
+      - **Blind run 2** (26 Oct, Claude's ticks; `data/runs/2026-10-26-develop-blind-2.md`). Haiku on 8 moments × 3 steers, Sonnet on one steer per moment.
+
+        | Model | Run 1 | Run 2 | Cost per chain | Time (first step) |
+        |---|---|---|---|---|
+        | Haiku | 3/16 | 3/24 (12%) | $0.0017 | 5.8 s (4.5 s) |
+        | Sonnet | 14/15 | 8/8 (100%) | $0.033 | 10.6 s (7.1 s) |
+
+        - The targeted faults are mostly gone: no feelings in sensation lines, the ledger caught 7 turns, and every fight chain ended in a fight.
+        - Haiku is still thin: 12 of 24 chains restage or barely move, and 4 calls gave no chain because step 1 only retold the choice. Its gap is the payload, which only beat plans can supply.
+        - Fixed after the run: the fight finale's agreement ("a patron attacks") and a group cut off mid-phrase (205/205 checks).
+        - **Direct changes vs extraction** (8 options): the same main thread in 5–6 of 8. Direct changes find nothing new; the extractor found new threads, items or places in 3 of 8, but treated an unrolled failure as having happened in 2 of 8.
+        - **Proposed:** Develop on Sonnet by default; beat plans next; direct changes plus a background "anything new?" pass (Haiku).
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

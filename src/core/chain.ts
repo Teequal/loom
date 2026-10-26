@@ -18,7 +18,7 @@ import type { Overrides } from "./situation";
 // step is here in the next, and an item handed over stays handed over.
 
 export const STEER_TEXT: Record<Steer, string> = {
-  fight: "a fight. The steps raise the tension toward it: someone squares up, blades come out, there's a last chance to back down. Don't write the attack itself: name who attacks in foes (one of the list, or \"walk-ons\" with foes_desc a few words like \"three Red Hand bandits\"), and code writes the moment it breaks out.",
+  fight: "a fight. The steps raise the tension toward it: someone squares up, blades come out, there's a last chance to back down. Don't write the attack itself: name who attacks in foes (one of the list, or \"walk-ons\" with foes_desc a plural noun phrase of up to 6 words for someone already hostile in the chain, like \"three Red Hand bandits\"), and code writes the moment it breaks out.",
   heartfelt: "a heartfelt moment. A personal beat for a player character: their condition, a bond, someone who matters to them, a callback. Low on action.",
   epic: "an epic scene. Big and cinematic: threads colliding, high stakes, one striking image, still built only from what's established.",
   grounded: "grounded. Plain, plausible consequences of what's established: no sudden magic, nobody new arriving.",
@@ -320,8 +320,14 @@ export class StepRunner {
     if (last.needs === "fight") return;
     const t = this.p.lists.tagger;
     const e = foes !== "walk-ons" ? t.entityOf(foes) : undefined;
-    const group = phrase(desc).split(/\s+/).slice(0, 6).join(" ");
-    const who = e ? `{${e.name}} ${e.type === "faction" ? "attack" : "attacks"}` : group ? `${group.charAt(0).toUpperCase()}${group.slice(1)} attack` : "";
+    // The group as a noun phrase: up to 8 words, ending before any trailing preposition or article
+    // ("two bandits from the toll-house" stays whole; "two bandits from the" loses "from the").
+    let words = phrase(desc).split(/\s+/).filter(Boolean).slice(0, 8);
+    while (words.length && /^(?:from|of|in|at|on|by|with|near|the|a|an|and|to)$/i.test(words[words.length - 1])) words = words.slice(0, -1);
+    const group = words.join(" ");
+    // One attacker attacks; several attack.
+    const one = /^(?:a|an|one|the|this|that|single|lone)\b/i.test(group) && !/\b(?:men|bandits|guards|thugs|patrons|soldiers|zealots|cultists|people|crowd)\b/i.test(group);
+    const who = e ? `{${e.name}} ${e.type === "faction" ? "attack" : "attacks"}` : group ? `${group.charAt(0).toUpperCase()}${group.slice(1)} ${one ? "attacks" : "attack"}` : "";
     if (!who) return;
     const prev = this.prevHand;
     const scaffold = { ...this.head, label: this.label, setup: [{ kind: "world", actor: "world", walk_on: "", does: `${who}.`, byCode: true }], hand: { kind: "attack", to: "table" }, hand_off: { to: "table", kind: "roll", mechanic: "none", text: "Everyone rolls initiative." }, on_fail: { target: "none", effect: "" }, why: "" } as ScaffoldOption;
