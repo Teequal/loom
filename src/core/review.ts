@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
+import type { PairWeight } from "./db/schema";
 import type { EntityUpdate } from "./entity-extraction";
 import { numberItems, type ProposalFile, type ProposalItem } from "./recap";
 
@@ -116,10 +117,15 @@ export async function reviewProposal(file: ProposalFile): Promise<Reviewed[]> {
 
   // What the evidence is checked against: this recap, or every stored recap for a backfill.
   let notes = file.recap;
-  if (file.kind === "enrich" || !notes.trim()) {
+  if (file.kind === "enrich" || file.kind === "infer" || !notes.trim()) {
     const sessions = await db.select().from(schema.sessions).where(eq(schema.sessions.campaignId, file.campaignId));
     notes = sessions.map((s) => s.recap).join("\n");
   }
+
+  const pairs = await db.select().from(schema.pairWeights).where(eq(schema.pairWeights.campaignId, file.campaignId));
+  // Scales that run negative read with a sign; 0-3 amounts (commitment, fear, debt…) don't.
+  const AMOUNTS = new Set(["commitment", "fear", "anger", "hope", "strain", "debt", "loyalty"]);
+  const say = (key: string) => (n: number) => (n > 0 && !AMOUNTS.has(key) ? `+${n}` : String(n));
 
   return items.map((i): Reviewed => {
     const reasons: string[] = [];
@@ -226,6 +232,48 @@ export async function reviewProposal(file: ProposalFile): Promise<Reviewed[]> {
         else summary = current ? `party moves: ${current} → ${i.item}` : `party is at ${i.item}`;
         tier = current ? "quick" : "auto";
         if (campaign?.fieldMeta.partyLocationId?.source === "dm" && current && current !== i.item) must("changes where you said the party is");
+        break;
+      }
+      case "sub": {
+        // A goal's intent or commitment, a disposition, a state (the property model).
+        const c = i.item;
+        evidence = c.evidence ?? "";
+        const e = find(c.name);
+        group = e?.name ?? c.name;
+        const goals = ((e?.traits as { goals?: { id?: string; text: string }[] } | undefined)?.goals ?? []);
+        const goal = c.key === "intent" || c.key === "commitment" ? goals.find((g) => g.text.trim().toLowerCase() === c.goal.trim().toLowerCase()) ?? goals.find((g) => g.text.toLowerCase().includes(c.goal.trim().toLowerCase())) : undefined;
+        const path = goal ? `goals.${goal.id}.${c.key}` : `${["confidence", "fear", "anger", "hope", "strain"].includes(c.key) ? "state" : "disposition"}.${c.key}`;
+        const current = path.split(".").reduce<unknown>((o, k) => (Array.isArray(o) ? o.find((x) => x?.id === k) : (o as Record<string, unknown> | undefined)?.[k]), e?.traits);
+        const label = goal ? `"${goal.text}": ${c.key}` : c.key;
+        if (current === c.value || (file.kind === "infer" && current != null)) {
+          summary = SAME_PLACE; // nothing to change (the inference pass only fills blanks)
+          break;
+        }
+        const signed = say(c.key);
+        summary = `${current == null ? `${label} ${signed(c.value)}` : `${label} ${signed(current as number)} → ${signed(c.value)}`}${c.basis === "implied" ? " (implied)" : ""}`;
+        if (e?.fieldMeta[`traits.${path}`]?.source === "dm") must(`changes your own entry for ${label}`);
+        if ((c.key === "intent" || c.key === "commitment") && !goal) {
+          summary = SAME_PLACE; // no recorded goal to attach it to (apply skips it with a warning)
+          break;
+        }
+        break;
+      }
+      case "weight": {
+        // How one stands toward another (pair weights).
+        const w = i.item;
+        evidence = w.evidence ?? "";
+        const [a, b] = [find(w.from), find(w.to)];
+        group = a?.name ?? w.from;
+        const row = pairs.find((p) => p.fromEntityId === a?.id && p.toEntityId === b?.id);
+        const current = (row?.[w.weight as PairWeight] as number | null | undefined) ?? null;
+        if (current === w.value || (file.kind === "infer" && current != null)) {
+          summary = SAME_PLACE;
+          break;
+        }
+        const signed = say(w.weight);
+        summary = `${w.weight} toward ${b?.name ?? w.to}: ${current == null ? signed(w.value) : `${signed(current)} → ${signed(w.value)}`}${w.basis === "implied" ? " (implied)" : ""}`;
+        if (row?.fieldMeta[w.weight as PairWeight]?.source === "dm") must(`changes your own entry for ${w.weight} toward ${b?.name ?? w.to}`);
+        if (current != null && Math.sign(current) * Math.sign(w.value) < 0) must(`turns ${w.weight} toward ${b?.name ?? w.to} around`);
         break;
       }
       case "moment": {

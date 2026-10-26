@@ -224,6 +224,8 @@ export async function directProposal(e: Entry, o: ScaffoldOption, text: string):
     thread_updates: d.thread ? [{ thread: `T${d.thread}`, change: "progressed", note: clip(text.replace(/^The players: [^\n]*\nWhat happened: /, ""), 160), new_summary: "", evidence: clip(e.choice, 110) }] : [],
     thread_links: [],
     key_moments: [],
+    sub_properties: [],
+    pair_weights: [],
   };
 }
 

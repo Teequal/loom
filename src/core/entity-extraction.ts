@@ -1,3 +1,5 @@
+import { PAIR_WEIGHTS, type PairWeight } from "./db/schema";
+import { setPairWeights, setSubProperty } from "./entities";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "./db/client";
@@ -12,6 +14,8 @@ import {
   TRAIT_KEYS,
   TraitsSchema,
   type EntityTraits,
+  DISPOSITIONS,
+  STATES,
   hasTrait,
   traitText,
 } from "./entity-fields";
@@ -42,6 +46,18 @@ export const RelationChangeSchema = z.object({
   strength: z.number(),
   evidence: z.string(),
 });
+// The property model's sub-properties, as notes show them (docs/design-2026-10-26-property-model.md
+// §10): a goal's intent or commitment (named by its text), a disposition, a state; and how one
+// stands toward another (pair weights). Only what the notes show; blanks beat guesses.
+export const SUB_KEYS = ["intent", "commitment", ...DISPOSITIONS, ...STATES] as const;
+// key and weight are checked in code too; the call that writes them (proposeProperties) enforces
+// them as lists.
+export const SubChangeSchema = z.object({ name: z.string(), key: z.string(), goal: z.string(), value: z.number().int(), evidence: z.string() });
+export const WeightChangeSchema = z.object({ from: z.string(), to: z.string(), weight: z.string(), value: z.number().int(), evidence: z.string() });
+// The inference pass also says whether the notes state a value or only imply it.
+export type SubChange = z.infer<typeof SubChangeSchema> & { basis?: "stated" | "implied" };
+export type WeightChange = z.infer<typeof WeightChangeSchema> & { basis?: "stated" | "implied" };
+
 export const EntityChangesShape = {
   entity_updates: z.array(EntityUpdateSchema),
   relations: z.array(RelationChangeSchema),
@@ -56,6 +72,13 @@ const LAW_TEXT = Object.entries(RELATION_LAWS)
   .filter(([, law]) => law?.to || law?.from)
   .map(([type, law]) => `${type}${law!.from ? ` (from ${law!.from.join("/")})` : ""}${law!.to ? ` → ${law!.to.join("/")} only` : ""}`)
   .join("; ");
+
+export const PROPERTY_RULES = `sub_properties (what a character is like, and how they are, as the notes clearly show; leave out anything they don't):
+- key "intent" or "commitment", with goal = the text of one of their recorded goals: intent is who the goal is good for, -3 harms others … +3 helps others (0 self-serving or neutral); commitment is how hard they push for it, 0-3.
+- a disposition (${DISPOSITIONS.join(", ")}), -3 … +3: what they're like underneath (compassion: cruel -3 … kind +3; honesty: deceitful … honest; boldness: timid … daring; temper: calm … volatile; pride: humble … proud; greed: content … grasping; curiosity: incurious … prying; discipline: impulsive … controlled; faith: cynical … devout; fidelity: fickle … steadfast). goal is "".
+- a state (${STATES.join(", ")}), as of the end of the notes: confidence -3 … +3; fear, anger, hope, strain 0-3. goal is "".
+pair_weights: how one character stands toward another (one direction), as the notes show: warmth -3 hostile … +3 affectionate; trust -3 … +3; respect -3 … +3; fear 0-3 (how afraid "from" is of "to"); debt 0-3 (how much "from" owes "to"); loyalty 0-3 (how bound "from" is to "to", a person or faction).
+For both: a quote as evidence, as for everything else. Never infer a disposition from one act alone; a state needs the notes to show it at the end. Blanks are better than guesses.`;
 
 export const ENTITY_RULES = `EVIDENCE: every entity update, relationship and the party location carries evidence: a short exact quote (under 20 words) copied word for word from the notes that supports it. If nothing in the notes supports a change, don't propose it.
 
@@ -94,7 +117,7 @@ export async function entityStateText(campaignId: number) {
       ...Object.entries(e.traits)
         .filter(([k]) => !e.fieldMeta[`traits.${k}`]?.secret)
         .filter(([, v]) => hasTrait(v))
-        .map(([k, v]) => `${k} ${traitText(k, v)}`),
+        .map(([k, v]) => `${k} ${traitText(k, v, true)}`),
     ].filter(Boolean);
     return `- ${e.name} (${e.type})${e.aliases.length ? ` aka ${e.aliases.join(", ")}` : ""}: ${e.description}${facts.length ? ` [${facts.join("; ")}]` : ""}`;
   });
@@ -102,13 +125,20 @@ export async function entityStateText(campaignId: number) {
     .filter((r) => !r.secret)
     .map((r) => `- ${name.get(r.fromEntityId)} ${r.type} ${name.get(r.toEntityId)}${r.note ? ` (${r.note})` : ""}`);
   const party = campaign?.partyLocationId ? name.get(campaign.partyLocationId) : null;
+  const pairs = await db.select().from(schema.pairWeights).where(eq(schema.pairWeights.campaignId, campaignId));
+  const pairLines = pairs
+    .map((r) => {
+      const ws = PAIR_WEIGHTS.filter((w) => r[w] != null).map((w) => `${w} ${r[w]! > 0 ? "+" : ""}${r[w]}`);
+      return ws.length ? `- ${name.get(r.fromEntityId)} → ${name.get(r.toEntityId)}: ${ws.join(", ")}` : "";
+    })
+    .filter(Boolean);
 
   return `EXISTING ENTITIES
 ${entityLines.join("\n") || "(none yet)"}
 
 EXISTING RELATIONSHIPS
 ${relationLines.join("\n") || "(none yet)"}
-
+${pairLines.length ? `\nHOW THEY STAND (recorded weights)\n${pairLines.join("\n")}\n` : ""}
 PARTY LOCATION: ${party ?? "(unknown)"}`;
 }
 
@@ -207,6 +237,72 @@ export async function applyEntityChanges(
       } catch (err) {
         result.warnings.push(`Party location skipped: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+  }
+  return result;
+}
+
+/**
+ * Applies proposed sub-properties and pair weights, through the provenance rules (setSubProperty,
+ * setPairWeights). A goal is found by its text. `blanksOnly` (the inference pass) never changes a
+ * value someone already set.
+ */
+export async function applyPropertyChanges(
+  campaignId: number,
+  sessionId: number | null,
+  changes: { subs: SubChange[]; weights: WeightChange[] },
+  batch: string | undefined,
+  source: "dm" | "extracted" | "inferred",
+  blanksOnly = false,
+) {
+  const result = { written: 0, warnings: [] as string[] };
+  const entities = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
+  const find = (n: string) => entities.find((e) => [e.name, ...e.aliases].some((a) => norm(a) === norm(n)));
+  const opts = { source, sessionId, batch };
+  for (const c of changes.subs) {
+    if (!(SUB_KEYS as readonly string[]).includes(c.key)) {
+      result.warnings.push(`"${c.key}" isn't something Loom records; skipped for ${c.name}`);
+      continue;
+    }
+    const e = find(c.name);
+    if (!e) {
+      result.warnings.push(`No one named "${c.name}"; ${c.key} skipped`);
+      continue;
+    }
+    let path: string;
+    if (c.key === "intent" || c.key === "commitment") {
+      const goals = ((e.traits as EntityTraits).goals ?? []) as { id?: string; text: string }[];
+      const g = goals.find((x) => norm(x.text) === norm(c.goal)) ?? goals.find((x) => norm(x.text).includes(norm(c.goal)) || norm(c.goal).includes(norm(x.text)));
+      if (!g?.id) {
+        result.warnings.push(`${e.name} has no recorded goal "${c.goal}"; ${c.key} skipped`);
+        continue;
+      }
+      path = `goals.${g.id}.${c.key}`;
+    } else path = `${(DISPOSITIONS as readonly string[]).includes(c.key) ? "disposition" : "state"}.${c.key}`;
+    const current = path.split(".").reduce<unknown>((o, k) => (Array.isArray(o) ? o.find((x) => x?.id === k) : (o as Record<string, unknown> | undefined)?.[k]), e.traits);
+    if (blanksOnly && current != null) continue;
+    try {
+      result.written += (await setSubProperty(e.id, path, c.value, opts)).written.length;
+    } catch (err) {
+      result.warnings.push(`${e.name} ${path}: ${(err as Error).message}`);
+    }
+  }
+  const rows = await db.select().from(schema.pairWeights).where(eq(schema.pairWeights.campaignId, campaignId));
+  for (const w of changes.weights) {
+    if (!(PAIR_WEIGHTS as readonly string[]).includes(w.weight)) {
+      result.warnings.push(`"${w.weight}" isn't a weight Loom records; skipped for ${w.from} → ${w.to}`);
+      continue;
+    }
+    const [a, b] = [find(w.from), find(w.to)];
+    if (!a || !b) {
+      result.warnings.push(`"${w.from}" → "${w.to}": not both known; ${w.weight} skipped`);
+      continue;
+    }
+    if (blanksOnly && rows.find((r) => r.fromEntityId === a.id && r.toEntityId === b.id)?.[w.weight as PairWeight] != null) continue;
+    try {
+      result.written += (await setPairWeights(campaignId, a.id, b.id, { [w.weight as PairWeight]: w.value }, opts)).written.length;
+    } catch (err) {
+      result.warnings.push(`${a.name} → ${b.name} ${w.weight}: ${(err as Error).message}`);
     }
   }
   return result;

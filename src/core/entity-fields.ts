@@ -169,8 +169,12 @@ export interface CampaignMechanic {
 
 const MOODS: Record<string, string> = { "-3": "despairing", "-2": "low", "-1": "uneasy", "0": "steady", "1": "content", "2": "high-spirited", "3": "elated" };
 
-/** A trait's value in words, for people and prompts: ranked goals in order, beliefs marked when untrue, mood as a word. */
-export function traitText(key: string, value: unknown): string {
+/**
+ * A trait's value in words, for people and prompts: ranked goals in order, beliefs marked when
+ * untrue, mood as a word. `detail` adds a goal's or aim's intent and commitment (for the records
+ * extraction reads, so it can see what's already set).
+ */
+export function traitText(key: string, value: unknown, detail = false): string {
   if (key === "mood" && typeof value === "number") return MOODS[String(value)] ?? String(value);
   // A set of numbers (dispositions, states): "boldness −1, temper +2".
   if (value && typeof value === "object" && !Array.isArray(value)) return Object.entries(value).map(([k, n]) => `${k} ${typeof n === "number" && n > 0 && key !== "state" ? `+${n}` : n}`).join(", ");
@@ -179,8 +183,9 @@ export function traitText(key: string, value: unknown): string {
   return items
     .map((v) => {
       if (v == null || typeof v !== "object") return String(v);
-      const o = v as { text?: string; true?: boolean };
-      return `${o.text ?? JSON.stringify(v)}${key === "beliefs" && o.true === false ? " (not true)" : ""}`;
+      const o = v as { text?: string; true?: boolean; intent?: number; commitment?: number; conviction?: number };
+      const nums = detail ? (["intent", "commitment", "conviction"] as const).filter((k) => o[k] != null).map((k) => `${k} ${o[k]! > 0 && k === "intent" ? "+" : ""}${o[k]}`) : [];
+      return `${o.text ?? JSON.stringify(v)}${key === "beliefs" && o.true === false ? " (not true)" : ""}${nums.length ? ` (${nums.join(", ")})` : ""}`;
     })
     .join("; ");
 }

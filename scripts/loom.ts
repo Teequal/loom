@@ -10,7 +10,7 @@ import { developChain } from "@/core/chain";
 import { improv } from "@/core/improv";
 import { STEERS, type Steer } from "@/core/moves";
 import { callLlm } from "@/core/llm";
-import { applyProposal, proposeEnrichment, proposeRecapChanges, type ProposalFile } from "@/core/recap";
+import { applyProposal, proposeEnrichment, proposeProperties, proposeRecapChanges, type ProposalFile } from "@/core/recap";
 import { reviewProposal, splitRisky } from "@/core/review";
 import { latestBatch, recentBatches, undoBatch, undoOne } from "@/core/undo";
 import { embeddingProvider, ensureEmbeddings, searchByMeaning } from "@/core/embeddings";
@@ -62,6 +62,9 @@ Campaign data
 Engine
   recap <file> [--session N] [--campaign id] [--model name]
                              Read a session recap and propose thread changes for you to approve
+  infer --campaign id [--model name] [--save-only]
+                             Read every recap for what the NPCs are like and how they stand;
+                             review, then fill blanks only (source "inferred")
   apply <proposal.json>      Apply a (hand-edited) proposal file saved by "recap" or "enrich"
   enrich [--campaign id] [--model name]
                              Re-read all stored recaps and propose entity details, relationships
@@ -486,6 +489,21 @@ async function main() {
       mkdirSync("data/proposals", { recursive: true });
       const out = `data/proposals/c${campaignId}-enrich.json`;
       writeFileSync(out, JSON.stringify(file, null, 2));
+      await reviewAndApply(file, out);
+      break;
+    }
+    case "infer": {
+      // Explicit campaign only: this proposes values for every NPC at once.
+      const campaignId = Number(flag(args, "campaign"));
+      if (!campaignId) return console.log("infer needs --campaign <id>");
+      console.log(`Reading every recap for campaign ${campaignId}: what the NPCs are like, and how they stand…`);
+      const res = await proposeProperties(campaignId, { model: flag(args, "model") });
+      console.log(`(${res.model} · ${(res.latencyMs / 1000).toFixed(1)} s · ${res.inputTokens} in / ${res.outputTokens} out · ${usd(res.costUsd)})${res.dropped ? ` · ${res.dropped} about player characters dropped` : ""}`);
+      const file: ProposalFile = { kind: "infer", campaignId, sessionNumber: res.sessionNumber, recap: "", proposal: res.data };
+      mkdirSync("data/proposals", { recursive: true });
+      const out = `data/proposals/c${campaignId}-infer.json`;
+      writeFileSync(out, JSON.stringify(file, null, 2));
+      if (args.includes("--save-only")) return console.log(`Saved ${out} (review it with: apply ${out})`);
       await reviewAndApply(file, out);
       break;
     }

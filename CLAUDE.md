@@ -644,7 +644,7 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
 
         The interplays aren't move sources yet (step 5).
       - 11 crafted checks (253/253) and 29 interplay examples.
-    - [x] **Property model step 5: moves, offers and surprises** (`moves.ts`, 26 Oct). Step 4 (fill the data) was deferred at Jacob's choice.
+    - [x] **Property model step 5: moves, offers and surprises** (`moves.ts`, 26 Oct). Built before step 4, at Jacob's choice.
       - **New move kinds:** waver, strain, bargain, lash out, confide, comply, defect, choose a side, use it, infighting, character.
         - Every interplay whose subject or other end is in play (here, or named in the moment) becomes a move. Its cast is those two, on a thread they're in. Its "because" is the interplay's handle, and it carries the interplay's offers.
         - Notable situational properties of NPCs in play become up to two "character" moves ("Arlen Hoder would lie to them now (candour lies: …)").
@@ -665,6 +665,27 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - 7.7 s vs 7.2 s, the same cost, 1 option dropped vs 3.
       - **Surprises, live:** on "often", 1 of 6 asks showed one ("Vex'ahlia drifts out of the shadows, strained… Pip whispers that the woman looks sick"). The candidate pool was often empty before it was widened.
       - 9 crafted checks (262/262).
+    - [x] **Property model step 4: data from notes** (26 Oct). Backup: `data/backups/loom-2026-10-26-before-infer.db`.
+      - **Enriched copy filled further by hand** (`scenarios/private/duradan-properties.ts`, copy only): Zara, Faelen, Pip, Eldric, Azarath, Varek, Arlen, faction loyalty, the Shard, place dangers, and the caged-Darius thread's urgency.
+      - **One property call** (`proposeProperties` in `recap.ts`, Sonnet). It proposes goal intent and commitment (a goal named by its text), dispositions, states and pair weights. Each comes with an exact quote and a basis (stated / implied, shown as "(implied)").
+        - **NPCs only.** Players decide their own characters, so anything about a PC, or a PC's feelings, is dropped in code too.
+        - **Enforced lists:** names, recorded goals, keys and weights.
+        - **Two uses:**
+          - **Recaps** run it in parallel with their own extraction, so it adds no wait (+~$0.03 on Sonnet). The recap's answer format was already at the API's size limit: one more small list gave "compiled grammar is too large". A failed property call loses only these values.
+          - **`infer --campaign <id> [--save-only]`** reads every recap. The proposal file is kind "infer", applied as source "inferred" into blanks only. Its batch reads "Characters read from all notes".
+        - A single live moment doesn't run it; table nudges (step 6) will cover the table.
+      - **Applied through the provenance rules** (`applyPropertyChanges` in `entity-extraction.ts`): extraction fills blanks and never overwrites the DM; unknown keys and goals are skipped with a warning; a yes in the review is saved as the DM's own.
+      - **Review tiers:**
+        - a value already recorded isn't shown (for inference, anything already set);
+        - new or changed values are confirmed in a group, under the character;
+        - changing the DM's own value, or turning a weight around (warm to cold), needs a yes.
+      - **The records extraction reads** now show each goal's intent and commitment, and the recorded weights ("HOW THEY STAND"), so it doesn't propose what's already set. Before this, inference re-proposed values that were already set. People still see goals without the numbers (`traitText(…, detail)`).
+      - **Measured:**
+        - Inference on a temporary copy of Duradan with no values (since deleted): 5–8 values for 18 characters, ~5 s, ~$0.035. High effort found the same handful in 12 s. Duradan's recaps say what the party did and little about what NPCs are like, so the pass is sparse by nature. Example: Professor Vex's debt to Salaena ("Salaena sacrifices her protection device to save him").
+        - On the enriched copy and the sample campaign it adds little or nothing, since their values are already set. The sample's two-line notes gave nothing, which is right.
+        - Crafted session notes on the copy (Sonnet, 7.7 s, $0.066 with the recap) gave 10 sensible values with exact quotes, all "confirm": Arlen's fear of Varek 2 → 3, Zara's trust in Tomas −2, Vex's debt to Salaena 3, Zara angry.
+      - **Limits:** an NPC that's new in the same notes, or a goal the same recap adds, isn't in the lists yet; it gets values from the next notes or `infer`.
+      - 17 crafted checks (279/279).
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

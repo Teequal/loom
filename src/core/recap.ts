@@ -2,15 +2,22 @@ import { recordInterplayChanges } from "./interplay-history";
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "./db/client";
-import { ENTITY_TYPES, MOMENT_TONES, THREAD_KINDS } from "./db/schema";
+import { ENTITY_TYPES, MOMENT_TONES, PAIR_WEIGHTS, THREAD_KINDS } from "./db/schema";
 import {
   applyEntityChanges,
+  applyPropertyChanges,
   ENTITY_RULES,
+  PROPERTY_RULES,
   EntityChangesShape,
   entityStateText,
   type EntityApplyResult,
   type EntityUpdate,
   type RelationChange,
+  SUB_KEYS,
+  SubChangeSchema,
+  WeightChangeSchema,
+  type SubChange,
+  type WeightChange,
 } from "./entity-extraction";
 import { logChanges } from "./history";
 import { callLlm } from "./llm";
@@ -69,7 +76,8 @@ export const ProposalSchema = z.object({
   thread_links: z.array(z.object({ from: z.string(), to: z.string(), note: z.string() })),
   key_moments: z.array(MomentSchema),
 });
-export type Proposal = z.infer<typeof ProposalSchema>;
+// The property model's values come from their own call (proposeProperties), merged in here.
+export type Proposal = z.infer<typeof ProposalSchema> & { sub_properties: SubChange[]; pair_weights: WeightChange[] };
 
 // Backfill: entity details only, read from recaps already stored.
 const EnrichSchema = z.object({ new_entities: z.array(NewEntitySchema), ...EntityChangesShape, key_moments: z.array(MomentSchema) });
@@ -77,7 +85,7 @@ const EnrichSchema = z.object({ new_entities: z.array(NewEntitySchema), ...Entit
 // A proposal plus what's needed to apply it later (possibly after the DM edits the file).
 // kind "enrich" proposals don't touch the session's stored recap.
 export interface ProposalFile {
-  kind?: "recap" | "enrich" | "live"; // live: one moment at the table; the session's notes come at wrap-up
+  kind?: "recap" | "enrich" | "live" | "infer"; // live: one moment at the table; the session's notes come at wrap-up. infer: the property-model pass over every recap (blanks only)
   campaignId: number;
   sessionNumber: number;
   recap: string;
@@ -96,6 +104,8 @@ function withDefaults(p: Partial<Proposal>): Proposal {
     party_location: p.party_location ?? "",
     party_evidence: p.party_evidence ?? "",
     key_moments: p.key_moments ?? [],
+    sub_properties: p.sub_properties ?? [],
+    pair_weights: p.pair_weights ?? [],
   };
 }
 
@@ -130,6 +140,8 @@ thread_links
 
 ${ENTITY_RULES}
 
+${PROPERTY_RULES}
+
 ${MOMENT_RULES}
 
 Use only what the recap says; do not invent facts. Lists of unanswered questions in the recap are strong signals for threads.`;
@@ -142,6 +154,8 @@ new_entities
 - Places, characters, items or factions that the notes name and that matter, but which are not yet entities (e.g. a district or building used as a location). type "pc" for player characters, "npc" for everyone else. aliases: other names used, otherwise []. description: one short line.
 
 ${ENTITY_RULES}
+
+${PROPERTY_RULES}
 
 ${MOMENT_RULES}
 
@@ -186,16 +200,22 @@ ${already}${liveNote}
 ${heading}
 ${recap}`;
 
-  return callLlm({
-    feature: opts.live ? "live" : "recap",
-    campaignId,
-    system: SYSTEM,
-    prompt,
-    schema: ProposalSchema,
-    maxTokens: opts.live ? 6000 : 16000,
-    effort: opts.live ? "low" : "medium",
-    model,
-  });
+  const [res, props] = await Promise.all([
+    callLlm({
+      feature: opts.live ? "live" : "recap",
+      campaignId,
+      system: SYSTEM,
+      prompt,
+      schema: ProposalSchema,
+      maxTokens: opts.live ? 6000 : 16000,
+      effort: opts.live ? "low" : "medium",
+      model,
+    }),
+    // A single moment at the table leaves these to the table nudges; a failed call loses only these.
+    opts.live ? null : proposeProperties(campaignId, { notes: recap }).catch(() => null),
+  ]);
+  const data: Proposal = { ...res.data, sub_properties: props?.data.sub_properties ?? [], pair_weights: props?.data.pair_weights ?? [] };
+  return { ...res, data, costUsd: res.costUsd + (props?.costUsd ?? 0) };
 }
 
 // Reads every stored recap for the campaign and proposes entity details (no thread changes).
@@ -218,6 +238,62 @@ ${withRecaps.map((s) => `=== Session ${s.number} ===\n${s.recap}`).join("\n\n")}
   return { ...res, data: withDefaults(res.data), sessionNumber: latest };
 }
 
+const BASES = ["stated", "implied"] as const;
+// One call for the property model's values, used two ways: the inference pass over every recap,
+// and alongside each recap's own extraction (in parallel: the recap's answer format is at the
+// API's size limit, and a separate small one can enforce its lists).
+const propertySystem = (scope: "all" | "session") => `You help the game master's assistant understand the non-player characters of a tabletop RPG campaign: what each is like underneath, how hard they push for what they want, and how they stand toward the others. The assistant uses these to work out who might resist, waver, betray or help (a cruel NPC who is charmed may fight it; one whose goals hurt others but who is fond of the party may be torn).
+
+${scope === "all" ? "Read the session recaps (oldest first) and the records, and propose values as they stand at the end of the latest session." : "Read the new session's notes against the records, and propose only what these notes show: new values, or values the notes show have changed (states especially: as of the end of the session)."} Propose values for non-player characters only. Players decide their own characters, so never propose values for a player character, and never how a player character feels about someone.
+
+${PROPERTY_RULES}
+
+Go through the non-player characters ${scope === "all" ? "one at a time" : "these notes involve"}, and for each one:
+- each of their recorded goals: its intent and its commitment, if the notes show them;
+- the dispositions the notes show (usually 1-4 per character who matters);
+- their states at the end of the ${scope === "all" ? "latest session" : "session"}, if the notes show them;
+- each relationship from them: the weights it shows (warmth, trust, fear, respect, debt, loyalty).
+basis: "stated" when the notes say it outright ("Tomas swore to protect Darius"); "implied" when you judge it from what they did (several acts, or one clearly telling one).
+Evidence is a short quote copied word for word from the ${scope === "all" ? "recaps" : "notes"} (never from the records, never a paraphrase). Skip anything the records already show unless the notes change it. ${scope === "all" ? "A minor character with a line or two in the notes usually gets nothing. " : "Many sessions show nothing of this kind; then return empty lists. "}Blanks are better than guesses.`;
+
+/**
+ * The property model's values from notes (docs/design-2026-10-26-property-model.md §10): goal
+ * intent and commitment, dispositions, states and pair weights, for NPCs only. `notes` given: one
+ * session's notes (alongside its recap extraction). Not given: every stored recap (the inference
+ * pass, a file of kind "infer", applied as "inferred", blanks only).
+ */
+export async function proposeProperties(campaignId: number, opts: { notes?: string; model?: string } = {}) {
+  const sessions = await db.select().from(schema.sessions).where(eq(schema.sessions.campaignId, campaignId)).orderBy(schema.sessions.number);
+  const withRecaps = sessions.filter((s) => s.recap.trim());
+  const scope = opts.notes != null ? "session" : "all";
+  if (scope === "all" && withRecaps.length === 0) throw new Error("No stored session recaps to read.");
+  const prompt = `${await entityStateText(campaignId)}
+
+${scope === "all" ? `SESSION RECAPS (oldest first)\n${withRecaps.map((s) => `=== Session ${s.number} ===\n${s.recap}`).join("\n\n")}` : `NEW SESSION NOTES\n${opts.notes}`}`;
+  // Who it may name, as enforced lists: NPCs for values, any character or faction for "to",
+  // and each NPC's recorded goals.
+  const ents = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
+  const npcs = ents.filter((e) => e.type === "npc").map((e) => e.name);
+  const others = ents.filter((e) => ["npc", "pc", "faction"].includes(e.type)).map((e) => e.name);
+  const goals = ents.filter((e) => e.type === "npc").flatMap((e) => (e.traits.goals ?? []).map((g) => g.text));
+  const sessionNumber = withRecaps.at(-1)?.number ?? 0;
+  if (!npcs.length) return { data: withDefaults({}), dropped: 0, sessionNumber, model: "", latencyMs: 0, inputTokens: 0, outputTokens: 0, costUsd: 0 };
+  const PropertySchema = z.object({
+    sub_properties: z.array(SubChangeSchema.extend({ name: z.enum(npcs as [string, ...string[]]), key: z.enum(SUB_KEYS), goal: z.enum(["", ...goals] as [string, ...string[]]), basis: z.enum(BASES) })),
+    pair_weights: z.array(WeightChangeSchema.extend({ from: z.enum(npcs as [string, ...string[]]), to: z.enum(others as [string, ...string[]]), weight: z.enum(PAIR_WEIGHTS), basis: z.enum(BASES) })),
+  });
+  const res = await callLlm({ feature: scope === "all" ? "infer" : "properties", campaignId, system: propertySystem(scope), prompt, schema: PropertySchema, maxTokens: 16000, effort: "medium", model: opts.model });
+  // Player characters are the players' own: anything about them is dropped in code too.
+  const pcs = new Set(ents.filter((e) => e.type === "pc").flatMap((e) => [e.name, ...e.aliases].map(norm)));
+  const data = withDefaults({
+    // An intent or commitment belongs to a goal; without one there's nothing to attach it to.
+    sub_properties: res.data.sub_properties.filter((c) => !pcs.has(norm(c.name)) && (c.goal.trim() || (c.key !== "intent" && c.key !== "commitment"))),
+    pair_weights: res.data.pair_weights.filter((w) => !pcs.has(norm(w.from))),
+  });
+  const dropped = res.data.sub_properties.length + res.data.pair_weights.length - data.sub_properties.length - data.pair_weights.length;
+  return { ...res, data, dropped, sessionNumber };
+}
+
 // Flat, numbered view of a proposal so the DM can accept or skip individual items.
 export type ProposalItem =
   | { n: number; kind: "entity"; item: Proposal["new_entities"][number] }
@@ -227,7 +303,9 @@ export type ProposalItem =
   | { n: number; kind: "entity_update"; item: EntityUpdate }
   | { n: number; kind: "relation"; item: RelationChange }
   | { n: number; kind: "party"; item: string }
-  | { n: number; kind: "moment"; item: MomentSuggestion };
+  | { n: number; kind: "moment"; item: MomentSuggestion }
+  | { n: number; kind: "sub"; item: SubChange }
+  | { n: number; kind: "weight"; item: WeightChange };
 
 export function numberItems(raw: Partial<Proposal>): ProposalItem[] {
   const p = withDefaults(raw);
@@ -241,6 +319,8 @@ export function numberItems(raw: Partial<Proposal>): ProposalItem[] {
     ...p.relations.map((item) => ({ n: ++n, kind: "relation" as const, item })),
     ...(p.party_location.trim() ? [{ n: ++n, kind: "party" as const, item: p.party_location }] : []),
     ...p.key_moments.map((item) => ({ n: ++n, kind: "moment" as const, item })),
+    ...p.sub_properties.map((item) => ({ n: ++n, kind: "sub" as const, item })),
+    ...p.pair_weights.map((item) => ({ n: ++n, kind: "weight" as const, item })),
   ];
 }
 
@@ -394,6 +474,15 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
   entityResult.conflicts.push(...confirmedResult.conflicts);
   warnings.push(...entityResult.warnings);
 
+  // The property model's values: unconfirmed ones as extracted; a yes as the DM's own; the
+  // inference pass as "inferred", and only into blanks.
+  const infer = file.kind === "infer";
+  for (const dm of [false, true]) {
+    const r = await applyPropertyChanges(campaignId, sessionId, { subs: of("sub", dm), weights: of("weight", dm) }, batch, dm ? "dm" : infer ? "inferred" : "extracted", infer && !dm);
+    entityResult.updated += r.written;
+    warnings.push(...r.warnings);
+  }
+
   // Suggested key moments: saved as ☆ suggestions for the DM to star or dismiss.
   const ents = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
   const sess = await db.select().from(schema.sessions).where(eq(schema.sessions.campaignId, campaignId));
@@ -424,5 +513,5 @@ export function newBatch(file: Pick<ProposalFile, "kind" | "sessionNumber">) {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   const when = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
-  return `${file.kind === "enrich" ? "enrich" : `recap s${file.sessionNumber}`} ${when} #${Math.random().toString(36).slice(2, 6)}`;
+  return `${file.kind === "enrich" || file.kind === "infer" ? file.kind : `recap s${file.sessionNumber}`} ${when} #${Math.random().toString(36).slice(2, 6)}`;
 }
