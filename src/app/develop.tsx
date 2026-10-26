@@ -1,5 +1,6 @@
 "use client";
 
+import { Weaving } from "./weave";
 import { useEffect, useRef, useState } from "react";
 import { type Encounter, FightPanel } from "./fight";
 import { Icon } from "./icons";
@@ -191,7 +192,7 @@ export function Develop({
 
       {!picking && (
         <div className="mt-2 space-y-4">
-          {busy === "new" && !chains.length && <div aria-hidden className="h-16 animate-pulse rounded-lg bg-surface/70" />}
+          {busy === "new" && !chains.length && <Weaving label={`Weaving where this goes… ${elapsed} s`} className="py-2" />}
           {chains.map((slot, i) => (
             <ChainCard
               key={`${devId}-${i}-${slot.chain?.move ?? "x"}`}
@@ -210,7 +211,7 @@ export function Develop({
               <Icon name="plus" size={12} /> Another take
             </button>
           )}
-          {busy === "more" && <p className="animate-pulse text-xs text-muted">Another take… {elapsed} s</p>}
+          {busy === "more" && <Weaving label={`Another take… ${elapsed} s`} />}
           {llm && (
             <p className="text-[11px] text-muted">
               {prefs.costs && `${llm.model.replace(/^claude-/, "")} · ${llm.seconds.toFixed(1)} s · $${llm.costUsd.toFixed(4)}`}
@@ -398,9 +399,8 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
           );
         })}
         {(writing || busy.startsWith("swap")) && (
-          <li aria-hidden className="relative pb-1 pl-5">
-            <span className="absolute -left-[5px] top-1.5 h-2.5 w-2.5 animate-pulse rounded-full bg-thread/50" />
-            <span className="animate-pulse text-xs text-muted">{busy ? `Rewriting… ${elapsed} s` : "…"}</span>
+          <li className="relative pb-1 pl-5">
+            <Weaving label={busy ? `Rewriting… ${elapsed} s` : "The next step…"} />
           </li>
         )}
       </ol>
@@ -419,7 +419,7 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
                 <Icon name="undo" size={12} /> Back
               </button>
             )}
-            {busy && <span className="animate-pulse text-muted">Reworking… {elapsed} s</span>}
+            {busy && <Weaving label={`Reworking… ${elapsed} s`} />}
           </div>
           {reworking && (
           <div className="rise mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px]">

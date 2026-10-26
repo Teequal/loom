@@ -23,6 +23,17 @@ const PATHS = {
   die: <path d="M4.5 3.5h7a1 1 0 011 1v7a1 1 0 01-1 1h-7a1 1 0 01-1-1v-7a1 1 0 011-1zM6 6h.01M8 8h.01M10 10h.01" />,
   pin: <path d="M8 13.5s4-3.6 4-7a4 4 0 00-8 0c0 3.4 4 7 4 7zM8 7.5a1 1 0 100-2 1 1 0 000 2z" />,
   settings: <path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6M10 3v3M6 10v3" />,
+  // The inspector's sections: a thread, a tie between two, how they feel, notes, secrets, time,
+  // a faction's banner, what drives them, and what they carry.
+  thread: <path d="M2.5 10c2-3.5 4-3.5 5.5 0s3.5 3.5 5.5 0M2.5 6c2-3.5 4-3.5 5.5 0s3.5 3.5 5.5 0" />,
+  tie: <path d="M6.5 9.5l3-3M5.5 7L4 8.5a2.1 2.1 0 003 3L8.5 10M10.5 9L12 7.5a2.1 2.1 0 00-3-3L7.5 6" />,
+  heart: <path d="M8 12.8S3 9.9 3 6.6a2.6 2.6 0 015-1 2.6 2.6 0 015 1c0 3.3-5 6.2-5 6.2z" />,
+  scroll: <path d="M5 3.5h6.5v8a1.5 1.5 0 01-1.5 1.5H4.5A1.5 1.5 0 013 11.5V10h7M5 3.5A1.5 1.5 0 003.5 5v5M7 6h3M7 8h3" />,
+  lock: <path d="M4.5 7.5h7v5h-7v-5zM6 7.5V5.5a2 2 0 014 0v2" />,
+  clock: <path d="M8 13a5 5 0 100-10 5 5 0 000 10zM8 5.5V8l1.8 1.2" />,
+  flag: <path d="M4 13.5V3M4 3.5h7l-1.5 2.5L11 8.5H4" />,
+  compass: <path d="M8 13a5 5 0 100-10 5 5 0 000 10zM9.8 6.2L8.7 8.7 6.2 9.8l1.1-2.5 2.5-1.1z" />,
+  pack: <path d="M5 5.5V4.5a3 3 0 016 0v1M3.5 5.5h9v7a1 1 0 01-1 1h-7a1 1 0 01-1-1v-7zM6 9h4" />,
 } as const;
 
 export type IconName = keyof typeof PATHS;

@@ -83,7 +83,8 @@ export async function historyOf(campaignId: number, entity: { id: number; name: 
       const [, to, w] = pair;
       const amount = (v: unknown) => (v == null ? "—" : typeof v === "number" && v > 0 && !["fear", "debt", "loyalty"].includes(w) ? `+${v}` : String(v));
       const mine = r.entityId === entity.id;
-      const text = mine ? `${w} toward ${names.get(Number(to)) ?? "?"}: ${amount(r.before)} → ${amount(r.after)}` : `${names.get(r.entityId ?? 0) ?? r.subject.split(" → ")[0]}'s ${w} toward ${entity.name}: ${amount(r.before)} → ${amount(r.after)}`;
+      const change = r.before == null ? amount(r.after) : `${amount(r.after)} (was ${amount(r.before)})`;
+      const text = mine ? `${w} toward ${names.get(Number(to)) ?? "?"}: ${change}` : `${names.get(r.entityId ?? 0) ?? r.subject.split(" → ")[0]}'s ${w} toward ${entity.name}: ${change}`;
       return { session: sessions.find((s) => s.id === r.sessionId)?.number ?? null, when: r.createdAt, text: r.undoneAt ? `${text} (undone)` : text, source: r.source, note: r.note ?? undefined, batch: r.batch, moment: momentOf(r.batch) };
     }
     const field = r.field.replace(/^traits\./, "").replace(/^(?:state|disposition)\./, "").replace(/^goals\.(g\d+)\./, "goal $1 ").replace(/LocationId$/, " location").replace(/Id$/, "").replace(/_/g, " ");
@@ -93,10 +94,14 @@ export async function historyOf(campaignId: number, entity: { id: number; name: 
           ? `now ${(r.after as { name: string }).name}: ${(r.after as { handle: string }).handle}`
           : `no longer ${(r.after as { name?: string })?.name ?? "so"}`
         : r.kind === "field"
-        ? `${field}: ${show(r.field, r.before)} → ${show(r.field, r.after)}`
+        ? r.before == null || r.before === ""
+          ? `${field}: ${show(r.field, r.after)}`
+          : r.after == null || r.after === ""
+            ? `${field} cleared (was ${show(r.field, r.before)})`
+            : `${field}: ${show(r.field, r.after)} (was ${show(r.field, r.before)})`
         : r.kind === "created"
           ? "first recorded"
-          : `${r.kind === "relation-added" ? "+" : r.kind === "relation-removed" ? "−" : "~"} ${r.subject}${r.after && typeof r.after === "object" && "note" in (r.after as object) && (r.after as { note: string }).note ? ` (${(r.after as { note: string }).note})` : ""}`;
+          : `${r.kind === "relation-added" ? "now" : r.kind === "relation-removed" ? "no longer" : "changed:"} ${r.subject}${r.after && typeof r.after === "object" && "note" in (r.after as object) && (r.after as { note: string }).note ? ` (${(r.after as { note: string }).note})` : ""}`;
     return { session: sessions.find((s) => s.id === r.sessionId)?.number ?? null, when: r.createdAt, text: r.undoneAt ? `${text} (undone)` : text, source: r.source, note: r.note ?? undefined, batch: r.batch, moment: momentOf(r.batch) };
   });
 }

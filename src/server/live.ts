@@ -81,7 +81,14 @@ async function lastTime(campaignId: number, session: number) {
   const [camp] = await db.select({ saved: schema.campaigns.savedIdeas }).from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
   const prep = camp?.saved?.prep?.data as { collisions?: { title: string }[] } | undefined;
   // The notes, without the wrap-up's own headings, cut at a sentence near 320 characters.
-  const text = (last?.recap ?? "").replace(/^Before the first session \(the hook\)\s*/i, "").replace(/\n+/g, " ").trim();
+  const text = (last?.recap ?? "")
+    .replace(/^Before the first session \(the hook\)\s*/i, "")
+    .replace(/^At the table \(logged by Loom\):?\s*/im, "")
+    .replace(/^\s*-\s+(?:Then:|Result:)?\s*/gm, "")
+    .replace(/^\s*What happened:\s*/gim, "")
+    .replace(/([^.!?])\n+/g, "$1. ")
+    .replace(/\n+/g, " ")
+    .trim();
   const cut = text.length > 320 ? `${text.slice(0, 320).replace(/[^.!?]*$/, "").trim() || text.slice(0, 317)}…` : text;
   return last || inPlay.length ? { session: last?.number ?? null, notes: cut, threads: inPlay, prep: (prep?.collisions ?? []).slice(0, 3).map((c) => c.title) } : null;
 }

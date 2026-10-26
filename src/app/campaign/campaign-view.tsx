@@ -1,5 +1,6 @@
 "use client";
 
+import { NotesView } from "../notes-view";
 import { usePrefs } from "../prefs";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -153,10 +154,10 @@ function Loom({ campaignId }: { campaignId: number }) {
       )}
 
       {/* The overview: the way in. Every name opens in the inspector. */}
-      <section className="mt-6 grid gap-4 sm:grid-cols-2">
+      <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Panel title="The party" wide>
           {!party.length && <p className="text-sm text-muted">No player characters yet.</p>}
-          <ul className="grid gap-2 sm:grid-cols-2">
+          <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             {party.map((p) => {
               const conditions = data.threads.filter((t) => t.kind === "condition" && t.status !== "resolved" && t.involves.includes(p.name));
               const health = detail(p, "health");
@@ -479,7 +480,7 @@ function Sessions({ sessions, q }: { sessions: Overview["sessions"]; q: string }
               </span>
               <span className="shrink-0 text-xs text-muted">{s.at.slice(0, 10)}</span>
             </summary>
-            <pre className="story whitespace-pre-wrap px-1 pb-3 text-[13.5px] leading-relaxed">{q ? highlight(s.notes, q) : <Linked text={s.notes} />}</pre>
+            {q ? <pre className="story whitespace-pre-wrap px-1 pb-3 text-[13.5px] leading-relaxed">{highlight(s.notes, q)}</pre> : <NotesView text={s.notes} className="px-1 pb-4" />}
           </details>
         </li>
       ))}

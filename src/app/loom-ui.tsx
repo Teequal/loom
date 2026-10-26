@@ -3,8 +3,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { batchLabel, post } from "./shell";
-import { Icon } from "./icons";
+import { Icon, type IconName } from "./icons";
 import { Steps, Switch } from "./controls";
+import { NotesView } from "./notes-view";
 
 // Walking the loom from anywhere. Anything with an identity is a Ref: hover (or long-press) for a
 // preview, click to open it in the inspector, where every connection is another Ref. The trail
@@ -519,10 +520,17 @@ function Inspector({ trail, setTrail }: { trail: Ref[]; setTrail: (t: Ref[]) => 
   );
 }
 
-function Head({ n, chips }: { n: Node; chips?: (string | null | false | undefined)[] }) {
+function Head({ n, chips, icon }: { n: Node; chips?: (string | null | false | undefined)[]; icon?: IconName }) {
   return (
     <div className="mb-3">
-      <h2 className="text-lg font-semibold leading-snug">{n.name}</h2>
+      <h2 className="flex items-center gap-2 text-lg font-semibold leading-snug">
+        {icon && (
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-thread-soft text-thread">
+            <Icon name={icon} size={15} />
+          </span>
+        )}
+        {n.name}
+      </h2>
       <p className="mt-0.5 flex flex-wrap gap-x-2 text-xs text-muted">
         <span>{n.sub}</span>
         {chips?.filter(Boolean).map((c) => (
@@ -536,13 +544,14 @@ function Head({ n, chips }: { n: Node; chips?: (string | null | false | undefine
 }
 
 // A section that shows a few items and folds the rest away.
-function Section({ title, items, render, initial = 4 }: { title: string; items: any[]; render: (x: any, i: number) => React.ReactNode; initial?: number }) {
+function Section({ title, items, render, initial = 4, icon }: { title: string; items: any[]; render: (x: any, i: number) => React.ReactNode; initial?: number; icon?: IconName }) {
   const [all, setAll] = useState(false);
   if (!items?.length) return null;
   const shown = all ? items : items.slice(0, initial);
   return (
     <section className="mt-4">
-      <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+      <h3 className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+        {icon && <Icon name={icon} size={12} className="text-thread" />}
         {title} <span className="font-normal">{items.length}</span>
       </h3>
       <ul className="space-y-1.5">{shown.map(render)}</ul>
@@ -577,7 +586,7 @@ function historyGroups(history: HistoryLineView[]): HistoryGroup[] {
 function HistoryItem({ h, session }: { h: HistoryLineView; session?: number | null }) {
   return (
     <li className="text-[13px]">
-      {session != null && <span className="text-xs text-muted">s{session} </span>}
+      {session != null && <span className="text-xs text-muted">{session === 0 ? "the start" : `session ${session}`} · </span>}
       <Linked text={h.text} />
       {h.note && <span className="text-xs text-muted"> · {h.note}</span>}
     </li>
@@ -596,37 +605,79 @@ const Lock = () => (
   </span>
 );
 
+// What a detail is about, so a page reads in sections a GM recognises.
+const DETAIL_GROUPS: { title: string; icon: IconName; keys: string[] }[] = [
+  { title: "Who they are", icon: "person", keys: ["occupation", "race", "age", "gender", "background", "alignment", "appearance", "personality traits", "personality", "voice", "languages", "mood", "health", "conditions", "role", "known properties", "description"] },
+  { title: "What drives them", icon: "compass", keys: ["goals", "wants", "fears", "bonds", "beliefs", "flaws", "ideals", "motives", "plan", "aims", "loyalties"] },
+  { title: "What they carry", icon: "pack", keys: ["abilities", "notable gear", "gear", "wealth", "true properties", "passive perception", "passive insight"] },
+];
+// Numbers the property model keeps: shown, and editable, under "Personality and feelings".
+const MODEL_KEYS = new Set(["disposition", "state", "interplay overrides", "condition sources", "aggression", "alert", "power", "pull", "cost severity", "cost grows", "danger"]);
+// A detail written as "a; b; c" is a list.
+const asList = (v: string) => v.split(/;\s+/).map((x) => x.trim()).filter(Boolean);
+
+const TYPE_ICON: Record<string, IconName> = { pc: "person", npc: "person", location: "pin", item: "item", faction: "flag" };
+
+function Glance({ items }: { items: { icon: IconName; label: React.ReactNode; tone?: string }[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="mt-3 flex flex-wrap gap-1.5">
+      {items.map((x, i) => (
+        <span key={i} className={`inline-flex items-center gap-1.5 rounded-full border border-line bg-background px-2.5 py-0.5 text-[12.5px] ${x.tone ?? "text-foreground/85"}`}>
+          <Icon name={x.icon} size={12} className="text-thread" />
+          {x.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
   const loom = useLoom()!;
+  const details = (n.details as { key: string; value: string; secret: boolean }[]).filter((d) => !MODEL_KEYS.has(d.key));
+  const detail = (k: string) => details.find((d) => d.key === k && !d.secret)?.value;
+  const grouped = DETAIL_GROUPS.map((g) => ({ ...g, items: details.filter((d) => !d.secret && g.keys.includes(d.key) && !["health", "mood"].includes(d.key)) }));
+  const rest = details.filter((d) => !d.secret && !DETAIL_GROUPS.some((g) => g.keys.includes(d.key)));
+  const secrets = details.filter((d) => d.secret);
+  const health = detail("health");
   return (
     <>
-      <Head n={n} chips={[n.status !== "alive" && n.status !== "intact" && n.status, n.attitude, n.importance, n.activity && n.activity.band !== "active" && (n.activity.band === "very active" ? "on stage a lot lately" : "quiet lately"), n.momentum && `${n.momentum.band} lately: ${n.momentum.because.join(", ")}`]} />
+      <Head n={n} icon={TYPE_ICON[n.type]} chips={[n.status !== "alive" && n.status !== "intact" && n.status, n.attitude, n.importance, n.activity && n.activity.band !== "active" && (n.activity.band === "very active" ? "on stage a lot lately" : "quiet lately"), n.momentum && `${n.momentum.band} lately: ${n.momentum.because.join(", ")}`]} />
       {n.description && (
         <p className="story leading-relaxed">
           <Linked text={n.description} />
         </p>
       )}
-      {n.where.length > 0 && (
-        <p className="mt-2 text-[13px] text-muted">
-          {n.type === "location" ? "Inside " : "Last at "}
-          {n.where.map((r: Ref, i: number) => (
-            <span key={r.id}>
-              {i > 0 && " › "}
-              <RefLink r={r} />
-            </span>
-          ))}
-        </p>
-      )}
-      {n.partOf && (
-        <p className="mt-1 text-[13px] text-muted">
-          Part of <RefLink r={n.partOf} />
-        </p>
-      )}
-      <Interplays items={n.interplays} edit={(body) => editEntity(loom.campaignId, n, body, onChange)} overrides={n.overrides} />
-      <Properties items={n.properties} />
-      {n.editable && <Values n={n} onChange={onChange} />}
+      <Glance
+        items={[
+          ...(n.where.length
+            ? [
+                {
+                  icon: "pin" as IconName,
+                  label: (
+                    <>
+                      {n.type === "location" ? "Inside " : ""}
+                      {n.where.map((r: Ref, i: number) => (
+                        <span key={r.id}>
+                          {i > 0 && <span className="text-muted"> › </span>}
+                          <RefLink r={r} />
+                        </span>
+                      ))}
+                    </>
+                  ),
+                },
+              ]
+            : []),
+          ...(n.partOf ? [{ icon: "item" as IconName, label: <>Part of <RefLink r={n.partOf} /></> }] : []),
+          ...(health ? [{ icon: "heart" as IconName, label: health, tone: /critical|bloodied|unconscious|dead/i.test(health) ? "text-danger" : undefined }] : []),
+          ...(detail("mood") ? [{ icon: "sparkle" as IconName, label: detail("mood")! }] : []),
+          ...(detail("conditions") ? [{ icon: "signal" as IconName, label: detail("conditions")! }] : []),
+        ]}
+      />
+      <Section title="Threads" icon="thread" items={n.threads} initial={6} render={(r: Ref) => <li key={r.id}><RefLink r={r} /> <span className="text-xs text-muted">{r.sub}</span></li>} />
       <Section
         title="Ties"
+        icon="tie"
         items={n.ties}
         initial={6}
         render={(t: any, i) => (
@@ -655,6 +706,7 @@ function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
       />
       <Section
         title="Former ties"
+        icon="tie"
         items={n.formerTies}
         initial={3}
         render={(t: any, i) => (
@@ -664,22 +716,35 @@ function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
           </li>
         )}
       />
-      <Section title="Threads" items={n.threads} initial={6} render={(r: Ref) => <li key={r.id}><RefLink r={r} /> <span className="text-xs text-muted">{r.sub}</span></li>} />
-      <Section title={n.type === "location" ? "Here" : "Holds and contains"} items={n.contains} initial={6} render={(r: Ref) => <li key={r.id}><RefLink r={r} /> <span className="text-xs text-muted">{r.sub}</span></li>} />
-      <Section
-        title="Details"
-        items={n.details}
-        initial={5}
-        render={(d: any) => (
-          <li key={d.key} className="text-[13.5px]">
-            <span className="text-muted">{d.key}:</span> <Linked text={d.value} />
-            {d.secret && <Lock />}
-          </li>
-        )}
-      />
-      <Section title="Key moments" items={n.moments} render={(r: Ref) => <li key={r.id}><RefLink r={r} /></li>} />
+      <Interplays items={n.interplays} edit={(body) => editEntity(loom.campaignId, n, body, onChange)} overrides={n.overrides} />
+      {[...grouped, { title: "Also noted", icon: "scroll" as IconName, keys: [], items: rest }].map((g) => (
+        <Section
+          key={g.title}
+          title={g.title}
+          icon={g.icon}
+          items={g.items}
+          initial={6}
+          render={(d: { key: string; value: string }) => <DetailRow key={d.key} label={d.key} value={d.value} />}
+        />
+      ))}
+      <Section title="Secrets" icon="lock" items={secrets} initial={4} render={(d: { key: string; value: string }) => <DetailRow key={d.key} label={d.key} value={d.value} secret />} />
+      <Section title={n.type === "location" ? "Here" : "Holds and contains"} icon={n.type === "location" ? "pin" : "pack"} items={n.contains} initial={6} render={(r: Ref) => <li key={r.id}><RefLink r={r} /> <span className="text-xs text-muted">{r.sub}</span></li>} />
+      <Section title="Key moments" icon="star" items={n.moments} render={(r: Ref) => <li key={r.id}><RefLink r={r} /></li>} />
+      {(n.properties?.length > 0 || n.editable) && (
+        <details className="group mt-5 rounded-xl border border-line bg-background/60 px-3 py-2">
+          <summary className="flex cursor-pointer select-none items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted">
+            <Icon name="heart" size={12} className="text-thread" /> Personality and feelings
+            <span className="font-normal normal-case tracking-normal">how they stand, and what Loom works from</span>
+          </summary>
+          <div className="pb-1">
+            <Properties items={n.properties} />
+            {n.editable && <Values n={n} onChange={onChange} />}
+          </div>
+        </details>
+      )}
       <Section
         title="History"
+        icon="clock"
         items={historyGroups(n.history)}
         initial={3}
         render={(g: HistoryGroup, i) => (
@@ -687,7 +752,7 @@ function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
             {g.head ? (
               <>
                 <p className="text-[12px] text-muted">
-                  {g.session != null ? `s${g.session} · ` : ""}
+                  {g.session != null ? (g.session === 0 ? "the start · " : `session ${g.session} · `) : ""}
                   {g.head}
                 </p>
                 <ul className="mt-0.5 space-y-0.5 border-l border-line pl-2.5">
@@ -705,6 +770,30 @@ function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
         )}
       />
     </>
+  );
+}
+
+// One detail: a short value on one line; a list as a list.
+function DetailRow({ label, value, secret = false }: { label: string; value: string; secret?: boolean }) {
+  const items = asList(value);
+  return (
+    <li className="text-[13.5px]">
+      <span className="text-muted">{label.charAt(0).toUpperCase() + label.slice(1)}</span>
+      {secret && <Lock />}
+      {items.length > 1 ? (
+        <ul className="mt-0.5 list-disc space-y-0.5 pl-5 marker:text-thread/60">
+          {items.map((x, i) => (
+            <li key={i}>
+              <Linked text={x} />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <span>
+          : <Linked text={value} />
+        </span>
+      )}
+    </li>
   );
 }
 
@@ -768,16 +857,28 @@ function MomentView({ n }: { n: Node }) {
   );
 }
 
+// Threads a session touched, grouped by what happened to them.
+const SESSION_CHANGES: [string, string, IconName][] = [
+  ["new", "New threads", "thread"],
+  ["progressed", "Moved on", "branch"],
+  ["resolved", "Resolved", "check"],
+  ["edited", "Edited", "pen"],
+];
+
 function SessionView({ n }: { n: Node }) {
+  const threads = (n.threads ?? []) as any[];
   return (
     <>
-      <Head n={n} />
-      <Section title="Threads it moved" items={n.threads} initial={8} render={(r: any) => <li key={r.id}><RefLink r={r} /> <span className="text-xs text-muted">{r.change}</span></li>} />
-      <section className="mt-4">
-        <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">Notes</h3>
-        <p className="story whitespace-pre-wrap text-[13.5px] leading-relaxed">
-          <Linked text={n.notes || "(no notes stored)"} />
-        </p>
+      <Head n={n} icon="scroll" />
+      {SESSION_CHANGES.map(([change, title, icon]) => (
+        <Section key={change} title={title} icon={icon} items={threads.filter((t) => t.change === change)} initial={6} render={(r: any) => <li key={r.id}><RefLink r={r} /></li>} />
+      ))}
+      <section className="mt-5">
+        <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">
+          <Icon name="scroll" size={12} className="text-thread" />
+          Notes
+        </h3>
+        <NotesView text={n.notes || ""} />
       </section>
     </>
   );

@@ -312,6 +312,11 @@ const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 // A sentence that opens on a body part (or a voice, a look) belongs to the actor in front of it.
 const OWN_PART = /^(?:jaw|eyes?|gaze|voice|face|hands?|fingers?|shoulders?|breath|lips|mouth|expression|smile|grip|knuckles|brow|cheeks?|heart|throat|head|chin|hair|posture|stance|tone|words|smirk|frown|ears|tail|wings?)\b/i;
 
+// A name that's really a description ("Cloud giant", "Old fisherman") needs an article to open a
+// sentence: "The cloud giant shifts…". Proper names ("Mother Ressa") keep their capitals.
+const GENERIC_NAME = /^[A-Z][a-z]+(?:\s[a-z][\w'-]*)+$/;
+export const asSubject = (name: string) => (GENERIC_NAME.test(name) ? `The ${name.charAt(0).toLowerCase()}${name.slice(1)}` : name);
+
 export function renderBeat(b: ScaffoldBeat, tagger: Tagger) {
   const tagged = tagger.tag(b.does.replace(/\b(an?\s+)?walk-on\s+/gi, "$1")).trim();
   // "Uses the tables as cover" after a name reads "Vex'ahlia uses…"; names (tagged) keep their capital.
@@ -324,10 +329,10 @@ export function renderBeat(b: ScaffoldBeat, tagger: Tagger) {
   const subject = extra ? capitalise(tagger.render(b.walk_on).replace(/\bwalk-on\b\s*/gi, "").trim() || "someone") : b.actor;
   const startsWithSubject = does.toLowerCase().startsWith(subject.toLowerCase()) || does.toLowerCase().startsWith(subject.split(/[\s,]+/)[0].toLowerCase());
   // "jaw tightens…" after a named character is their jaw: "Vex'ahlia's jaw tightens".
-  if (!startsWithSubject && !extra && OWN_PART.test(does)) return sentence(`${subject}'s ${does}`);
+  if (!startsWithSubject && !extra && OWN_PART.test(does)) return sentence(`${asSubject(subject)}'s ${does}`);
   // "a voice rasps through the murmur…" after a named actor: their part, set off with a dash.
   if (!startsWithSubject && !extra && /^(?:a|an|the|some)\b/i.test(does)) return sentence(`${subject}: ${does}`);
-  return sentence(startsWithSubject ? capitalise(does) : `${subject} ${does}`);
+  return sentence(startsWithSubject ? capitalise(does) : `${extra ? subject : asSubject(subject)} ${does}`);
 }
 
 export function renderOption(o: ScaffoldOption, tagger: Tagger) {

@@ -808,6 +808,26 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 
+- [x] **Step 17: UX fixes and feel before public testing** (26–27 Oct; review in [docs/ux-review-2026-10-26.md](docs/ux-review-2026-10-26.md)). Auth and accounts are deferred (Jacob: "hold off right now").
+  - **Slimmer answers:** 3 options, not 4. No label (the headline is the title everywhere), no pillar or approach fields (code works them out: `pillarOf`, `APPROACH_OF_AIM`), and "why" is under 10 words. Output fell from ~1,500 to ~1,200 tokens: first option ~4.6 s, all ~7.3 s. Prompt size (~16k input tokens) is the next lever.
+  - **One card system:** headline rows; tap one to open it, tap its title to fold it. The ‹ › and swipe controls are gone. "Use this" is the only action on an unused card; Develop appears once it's used. A recorded result shows on the card ("Failed").
+  - **One-tap results:** tapping an outcome records it; the detail line is optional.
+  - **Prep ideas are kept** (`campaigns.saved_ideas`, migration `0014`): the latest prep ideas and fresh ideas per campaign come back on the next visit, marked "Kept from …".
+  - **Big undos need "delete" typed:** over 10 changes, inline on Prep, and the server refuses without it (`/api/undo`). A password is the plan once there are accounts.
+  - **First run:** the box stays hidden on an empty campaign until a way in is chosen. The hook streams its stages (writing, reading, weaving) and then shows what it made (players, characters, places, things, threads), each tappable.
+  - **Last time:** a fresh session's table shows the last session's notes (without the log's own labels), the threads in play and kept prep collisions, until the first moment.
+  - **Plain words:** no "walk-on", "s0", "+/~" or "link:" in what DMs read. "Tone" (wording) is now "Drama". Costs and timings sit behind Settings › Behind the scenes (off by default). Rules works on Settings. Pronouns: "they" or the name when a PC's gender isn't recorded.
+  - **Feel:**
+    - **Weaving** (`src/app/weave.tsx`): a small loom (warp lines, weft drawn row by row, a shuttle) replaces spinners and "…" while Loom writes.
+    - **Unravel:** when an option is used, the others fray and fold away into "N other options"; the used card gets a stitched top edge. Pending option slots lay in like threads. All respect reduced motion.
+    - **Readable notes** (`src/app/notes-view.tsx`, `parseNotes`): pasted recaps get headings (title-like lines), "Topic:" bullets as subheads with their bullets tucked under, "Key: value" bullets with the key set off, and every name linked. The table log reads as moments (italic) with what happened beneath, and Then / Result marked. Used in the inspector's session view and the campaign's Sessions tab.
+    - **Inspector:** characters read in sections with icons (Who they are, What drives them, What they carry), with a glance row (where, part of, health, mood, conditions). The property model folds under "Personality and feelings". A session's threads are grouped (new / moved on / resolved). History reads "session 10 · power: 3 (was 2)".
+  - **Fixed along the way:**
+    - A stream cut off mid-way (a reload, a phone locking) used to stop the server's work. A hook was lost this way in testing. `streamRoute` now keeps working and saves; there's just no one left to tell.
+    - The campaign overview scrolled sideways at phone width (a grid column grew to its widest card).
+    - A descriptive name opening a sentence gets an article ("The cloud giant shifts…"; `asSubject` in `improv.ts`).
+  - Tested in the browser on a throwaway campaign (deleted afterwards), desktop and phone: hook to table, use and unravel, a one-tap result, the 72-change undo with "delete", notes and inspector on the enriched copy. 363/363 crafted checks; engine tests, lint and types are clean.
+
 ## Entity model build (docs/entity-model.md)
 
 - [x] Step 1: Schema with provenance (migration `drizzle/0001`):

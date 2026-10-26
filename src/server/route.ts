@@ -43,16 +43,29 @@ export function streamRoute<S extends z.ZodType>(schema: S, run: (body: z.infer<
     if (!parsed.success) return Response.json({ error: parsed.error.issues[0]?.message ?? "That request didn't make sense." }, { status: 400 });
     await dbReady();
     const encoder = new TextEncoder();
+    // If the page goes away mid-stream (a reload, a phone locking), the work still finishes and is
+    // saved; there's just no one left to tell.
+    let gone = false;
     const stream = new ReadableStream({
+      cancel() {
+        gone = true;
+      },
       async start(controller) {
-        const send = (event: object) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+        const send = (event: object) => {
+          if (gone) return;
+          try {
+            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          } catch {
+            gone = true;
+          }
+        };
         try {
           send({ type: "done", ...(await run(parsed.data, send)) });
         } catch (err) {
           console.error(err);
           send({ type: "error", message: err instanceof Error && /credit has run out|any more|isn.t on this/i.test(err.message) ? err.message : failure });
         } finally {
-          controller.close();
+          if (!gone) controller.close();
         }
       },
     });

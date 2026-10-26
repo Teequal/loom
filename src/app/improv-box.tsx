@@ -1,5 +1,6 @@
 "use client";
 
+import { Weaving } from "./weave";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Choice, Field, Steps, Switch, Tune } from "./controls";
@@ -160,6 +161,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const [empty, setEmpty] = useState(false);
   // A new campaign shows its ways in first; the box comes when the GM chooses to start at the table.
   const [atTable, setAtTable] = useState(false);
+  const [unravelling, setUnravelling] = useState(false); // the moment the unchosen options come apart
   const [lastTime, setLastTime] = useState<LastTime | null>(null); // where things stood, for a session not yet begun
   const [opening, setOpening] = useState<Opening | null>(null); // a hook just started
   const [begun, setBegun] = useState<Opening | null>(null); // its opening, kept in view until the first moment
@@ -365,6 +367,9 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       if (current.choiceKind) await post("/api/live/clear", { entryId: current.id });
       await post("/api/live/choice", { entryId: current.id, ...choice });
       setShowOthers(false);
+      // The options not chosen unravel for a moment before they fold away (globals.css .unravel).
+      setUnravelling(true);
+      setTimeout(() => setUnravelling(false), 760);
       await reload();
       focusBox("What happened next?");
       // Keep the chosen card in view once the others fold away.
@@ -581,8 +586,9 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           <ol className="space-y-3">
             {cards.map((card, i) => {
               const state = !current?.choiceKind ? "open" : current.choiceKind === "option" && current.choice === card.text ? "used" : "other";
-              // Once you've chosen, the rest fold away so the page follows the story, not the menu.
-              if (state === "other" && !showOthers) return null;
+              // Once you've chosen, the rest fold away so the page follows the story, not the menu:
+              // first they unravel into a thread, then they're gone.
+              if (state === "other" && !showOthers) return unravelling ? <Headline key={`${card.label}-${i}`} card={card} n={i + 1} onOpen={() => {}} leaving /> : null;
               // Headlines first: only the one you open (or the one you used) is shown in full.
               if (state === "open" && openCard !== i)
                 return <Headline key={`${card.label}-${i}`} card={card} n={i + 1} onOpen={() => setOpenCard(i)} />;
@@ -605,7 +611,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
               );
             })}
             {Array.from({ length: pending }, (_, i) => (
-              <li key={`pending-${i}`} aria-hidden className="h-12 animate-pulse rounded-xl border border-line bg-surface/60" />
+              <li key={`pending-${i}`} aria-hidden className="thread-slot h-12 rounded-xl border border-line bg-surface/60" style={{ "--delay": `${i * 0.35}s` } as React.CSSProperties} />
             ))}
           </ol>
           {current?.choiceKind && cards.some((c) => !(current.choiceKind === "option" && current.choice === c.text)) && (
@@ -778,7 +784,7 @@ const HOOK_STAGES = [
 function HookStages({ stage, title }: { stage: string; title?: string }) {
   const at = Math.max(0, HOOK_STAGES.findIndex((x) => x.id === stage));
   return (
-    <ol className="mt-3 space-y-1.5 text-[13px]" aria-live="polite">
+    <ol className="space-y-1.5 text-[13px]" aria-live="polite">
       {HOOK_STAGES.map((x, i) => (
         <li key={x.id} className={`flex items-center gap-2 ${i > at ? "text-muted/60" : i < at ? "text-muted" : "text-foreground"}`}>
           <span className={`grid h-4 w-4 place-items-center rounded-full border ${i < at ? "border-thread bg-thread text-background" : i === at ? "border-thread" : "border-line"}`}>
@@ -802,7 +808,7 @@ function Made({ made }: { made: NonNullable<Opening["made"]> }) {
     { title: "Things and factions", items: of(["item", "faction", "other"]), sub: "" },
   ].filter((g) => g.items.length);
   return (
-    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
       {groups.map((g) => (
         <div key={g.title}>
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">{g.title}</p>
@@ -879,7 +885,7 @@ function Welcome({
       <div className="mt-5 rounded-xl border border-thread/40 bg-thread-soft/30 p-4">
         <p className="font-medium">Start from a hook</p>
         <p className="text-sm text-muted">Never run a game before? Loom invents a small world to begin in: a place, a few characters, and threads that tangle together.</p>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
           <input
             value={party}
             onChange={(e) => setParty(e.target.value)}
@@ -913,7 +919,12 @@ function Welcome({
         >
           <Icon name="sparkle" /> {busy === "hook" ? `Inventing a world… ${elapsed} s` : party.trim() || theme.trim() ? "Invent the hook" : "Start from a random hook"}
         </button>
-        {busy === "hook" && <HookStages stage={stage.stage} title={stage.title} />}
+        {busy === "hook" && (
+          <div className="mt-4 flex items-center gap-5">
+            <Weaving className="scale-125" />
+            <HookStages stage={stage.stage} title={stage.title} />
+          </div>
+        )}
         {error && <p className="mt-1.5 text-xs text-danger">{error}</p>}
       </div>
 
@@ -1238,7 +1249,7 @@ function Branches({ parent, live, onOpen }: { parent: Entry; live: Live; onOpen?
 
 // What using a choice did to the loom. Questions live in the tray above the box.
 function LoomStatus({ entry, compact = false }: { entry: Entry; compact?: boolean }) {
-  if (entry.status === "extracting") return <p className={`${compact ? "" : "mt-3"} animate-pulse text-xs text-muted`}>Adding to the loom…</p>;
+  if (entry.status === "extracting") return <Weaving label="Weaving it into the loom…" className={compact ? "" : "mt-3"} />;
   if (entry.status === "failed") return <p className={`${compact ? "" : "mt-3"} text-xs text-danger`}>Couldn&apos;t add this to the loom. It&apos;s still in the session log for wrap-up.</p>;
   if (entry.status !== "done") return null;
   if (compact) return <span className="text-xs text-muted">{entry.summary.length ? `${entry.summary.length} added to the loom` : "Logged"}{entry.questions.length ? ` · ${entry.questions.length} to answer above` : ""}</span>;
@@ -1268,9 +1279,9 @@ function LoomStatus({ entry, compact = false }: { entry: Entry; compact?: boolea
 // ---------- the options ----------
 
 // An option as one line: its flavour and its hook. Tap to read it in full.
-function Headline({ card, n, onOpen }: { card: Card; n: number; onOpen: () => void }) {
+function Headline({ card, n, onOpen, leaving = false }: { card: Card; n: number; onOpen: () => void; leaving?: boolean }) {
   return (
-    <li className="rise">
+    <li className={leaving ? "unravel rounded-xl" : "rise"} aria-hidden={leaving || undefined}>
       <button type="button" onClick={onOpen} className="group flex w-full items-baseline gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-left shadow-sm transition-colors hover:border-thread/60">
         <span className="w-4 shrink-0 text-[13px] text-muted">{n}</span>
         <span className="story min-w-0 flex-1 leading-snug">{card.headline}</span>
@@ -1311,7 +1322,7 @@ function OptionCard({
   return (
     <li
       id={state === "used" ? "chosen" : undefined}
-      className={`rise group scroll-mt-40 rounded-xl border bg-surface p-4 shadow-sm transition-opacity ${state === "used" ? "border-thread/60" : "border-line"} ${state === "other" ? "opacity-55 hover:opacity-100" : ""}`}
+      className={`rise group scroll-mt-40 rounded-xl border bg-surface p-4 shadow-sm transition-opacity ${state === "used" ? "stitched border-thread/60" : "border-line"} ${state === "other" ? "opacity-55 hover:opacity-100" : ""}`}
     >
       <div className="mb-2 flex items-start justify-between gap-3">
         {/* The headline stays the option's name; tapping it folds the card back while choosing. */}
