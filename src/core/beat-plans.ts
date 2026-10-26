@@ -372,11 +372,15 @@ export function anchorsFor(v: View, moves: Move[], moment: string, opts: { spent
         const overlap = [...words(p.about)].filter((w) => said.has(w));
         const why: string[] = [`${p.kind} +${KIND_WEIGHT[p.kind] ?? 1}`];
         let score = KIND_WEIGHT[p.kind] ?? 1;
-        if (overlap.length) (score += 1.5 * overlap.length), why.push(`shares "${overlap.join('", "')}" with the moment +${1.5 * overlap.length}`);
-        if (owner && moment.toLowerCase().includes(owner.split(/[\s,]+/)[0].toLowerCase())) (score += 2), why.push(`${owner} is named in the moment +2`);
-        if (m.source && (p.key.endsWith(`:pull:${m.source}`) || p.key.includes(`:prop:${m.source}:`))) (score += 2), why.push("the move's own source +2");
-        if (p.spent) (score -= 3), why.push("delivered already this session −3");
-        if (taken.has(p.key)) (score -= 1), why.push("another move anchors on it −1");
+        const add = (n: number, says: string) => {
+          score += n;
+          why.push(says);
+        };
+        if (overlap.length) add(1.5 * overlap.length, `shares "${overlap.join('", "')}" with the moment +${1.5 * overlap.length}`);
+        if (owner && moment.toLowerCase().includes(owner.split(/[\s,]+/)[0].toLowerCase())) add(2, `${owner} is named in the moment +2`);
+        if (m.source && (p.key.endsWith(`:pull:${m.source}`) || p.key.includes(`:prop:${m.source}:`))) add(2, "the move's own source +2");
+        if (p.spent) add(-3, "delivered already this session −3");
+        if (taken.has(p.key)) add(-1, "another move anchors on it −1");
         return { p, owner, score, why };
       })
       .sort((a, b) => b.score - a.score)
