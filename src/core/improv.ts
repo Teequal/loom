@@ -621,6 +621,7 @@ export interface ImprovOptions {
   // options are held until the safety check has seen them.
   onOption?: (o: ImprovOption) => void;
   beatPlans?: boolean; // the engine plans each beat (beat-plans.ts); default from LOOM_BEAT_PLANS
+  onTrace?: (stage: "prompt" | "raw", data: unknown) => void; // for a step-by-step view of one call (debugging, explainers)
 }
 
 // The complete objects so far in the "options" array of a JSON answer that's still being written.
@@ -857,6 +858,7 @@ ${TONE_TEXT[Math.max(0, Math.min(4, opts.tone ?? 1))]}
 WHAT JUST HAPPENED AT THE TABLE
 ${moment}`;
 
+  opts.onTrace?.("prompt", prompt);
   const idOf = (ref: string) => Number(ref.replace(/^T/, ""));
   const toOption = (o: ScaffoldOption): ImprovOption => ({
     // A headline that decides for the players falls back to the option's first beat (which the
@@ -902,6 +904,7 @@ ${moment}`;
   for (let attempt = 0; attempt < 2 && accepted.length < 2; attempt++) {
     let seen = 0;
     const take = (raw: unknown) => {
+      opts.onTrace?.("raw", raw);
       const parsed = OptionSchema.safeParse(raw);
       if (!parsed.success) {
         rejected.push({ label: (raw as { label?: string })?.label ?? "an option", reason: "unusable answer (a value outside the allowed lists)" });
