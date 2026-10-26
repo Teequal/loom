@@ -120,7 +120,21 @@ export async function logBranch(parentId: number, choice: { label: string; text:
       resultState: needsResult(choice.text) ? "pending" : null,
     })
     .returning();
-  return e;
+  return waitForSide(e);
+}
+
+/**
+ * A used choice that offers the players two sides waits, quietly, to hear which they took (never
+ * required, not asked at wrap-up). Rolls and fights wait for their result instead.
+ */
+export async function waitForSide(e: Entry): Promise<Entry> {
+  if (e.awaiting) return e;
+  const s = await scaffoldFor(e);
+  const h = s?.hand;
+  if (h?.kind !== "choice" || !h.what?.trim() || !h.or?.trim()) return e;
+  const side = (t: string) => untag(t).trim().replace(/[.?!]+$/, "");
+  const [next] = await db.update(schema.liveEntries).set({ awaiting: "choice", resultState: "pending", sides: [side(h.what), side(h.or)] }).where(eq(schema.liveEntries.id, e.id)).returning();
+  return next;
 }
 
 const proposalPath = (e: Entry) => `data/proposals/live-c${e.campaignId}-e${e.id}.json`;
@@ -155,7 +169,7 @@ export async function commitChoice(entryId: number, choice: { kind: "option" | "
     .set({ choiceKind: choice.kind, choiceLabel: choice.label, choice: choice.text, status: "extracting", awaiting, resultState: awaiting ? "pending" : null })
     .where(eq(schema.liveEntries.id, entryId))
     .returning();
-  return e;
+  return choice.kind === "option" ? waitForSide(e) : e;
 }
 
 // How a roll or fight turned out: it joins the tree under the choice it settles, and is extracted
@@ -219,11 +233,11 @@ export async function scaffoldFor(e: Entry): Promise<ScaffoldOption | null> {
  * its prose: the thread it moves, who arrives where the party is, which items change hands. It goes
  * through the same review as an extraction, so risky changes still come up as questions.
  */
-export async function directProposal(e: Entry, o: ScaffoldOption, text: string): Promise<Proposal> {
+export async function directProposal(e: Entry, o: ScaffoldOption, text: string, empty = false): Promise<Proposal> {
   const ents = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, e.campaignId));
   const [camp] = await db.select({ party: schema.campaigns.partyLocationId }).from(schema.campaigns).where(eq(schema.campaigns.id, e.campaignId));
   const party = ents.find((x) => x.id === camp?.party)?.name ?? "";
-  const d = deltasOf(o, (n) => ents.some((x) => x.type === "item" && x.name === n));
+  const d = empty ? { arrivals: [], handovers: [], thread: null, alsoThreads: [] } : deltasOf(o, (n) => ents.some((x) => x.type === "item" && x.name === n));
   // The quote for each change is the beat that makes it, as it reads in the log.
   const quote = (name: string) => clip(untag(o.setup.find((b) => b.actor === name || b.does.includes(`{${name}`))?.does ?? e.choice), 110);
   return {
@@ -248,14 +262,19 @@ async function runExtraction(e: Entry) {
     const text = `The players: ${e.moment}\nWhat happened: ${e.choice}`;
     // A choice Loom built applies its own changes; only the GM's own words need reading.
     const scaffold = await scaffoldFor(e);
-    const proposal = scaffold ? await directProposal(e, scaffold, text) : (await proposeRecapChanges(e.campaignId, text, undefined, { live: true })).data;
-    // Table nudges (nudges.ts): a used choice from its own structure; a result from the choice it
-    // settles, with the outcome the GM tapped.
     const parent = e.choiceKind === "result" && e.parentId ? (await db.select().from(schema.liveEntries).where(eq(schema.liveEntries.id, e.parentId)))[0] : null;
     const settles = parent ? await scaffoldFor(parent) : null;
+    // A side tapped from a choice Loom offered is known exactly: nothing to read.
+    const sideTaken = parent?.awaiting === "choice" && (parent.sides ?? []).includes(e.choiceLabel);
+    const proposal = scaffold || sideTaken ? await directProposal(e, scaffold ?? { setup: [], thread: "", also_ties_to: [] } as unknown as ScaffoldOption, text, !scaffold) : (await proposeRecapChanges(e.campaignId, text, undefined, { live: true })).data;
+    // Table nudges (nudges.ts): a used choice from its own structure and the moment the players
+    // declared; a result from the choice it settles, with the outcome or side the GM tapped.
     const nudgeFrom = scaffold ?? settles;
     if (nudgeFrom) {
-      const n = await tableNudges(e.campaignId, nudgeFrom, settles ? e.choiceLabel : null, clip(e.choice, 110));
+      const n = await tableNudges(e.campaignId, nudgeFrom, settles ? e.choiceLabel : null, clip(e.choice, 110), {
+        moment: e.choiceKind === "option" ? e.moment : parent?.choiceKind === "option" ? parent.moment : "",
+        side: sideTaken ? (parent!.sides ?? []).indexOf(e.choiceLabel) : null,
+      });
       proposal.sub_properties = [...proposal.sub_properties, ...n.subs];
       proposal.pair_weights = [...proposal.pair_weights, ...n.weights];
     }

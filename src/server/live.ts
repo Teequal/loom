@@ -34,6 +34,7 @@ export function entryView(e: Entry, titleOf = new Map<number, string>()) {
     // Chains keep their scaffolds on the server; the page gets the readable parts.
     developments: e.developments.map(developmentView),
     awaiting: e.resultState === "pending" ? e.awaiting : null,
+    sides: e.sides ?? [], // a choice's two sides, while Loom waits to hear which was taken
     resultState: e.resultState,
     encounter: e.encounter,
     at: e.createdAt,

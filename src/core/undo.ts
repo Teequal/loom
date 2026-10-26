@@ -159,14 +159,16 @@ async function laterChanges(c: Change) {
     .select()
     .from(schema.stateChanges)
     .where(and(eq(schema.stateChanges.campaignId, c.campaignId), gt(schema.stateChanges.id, c.id), isNull(schema.stateChanges.undoneAt)));
-  return later.filter((l) => l.batch !== c.batch && l.subject === c.subject && l.field === c.field);
+  // Pull starts and ends are records of what followed from the parts, not writes, so they never
+  // stand in the way (undo re-records them afterwards).
+  return later.filter((l) => l.kind !== "interplay" && l.batch !== c.batch && l.subject === c.subject && l.field === c.field);
 }
 
 export async function undoChanges(changes: Change[], opts: { force?: boolean } = {}) {
   const todo = changes.filter((c) => !c.undoneAt).sort((a, b) => b.id - a.id); // newest first
   const blocked: string[] = [];
   if (!opts.force) {
-    for (const c of todo) {
+    for (const c of todo.filter((x) => x.kind !== "interplay")) {
       const later = await laterChanges(c);
       if (later.length) blocked.push(`${c.subject}${c.field ? ` · ${c.field}` : ""} was changed again later (change #${later[0].id})`);
     }

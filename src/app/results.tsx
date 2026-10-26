@@ -97,3 +97,31 @@ export function ResultPrompt({
     </div>
   );
 }
+
+// Which side of a choice the players took: one quiet line, one tap, never required. Knowing it lets
+// Loom record what they did (helped her, threatened him) without reading anyone's words.
+export function SidePrompt({ entryId, sides, onDone }: { entryId: number; sides: string[]; onDone: () => Promise<unknown> | void }) {
+  const [busy, setBusy] = useState(false);
+  const send = async (body: object) => {
+    setBusy(true);
+    try {
+      await post("/api/live/result", { entryId, ...body });
+      await onDone();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="rise flex flex-wrap items-center gap-1.5 rounded-xl border border-line bg-surface px-3 py-1.5 text-[13px]">
+      <span className="text-muted">Which did they choose?</span>
+      {sides.map((s) => (
+        <button key={s} type="button" disabled={busy} onClick={() => send({ outcome: s })} className="rounded-full border border-line px-2.5 py-0.5 text-[13px] text-foreground/85 hover:border-thread/60">
+          {s}
+        </button>
+      ))}
+      <button type="button" disabled={busy} onClick={() => send({ skip: true })} className="btn-tertiary ml-auto text-xs" title="Don't record which">
+        skip
+      </button>
+    </div>
+  );
+}

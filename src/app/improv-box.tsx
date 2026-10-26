@@ -6,7 +6,7 @@ import { Choice, Field, Steps, Switch, Tune } from "./controls";
 import { Develop } from "./develop";
 import { Icon } from "./icons";
 import { type Encounter, FightPanel } from "./fight";
-import { ResultPrompt } from "./results";
+import { ResultPrompt, SidePrompt } from "./results";
 import { Linked, LoomProvider, RefChips, useLoom } from "./loom-ui";
 import { setPref, usePrefs } from "./prefs";
 import { type Overrides, SceneChips } from "./scene-chips";
@@ -61,7 +61,8 @@ export interface Entry {
   summary: string[];
   questions: Question[];
   developments: unknown[]; // Develop results kept on this choice (chains; older plans read-only)
-  awaiting: "roll" | "fight" | null;
+  awaiting: "roll" | "fight" | "choice" | null;
+  sides: string[];
   resultState: "pending" | "given" | "skipped" | null;
   encounter: unknown;
   at: string;
@@ -370,7 +371,10 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
 
   const pending = status === "running" ? Math.max(0, 3 - cards.length) : 0;
   const questions = entries.flatMap((e) => e.questions.map((q) => ({ ...q, entry: e })));
-  const waiting = entries.filter((e) => e.awaiting).reverse();
+  const waiting = entries.filter((e) => e.awaiting && e.awaiting !== "choice").reverse();
+  // Which side of a choice was taken: asked only while it's the latest thing used, and never pressed.
+  const lastUsed = [...entries].reverse().find((e) => e.choiceKind && e.choiceKind !== "result");
+  const sidePending = lastUsed?.awaiting === "choice" && lastUsed.sides.length === 2 ? lastUsed : null;
 
   return (
     <>
@@ -394,12 +398,17 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
             <ResultPrompt
               key={waiting[0].id}
               entryId={waiting[0].id}
-              kind={waiting[0].awaiting!}
+              kind={waiting[0].awaiting as "roll" | "fight"}
               label={waiting[0].choiceLabel ? `${waiting[0].choiceLabel}: ${waiting[0].choice}` : waiting[0].choice}
               count={waiting.length > 1 ? `1 of ${waiting.length}` : undefined}
               onDone={reload}
               folded={waiting[0].id === current?.id || waiting[0].parentId === current?.id}
             />
+          </div>
+        )}
+        {!questions.length && !waiting.length && sidePending && (
+          <div className="mb-2">
+            <SidePrompt key={sidePending.id} entryId={sidePending.id} sides={sidePending.sides} onDone={reload} />
           </div>
         )}
         <form
@@ -955,7 +964,7 @@ function Timeline({ session, live, open, setOpen, glowing }: { session: number; 
                 }`}
               >
                 {e.status === "extracting" ? <span className="h-2 w-2 animate-ping rounded-full bg-thread" /> : e.status === "failed" ? "!" : <Icon name={e.choiceKind === "result" ? "diamond" : e.choiceKind === "branch" ? "branch" : e.choiceKind === "own" ? "pen" : e.choiceKind ? "check" : "dot"} size={12} />}
-                {(e.questions.length > 0 || e.awaiting) && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-danger" />}
+                {(e.questions.length > 0 || (e.awaiting && e.awaiting !== "choice")) && <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-danger" />}
               </button>
             </li>
           ))}

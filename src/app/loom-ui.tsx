@@ -2,8 +2,9 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { post } from "./shell";
+import { batchLabel, post } from "./shell";
 import { Icon } from "./icons";
+import { Steps, Switch } from "./controls";
 
 // Walking the loom from anywhere. Anything with an identity is a Ref: hover (or long-press) for a
 // preview, click to open it in the inspector, where every connection is another Ref. The trail
@@ -500,7 +501,15 @@ function Inspector({ trail, setTrail }: { trail: Ref[]; setTrail: (t: Ref[]) => 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 text-sm">
         {error && <p className="text-danger">{error}</p>}
         {!shown && !error && <div aria-hidden className="h-24 animate-pulse rounded-lg bg-background" />}
-        {shown?.kind === "entity" && <EntityView n={shown} />}
+        {shown?.kind === "entity" && (
+          <EntityView
+            n={shown}
+            onChange={(n) => {
+              cache.current.set(key, n);
+              setNode(n);
+            }}
+          />
+        )}
         {shown?.kind === "thread" && <ThreadView n={shown} />}
         {shown?.kind === "moment" && <MomentView n={shown} />}
         {shown?.kind === "session" && <SessionView n={shown} />}
@@ -545,6 +554,35 @@ function Section({ title, items, render, initial = 4 }: { title: string; items: 
   );
 }
 
+// History, newest first, with the lines from one moment at the table (or one set of notes) folded
+// under it, each change with its reason when code made it.
+type HistoryLineView = { session: number | null; text: string; note?: string; batch?: string | null; moment?: string };
+type HistoryGroup = { head: string | null; session: number | null; lines: HistoryLineView[] };
+function historyGroups(history: HistoryLineView[]): HistoryGroup[] {
+  const groups: HistoryGroup[] = [];
+  for (const h of [...history].reverse()) {
+    const last = groups.at(-1);
+    if (h.batch && last && last.lines[0].batch === h.batch) {
+      last.lines.push(h);
+      continue;
+    }
+    const head = h.moment ? `At the table: “${h.moment}”` : h.batch ? batchLabel(h.batch) : null;
+    groups.push({ head, session: h.session, lines: [h] });
+  }
+  // A heading over one line from notes isn't worth the space; one from the table still says where.
+  return groups.map((g) => (g.lines.length === 1 && !g.lines[0].moment ? { ...g, head: null } : g));
+}
+
+function HistoryItem({ h, session }: { h: HistoryLineView; session?: number | null }) {
+  return (
+    <li className="text-[13px]">
+      {session != null && <span className="text-xs text-muted">s{session} </span>}
+      <Linked text={h.text} />
+      {h.note && <span className="text-xs text-muted"> · {h.note}</span>}
+    </li>
+  );
+}
+
 // "this session", "last session", "3 sessions ago": time at the scale people remember it.
 const ago = (session: number, latest: number) => {
   const d = latest - session;
@@ -557,7 +595,8 @@ const Lock = () => (
   </span>
 );
 
-function EntityView({ n }: { n: Node }) {
+function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
+  const loom = useLoom()!;
   return (
     <>
       <Head n={n} chips={[n.status !== "alive" && n.status !== "intact" && n.status, n.attitude, n.importance, n.activity && n.activity.band !== "active" && (n.activity.band === "very active" ? "on stage a lot lately" : "quiet lately"), n.momentum && `${n.momentum.band} lately: ${n.momentum.because.join(", ")}`]} />
@@ -582,8 +621,9 @@ function EntityView({ n }: { n: Node }) {
           Part of <RefLink r={n.partOf} />
         </p>
       )}
-      <Interplays items={n.interplays} />
+      <Interplays items={n.interplays} edit={(body) => editEntity(loom.campaignId, n, body, onChange)} overrides={n.overrides} />
       <Properties items={n.properties} />
+      {n.editable && <Values n={n} onChange={onChange} />}
       <Section
         title="Ties"
         items={n.ties}
@@ -639,12 +679,27 @@ function EntityView({ n }: { n: Node }) {
       <Section title="Key moments" items={n.moments} render={(r: Ref) => <li key={r.id}><RefLink r={r} /></li>} />
       <Section
         title="History"
-        items={[...n.history].reverse()}
+        items={historyGroups(n.history)}
         initial={3}
-        render={(h: any, i) => (
+        render={(g: HistoryGroup, i) => (
           <li key={i} className="text-[13px]">
-            <span className="text-xs text-muted">{h.session != null ? `s${h.session} ` : ""}</span>
-            <Linked text={h.text} />
+            {g.head ? (
+              <>
+                <p className="text-[12px] text-muted">
+                  {g.session != null ? `s${g.session} · ` : ""}
+                  {g.head}
+                </p>
+                <ul className="mt-0.5 space-y-0.5 border-l border-line pl-2.5">
+                  {g.lines.map((h, j) => (
+                    <HistoryItem key={j} h={h} />
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <ul>
+                <HistoryItem h={g.lines[0]} session={g.session} />
+              </ul>
+            )}
           </li>
         )}
       />
@@ -757,8 +812,30 @@ function Properties({ items }: { items?: { name: string; band: string; because: 
 }
 
 // Tensions and alignments with others (or within), worked out from how they stand; never stored.
-function Interplays({ items }: { items?: { name: string; kind: string; handle: string; strength: number; because: string[]; by: string; secret: boolean; other: Ref | null }[] }) {
-  if (!items?.length) return null;
+// The DM can switch one off (or keep it on whatever the numbers say), and put it back.
+function Interplays({
+  items,
+  edit,
+  overrides = [],
+}: {
+  items?: { id?: string; name: string; kind: string; handle: string; strength: number; because: string[]; by: string; secret: boolean; other: Ref | null }[];
+  edit?: (body: object) => Promise<void>;
+  overrides?: { id: string; on: boolean; other: Ref | null }[];
+}) {
+  const off = overrides.filter((o) => !o.on);
+  if (!items?.length && !off.length) return null;
+  if (!items?.length)
+    return (
+      <p className="mt-4 text-xs text-muted">
+        Switched off by you:{" "}
+        {off.map((o, i) => (
+          <button key={i} type="button" className="underline decoration-dotted hover:text-foreground" onClick={() => edit?.({ action: "interplay", id: o.id, state: "auto", ...(o.other ? { other: o.other.id } : {}) })}>
+            {o.id}
+            {o.other ? ` (${o.other.name})` : ""} · put back
+          </button>
+        ))}
+      </p>
+    );
   return (
     <Section
       title="Pulls"
@@ -773,8 +850,152 @@ function Interplays({ items }: { items?: { name: string; kind: string; handle: s
             <Linked text={i.handle} />
           </span>
           <span className="block text-xs text-muted">{i.because.join(" · ")}</span>
+          {edit && i.id && (
+            <span className="mt-0.5 flex gap-2 text-xs text-muted">
+              {i.by === "dm" ? (
+                <button type="button" className="hover:text-foreground" onClick={() => edit({ action: "interplay", id: i.id, state: "auto", ...(i.other ? { other: i.other.id } : {}) })}>
+                  let Loom work it out
+                </button>
+              ) : (
+                <>
+                  <button type="button" className="hover:text-foreground" onClick={() => edit({ action: "interplay", id: i.id, state: "on", ...(i.other ? { other: i.other.id } : {}) })}>
+                    keep it
+                  </button>
+                  <button type="button" className="hover:text-foreground" onClick={() => edit({ action: "interplay", id: i.id, state: "off", ...(i.other ? { other: i.other.id } : {}) })}>
+                    switch it off
+                  </button>
+                </>
+              )}
+            </span>
+          )}
         </li>
       )}
     />
+  );
+}
+
+// Where each value came from: you, the notes, the table, Loom's reading of all the notes, or what a
+// tie implies.
+const SOURCE: Record<string, { mark: string; says: string }> = {
+  dm: { mark: "✎", says: "set by you" },
+  extracted: { mark: "⚙", says: "from your notes" },
+  table: { mark: "⇄", says: "from the table" },
+  inferred: { mark: "≈", says: "Loom's reading of your notes" },
+  default: { mark: "∂", says: "what a tie implies" },
+};
+const signedText = (v: number, min: number) => (v > 0 && min < 0 ? `+${v}` : String(v));
+
+async function editEntity(campaignId: number, n: Node, body: object, onChange: (n: Node) => void) {
+  onChange(await post<Node>("/api/loom/edit", { campaignId, entityId: n.id, ...body }));
+}
+
+// One value as a quiet dial: its steps, what it is now, where that came from, and a way to clear it.
+function Dial({ row, onSet }: { row: { label: string; value: number | boolean | null; source: string | null; from?: string; min: number; max: number; bool?: boolean; means: string }; onSet: (v: number | boolean | null) => void }) {
+  const src = row.source ? SOURCE[row.source] : null;
+  if (row.bool)
+    return (
+      <div className="flex items-center justify-between gap-2 py-0.5">
+        <Switch checked={row.value === true} onChange={(v) => onSet(v)} hint={row.means}>
+          {row.label}
+        </Switch>
+        {src && <span title={src.says} className="text-xs text-muted">{src.mark}</span>}
+      </div>
+    );
+  const steps = Array.from({ length: row.max - row.min + 1 }, (_, i) => signedText(row.min + i, row.min));
+  const at = typeof row.value === "number" ? row.value - row.min : -1;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 py-0.5" title={row.means}>
+      <span className="w-24 shrink-0 text-[13px]">{row.label}</span>
+      <Steps label={row.label} steps={steps} value={at} onChange={(i) => onSet(row.min + i)} />
+      <span className="ml-auto flex items-center gap-1.5 text-xs text-muted">
+        {at < 0 && <span>not set</span>}
+        {src && <span title={`${src.says}${row.from ? ` (${row.from})` : ""}`}>{src.mark}</span>}
+        {at >= 0 && row.source !== "default" && (
+          <button type="button" title="Clear it" className="hover:text-foreground" onClick={() => onSet(null)}>
+            ×
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
+// The values behind "how they stand", folded: what Loom works everything out from. Set any of them
+// and it's yours; nothing Loom reads or the table does will overwrite it.
+function Values({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
+  const loom = useLoom()!;
+  const [error, setError] = useState("");
+  const [openPair, setOpenPair] = useState<number | null>(null);
+  const set = (body: object) => editEntity(loom.campaignId, n, body, onChange).then(() => setError("")).catch((e) => setError(e.message));
+  const groups = n.editable.groups as { title: string; note?: string; goal?: boolean; rows: any[] }[];
+  const pairs = n.editable.pairs as { other: Ref; mine: any[]; theirs: any[]; pulls: string[] }[];
+  const known = groups.flatMap((g) => g.rows).filter((r) => r.value != null).length;
+  const brief = (side: any[]) =>
+    side
+      .filter((w) => w.value != null && w.value !== 0)
+      .map((w) => `${w.weight} ${w.value > 0 && ["warmth", "trust", "respect"].includes(w.weight) ? "+" : ""}${w.value}`)
+      .join(" · ") || "nothing yet";
+  return (
+    <>
+      {groups.length > 0 && (
+        <details className="mt-4">
+          <summary className="cursor-pointer select-none text-[11px] font-semibold uppercase tracking-wide text-muted">
+            What Loom works from <span className="font-normal">{known} set</span>
+          </summary>
+          <div className="mt-2 space-y-3">
+            {groups.map((g, i) => (
+              <div key={i}>
+                <p className="text-[12px] text-muted">
+                  {g.goal ? <>Goal: <span className="story text-foreground/85">{g.title}</span></> : g.title}
+                  {g.note && <span className="text-muted/80"> · {g.note}</span>}
+                </p>
+                {g.rows.map((r) => (
+                  <Dial key={r.path} row={r} onSet={(value) => set({ action: "sub", path: r.path, value })} />
+                ))}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+      {pairs.length > 0 && (
+        <Section
+          title="Toward others"
+          items={pairs}
+          initial={5}
+          render={(p, i) => (
+            <li key={i} className="text-[13px]">
+              <button type="button" className="flex w-full items-baseline gap-1.5 text-left" onClick={() => setOpenPair(openPair === p.other.id ? null : p.other.id)} aria-expanded={openPair === p.other.id}>
+                <span className="font-medium">{p.other.name}</span>
+                <span className="min-w-0 truncate text-xs text-muted">{brief(p.mine)}</span>
+                {p.pulls.length > 0 && <span className="text-xs text-thread">{p.pulls.join(", ")}</span>}
+              </button>
+              {openPair === p.other.id && (
+                <div className="mt-1 space-y-2.5 rounded-lg border border-line p-2">
+                  {[
+                    { title: `${n.name} → ${p.other.name}`, side: p.mine, from: n.id, to: p.other.id },
+                    { title: `${p.other.name} → ${n.name}`, side: p.theirs, from: p.other.id, to: n.id },
+                  ].map((d) => (
+                    <div key={d.title}>
+                      <p className="mb-0.5 text-[12px] text-muted">{d.title}</p>
+                      {d.side.map((w: any) => (
+                        <Dial
+                          key={w.weight}
+                          row={{ label: w.weight, value: w.value, source: w.source, from: w.from, min: ["warmth", "trust", "respect"].includes(w.weight) ? -3 : 0, max: 3, means: "" }}
+                          onSet={(value) => set({ action: "pair", from: d.from, to: d.to, weight: w.weight, value })}
+                        />
+                      ))}
+                    </div>
+                  ))}
+                  <p className="text-xs text-muted">
+                    <RefLink r={p.other} /> · each direction is its own: how one feels never sets how the other does.
+                  </p>
+                </div>
+              )}
+            </li>
+          )}
+        />
+      )}
+      {error && <p className="mt-2 text-xs text-danger">{error}</p>}
+    </>
   );
 }

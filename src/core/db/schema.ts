@@ -177,6 +177,7 @@ export const stateChanges = sqliteTable("state_changes", {
   batch: text("batch"), // groups the changes from one recap, enrich or command, so they can be undone together
   threadId: integer("thread_id").references(() => threads.id, { onDelete: "set null" }),
   undoneAt: text("undone_at"), // set when this change was reversed with undo
+  note: text("note"), // why, in plain words, when code made the change ("fought the party")
   createdAt: createdAt(),
 });
 
@@ -339,7 +340,9 @@ export const liveEntries = sqliteTable("live_entries", {
     .default([]),
   wrapped: integer("wrapped", { mode: "boolean" }).notNull().default(false), // the session it belongs to was wrapped up
   // A roll or fight waits for its result: "roll" | "fight" while pending; resultState says what happened to that wait.
-  awaiting: text("awaiting", { enum: ["roll", "fight"] }),
+  // "choice": the two sides offered (sides); which one was taken is asked quietly, never required.
+  awaiting: text("awaiting", { enum: ["roll", "fight", "choice"] }),
+  sides: text("sides", { mode: "json" }).$type<string[]>(),
   resultState: text("result_state", { enum: ["pending", "given", "skipped"] }),
   encounter: text("encounter", { mode: "json" }).$type<unknown>(), // the fight as set up, when there is one
   // Develop results for this choice, kept so the branches survive a reload (newest last).

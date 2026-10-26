@@ -91,6 +91,9 @@ export interface ThreadRole {
   reads: EngineQuestion[];
   // What the engine can do with it when looking for moves (Stage 3).
   moves: ("payoff" | "complication" | "collision" | "arrival" | "callback" | "hint" | "spotlight")[];
+  // How they stand toward the thread moving on: "for" wants it (hope rises when it moves), "against"
+  // is in its way (hope falls). Most roles don't say.
+  stance?: "for" | "against";
 }
 export const THREAD_ROLES: Record<string, ThreadRole> = {
   involved: { says: "is involved in", reads: ["payoff"], moves: [] }, // what today's links carry, until a role is known
@@ -109,10 +112,10 @@ export const THREAD_ROLES: Record<string, ThreadRole> = {
   prize: { says: "is what's at stake to win", reads: ["payoff", "possession"], moves: ["payoff", "complication"] },
   clue: { says: "points toward the answer", reads: ["knowledge"], moves: ["hint"] },
   // Who moves it
-  seeker: { says: "is after it", reads: ["payoff", "presence"], moves: ["arrival", "complication"] },
-  rival: { says: "competes for it", reads: ["payoff", "presence"], moves: ["arrival", "complication"] },
-  obstacle: { says: "stands in the way", reads: ["payoff"], moves: ["complication"] },
-  guardian: { says: "guards it", reads: ["payoff", "presence"], moves: ["complication"] },
+  seeker: { says: "is after it", reads: ["payoff", "presence"], moves: ["arrival", "complication"], stance: "for" },
+  rival: { says: "competes for it", reads: ["payoff", "presence"], moves: ["arrival", "complication"], stance: "against" },
+  obstacle: { says: "stands in the way", reads: ["payoff"], moves: ["complication"], stance: "against" },
+  guardian: { says: "guards it", reads: ["payoff", "presence"], moves: ["complication"], stance: "against" },
   holder: { says: "holds what it's about", reads: ["possession"], moves: ["collision"] },
   carrier: { says: "carries it, knowingly or not", reads: ["possession", "knowledge"], moves: ["hint", "collision"] },
   informant: { says: "knows something about it", reads: ["knowledge"], moves: ["hint", "arrival"] },
@@ -120,9 +123,9 @@ export const THREAD_ROLES: Record<string, ThreadRole> = {
   betrayer: { says: "will turn on it", reads: ["payoff", "knowledge"], moves: ["complication", "hint"] },
   // Bonds and debts
   debtor: { says: "owes in it", reads: ["payoff"], moves: ["complication", "arrival"] },
-  creditor: { says: "is owed in it", reads: ["payoff"], moves: ["arrival"] },
+  creditor: { says: "is owed in it", reads: ["payoff"], moves: ["arrival"], stance: "for" },
   promiser: { says: "made the promise", reads: ["payoff"], moves: ["complication"] },
-  promisee: { says: "was promised", reads: ["payoff"], moves: ["arrival"] },
+  promisee: { says: "was promised", reads: ["payoff"], moves: ["arrival"], stance: "for" },
   // Where and who saw
   witness: { says: "saw it happen", reads: ["knowledge"], moves: ["hint", "arrival"] },
   place: { says: "is where it plays out", reads: ["presence"], moves: ["payoff"] },

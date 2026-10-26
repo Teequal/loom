@@ -10,6 +10,7 @@ import type { NodeKey } from "./world/nodes";
 import { activityOf, viewOf } from "./world/engine";
 import { loadGraph } from "./world/load";
 import { readMoment } from "./moment-reading";
+import { editableOf } from "./editable";
 
 // The loom as something you can walk: every thread, character, place, item, faction, key moment
 // and session is a node, and every connection in a node's detail points at another node. The
@@ -113,7 +114,7 @@ async function entityNode(campaignId: number, id: number) {
     ? interplaysFor(view, nodeKey, true).map((i) => {
         const other = i.subject === nodeKey ? i.other : i.subject;
         const o = other ? graph.nodes.get(other) : undefined;
-        return { name: i.name, kind: i.kind, handle: i.handle, strength: i.strength, because: i.because, by: i.by, secret: i.secret, other: o ? L.entRef(o.id) : null };
+        return { id: i.id, name: i.name, kind: i.kind, handle: i.handle, strength: i.strength, because: i.because, by: i.by, secret: i.secret, other: o ? L.entRef(o.id) : null };
       })
     : [];
   // Where it is, as a chain of places (the Ritual Site › the Time Pocket › the Woods).
@@ -178,6 +179,15 @@ async function entityNode(campaignId: number, id: number) {
     threads: present(links.map((l) => L.thrRef(l.threadId))).sort((a, b) => Number(a.status === "resolved") - Number(b.status === "resolved")),
     moments: moments.filter((m) => m.entityIds.includes(id) && m.status !== "dismissed").map((m) => ({ kind: "moment" as const, id: m.id, name: m.title, sub: m.status === "key" ? "Key moment" : "Suggested moment" })),
     history: (await historyOf(campaignId, e)).slice(-30),
+    // The values behind "how they stand", each with its source, for the DM to set (design §11).
+    editable: nodeKey
+      ? (() => {
+          const ed = editableOf(view, nodeKey, e.type, traits);
+          return { groups: ed.groups, pairs: ed.pairs.map((p) => ({ ...p, other: L.entRef(p.otherId) })).filter((p) => p.other) };
+        })()
+      : null,
+    // Interplays the DM has switched on or off, so they can be put back to "worked out".
+    overrides: (traits.interplay_overrides ?? []).map((o) => ({ id: o.id, on: o.on, other: o.other ? L.entRef(o.other) : null })),
   };
 }
 

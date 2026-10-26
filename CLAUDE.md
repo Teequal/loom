@@ -717,6 +717,39 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - The reason isn't in the change log yet, only in the moment's "added" list.
         - Choices logged before this step have no `moveInfo`, so they give no loyalty nudges.
       - 22 crafted checks (301/301); the sample campaign was reseeded after testing.
+    - [x] **Typed acts, and the four missing events** (26 Oct; Jacob: make Loom tell them apart in a way that helps beyond nudges).
+      - **What was missing:** not a character property but what happened. Loom knew the roll and the move, not what the players did to whom, or which side of a choice they took.
+      - **Typed acts** (`src/core/acts.ts`): help, protect, free, heal, give, spare, persuade, deceive, threaten, press (pushing on what someone knows), steal, harm. Each act has who did it (a PC or the party), to whom (an NPC or a faction), and how it landed (done / failed / pending a roll). Code reads them from three places, never from the model's prose:
+        - **the moment** (a new reading rule, `acts`, with 8 examples);
+        - **choice sides:** the hand-off's `aim` / `or_aim`, which the model picks from the enforced list;
+        - **a roll's skill** aimed at someone (Persuasion = persuade, Deception = deceive, Intimidation = threaten, Sleight of Hand = steal, an attack = harm).
+
+        Behaviour bounds, callbacks and the log can use them too.
+      - **Which side was taken:** a used choice waits quietly (`waitForSide`, `live_entries.sides`, migration `0013`). The tray shows one line, "Which did they choose? [side] [side] · skip", only while it's the latest thing used. It's never asked at wrap-up. A side tapped needs no model call.
+      - **Role stances:** thread roles say whether they want the thread to move on (seeker, promisee, creditor: for) or stand in its way (obstacle, rival, guardian: against).
+      - **New events:**
+        - **helped:** help, protect, free, heal or give lands: warmth and trust +1;
+        - **spared:** warmth and respect +1;
+        - **robbed:** the victim is angry; if the theft is caught, also trust and warmth −1;
+        - **kept a secret:** a press that fails on someone with a GM secret: strain +1;
+        - **hurt** (outside a fight's result);
+        - **their thread moved:** hope +1 for those for it, −1 for those against.
+
+        The persuade, deceive and threaten rows now read acts too.
+      - **When an act lands:** a declared act lands on use, unless the doer's own roll decides it; then it lands at the result (done on a success or partial, failed on a failure). With no named NPC, an unnamed member stands for their faction when exactly one is in play ("spare the bandit" → the Red Hand).
+      - **History:** `state_changes.note` keeps each change's reason ("spared by Bram").
+        - Pair weights read as sentences, from both sides ("Captain Mora's respect toward Bram: — → +1").
+        - The inspector folds each batch's lines under its moment ("s2 · At the table: “Mercy”") or under its notes, with the reason beside each change.
+        - The moment's "added" list wasn't in the character history before; now its changes are.
+      - **Live (sample campaign, Haiku):** the format still compiles with the aims, at ~9 s per call (about a second slower). The aims fit the choices ("spare the bandit" = spare; "pocket the vial quietly" = steal).
+    - [x] **Property model step 7: DM editing** (26 Oct).
+      - **Inspector** (`src/core/editable.ts`, `Values` in `loom-ui.tsx`): "What Loom works from", folded under "How they stand". It shows each goal's intent and commitment, the ten dispositions ("slow to change") and the five states ("settles between sessions"); for items, factions and places, their values. Each value is a quiet dial with its source (✎ yours, ⚙ notes, ⇄ table, ≈ Loom's reading, ∂ what a tie implies) and × to clear. A set value is the DM's, so nothing else overwrites it.
+      - **Pair view:** "Toward others" lists everyone with a tie or a recorded weight, with a brief of how this one stands toward them and any pulls. Tap a row to open both directions, stacked, each weight a dial ("each direction is its own").
+      - **Pulls:** "keep it" / "switch it off" on each pull; "let Loom work it out" on one you set; "Switched off by you: … · put back".
+      - **Route:** `POST /api/loom/edit` (sub, pair or interplay), one undoable batch per edit ("Edited in the inspector"). Older campaigns' pulls are logged in their own catch-up pass first, so an edit's batch holds only the edit. It returns the entity as it now reads; properties update straight away (Arlen's boldness +1 made his courage "steady: daring (+1)").
+      - **Undo fix:** the records of a pull starting or ending no longer block undoing an earlier change ("was changed again later").
+      - **Tested in the browser** (enriched copy, desktop and phone width): set a disposition, set and clear a weight, switch a pull off and put it back, and history grouped by edit. All test edits were undone afterwards. The CLI already covers the same (`entity set`, `relate … warmth=`, `entity interplay`).
+      - 20 crafted checks for acts, sides, history and editing (321/321); engine 29/29 interplays and 26/26 reading rules; the sample campaign was reseeded.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

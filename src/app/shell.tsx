@@ -230,7 +230,7 @@ export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
 // A change batch's label ("recap s3 2026-10-24 12:51 #e4") as a person would say it.
 export function batchLabel(batch: string) {
   const m = batch.match(
-    /^(recap|live|enrich|infer|settle)(?: s(\d+))? (?:(\d{4})-(\d\d)-(\d\d) )?(\d\d:\d\d)/,
+    /^(recap|live|enrich|infer|settle|inspector)(?: s(\d+))? (?:(\d{4})-(\d\d)-(\d\d) )?(\d\d:\d\d)/,
   );
   if (!m) return batch;
   const [, kind, session, , month, day, time] = m;
@@ -254,6 +254,7 @@ export function batchLabel(batch: string) {
   if (kind === "live") return `At the table, session ${session} · ${when}`;
   if (kind === "enrich") return `Details read from all notes · ${when}`;
   if (kind === "infer") return `Characters read from all notes · ${when}`;
+  if (kind === "inspector") return `Edited in the inspector · ${when}`;
   if (kind === "settle") return `Moods settled after session ${session} · ${when}`;
   return `Session ${session} notes · ${when}`;
 }

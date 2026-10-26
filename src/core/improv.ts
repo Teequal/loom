@@ -1,3 +1,4 @@
+import { ACTS } from "./acts";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { callLlm, type LlmResult } from "./llm";
@@ -81,6 +82,8 @@ export type Hand = {
   or?: string; // the second choice
   approach?: string; // how the first choice is done (APPROACHES), for a choice
   or_approach?: string; // how the second is done
+  aim?: string; // what the first choice does to the NPC it's about (ACTS in acts.ts), or "none"
+  or_aim?: string; // what the second does
   ability?: string;
   skill?: string;
   mechanic?: string;
@@ -167,7 +170,7 @@ Each option is a scaffold:
   - "happens": what a PC feels, chosen from parts: pc, part (a body part, or "none" for all of them), sense, and cause (a thing or force in at most 5 words: "the river's cold grip", "the figurine's pull"; never a thought or a feeling). Code writes it ("Bram's chest aches: the river's cold grip").
 - hand: how the players get involved, chosen in parts; code writes the sentence. to is a PC or "table". Fill only the fields its kind uses, and leave the others "" (or "none"). Pick the kind:
   - "question": ask what they do. what is a short noun phrase for what they're facing ("the heckling patron"), or "".
-  - "choice": offer two clear choices: what and or are short verb phrases a player would say ("write a note", "wave him off"), and approach and or_approach say how each is done: talk, force, sneak, study, magic, item, move or wait. For other kinds, approach and or_approach are "wait".
+  - "choice": offer two clear choices: what and or are short verb phrases a player would say ("write a note", "wave him off"), and approach and or_approach say how each is done: talk, force, sneak, study, magic, item, move or wait. aim and or_aim say what each does to the NPC the choice is about: ${ACTS.join(", ")} (press: push them on what they know), or none. For other kinds, approach and or_approach are "wait", and aim and or_aim are "none".
   - "check" or "contest": only for a PC doing what their player declared in this moment. Pick the ability and skill (or "none"); what is who or what they're up against ("the captain", "the current"), or "".
   - "attack": only for a PC who declared an attack. what is the target.
   - "notice": a perception or knowledge check (Perception, Insight, Investigation, Arcana, History…), for anyone or the table. what is a noun phrase for what it's about ("what's bobbing in the current", "the sigil on the crates").
@@ -226,6 +229,8 @@ export function scaffoldParts(lists: SchemaLists) {
     or: z.string(),
     approach: z.enum(APPROACHES),
     or_approach: z.enum(APPROACHES),
+    aim: z.enum(["none", ...ACTS]),
+    or_aim: z.enum(["none", ...ACTS]),
     ability: z.enum(["none", ...ABILITIES]),
     skill: z.enum(SKILLS),
     mechanic: z.enum(nonEmpty(["none", ...lists.mechanics], "none")),

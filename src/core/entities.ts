@@ -24,6 +24,7 @@ export interface WriteOptions {
   sessionId?: number | null;
   secret?: string[]; // fields (e.g. "actualLocationId", "traits.secrets") to mark GM-only
   batch?: string; // groups changes for undo (a recap, an enrich, one command)
+  note?: string; // why, in plain words, when code made the change (table nudges); shown in history
 }
 
 export interface Proposal {
@@ -496,7 +497,7 @@ export async function setSubProperty(entityId: number, path: string, value: unkn
   if (!next) throw new Error(`${entity.name} has no ${path}`);
   if (TraitsSchema.safeParse(next).success === false) throw new Error(`"${String(value)}" doesn't fit ${path}`);
   await db.update(schema.entities).set({ traits: next as EntityTraits, fieldMeta: nextMeta }).where(eq(schema.entities.id, entityId));
-  await logChanges([{ campaignId: entity.campaignId, sessionId: opts.sessionId, subject: entity.name, entityId: entity.id, kind: "field", field, before: getPath(traits, path) ?? null, after: value ?? null, source: opts.source, batch: opts.batch }]);
+  await logChanges([{ campaignId: entity.campaignId, sessionId: opts.sessionId, subject: entity.name, entityId: entity.id, kind: "field", field, before: getPath(traits, path) ?? null, after: value ?? null, source: opts.source, batch: opts.batch, note: opts.note }]);
   return result;
 }
 
@@ -524,7 +525,7 @@ export async function setPairWeights(campaignId: number, fromEntityId: number, t
   if (row) await db.update(schema.pairWeights).set({ ...values, fieldMeta: nextMeta }).where(eq(schema.pairWeights.id, row.id));
   else await db.insert(schema.pairWeights).values({ campaignId, fromEntityId, toEntityId, ...values, fieldMeta: nextMeta });
   await logChanges(
-    Object.entries(apply).map(([w, v]) => ({ campaignId, sessionId: opts.sessionId, subject: `${from.name} → ${to.name}`, entityId: fromEntityId, kind: "field" as const, field: `pair.${toEntityId}.${w}`, before: current[w] ?? null, after: v ?? null, source: opts.source, batch: opts.batch })),
+    Object.entries(apply).map(([w, v]) => ({ campaignId, sessionId: opts.sessionId, subject: `${from.name} → ${to.name}`, entityId: fromEntityId, kind: "field" as const, field: `pair.${toEntityId}.${w}`, before: current[w] ?? null, after: v ?? null, source: opts.source, batch: opts.batch, note: opts.note })),
   );
   return result;
 }

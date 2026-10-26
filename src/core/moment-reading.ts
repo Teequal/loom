@@ -7,6 +7,8 @@
 // The rules are a table: each says what it recognises and carries the moments it was written
 // for, which the engine tests run. A phrasing it misses is one new row and one new example.
 
+import { ACT_WORDS, type Act } from "./acts";
+
 export type MentionRole = "brings-in" | "refers" | "contacts" | "acts" | "named" | "goes-to";
 
 export interface ReadEntity {
@@ -35,6 +37,7 @@ export interface MomentReading {
   used: Set<string>; // items being used (for "on use" rules)
   conditions: { pc: string; condition: string }[];
   goesTo: string | null; // a place the party heads to or arrives at
+  acts: Act[]; // what the players declared doing to someone ("Kira helps Ysolde"), as typed acts (acts.ts)
 }
 
 type Rule = { id: string; says: string; examples: { moment: string; name: string; expect: MentionRole | "used" | "in-hand" | "whole-party" | string }[] };
@@ -129,6 +132,20 @@ export const READING_RULES: Rule[] = [
     ],
   },
   {
+    id: "acts",
+    says: "A PC (or the party) doing one of the typed acts to a named NPC or faction, in the same sentence: help, protect, free, heal, give, spare, persuade, deceive, threaten, press, steal, harm.",
+    examples: [
+      { moment: "Salaena helps Mother Ysolde carry her crates", name: "Mother Ysolde", expect: "act:help:Salaena" },
+      { moment: "Darius steals the ledger from Zara the Unbound", name: "Zara the Unbound", expect: "act:steal:Darius" },
+      { moment: "Darius steals Bhen's purse while he isn't looking", name: "Bhen", expect: "act:steal:Darius" },
+      { moment: "The party spares Vex", name: "Professor Aldric Vex", expect: "act:spare:party" },
+      { moment: "Salaena asks Bhen about the missing shipment", name: "Bhen", expect: "act:press:Salaena" },
+      { moment: "Khayiulad lies to Mother Ysolde about the figurine", name: "Mother Ysolde", expect: "act:deceive:Khayiulad" },
+      { moment: "Darius pays Zara the Unbound for her silence", name: "Zara the Unbound", expect: "act:give:Darius" },
+      { moment: "Darius hugs Zara the Unbound", name: "Zara the Unbound", expect: "act:none" },
+    ],
+  },
+  {
     id: "conditions",
     says: "A condition the moment states (unconscious, restrained…) belongs to the PC named last before it.",
     examples: [{ moment: "Iresia, at 0 HP and unconscious, is dragged away", name: "Iresia", expect: "condition:unconscious" }],
@@ -181,6 +198,7 @@ export function readMoment(entities: ReadEntity[], moment: string): MomentReadin
     used: new Set(),
     conditions: [],
     goesTo: null,
+    acts: [],
   };
   const spans = findSpans(entities, moment);
   for (const s of spans) {
@@ -230,6 +248,34 @@ export function readMoment(entities: ReadEntity[], moment: string): MomentReadin
     if (holder) r.inHand.push({ pc: holder.e.name, item: s.e.name });
   }
 
+  // Acts: the verb nearest before an NPC or faction, in the same sentence, with the PC named before
+  // the verb (or the whole party) as who does it. A theft can name its victim in the possessive
+  // ("steals Bhen's purse").
+  for (const s of spans.filter((x) => x.e.type === "npc" || x.e.type === "faction")) {
+    const start = sentenceStart(moment, s.at);
+    const before = moment.slice(start, s.at);
+    const possessive = /^['’]s?\b/.test(moment.slice(s.end));
+    let best: { act: Act["act"]; at: number } | null = null;
+    for (const [act, re] of ACT_WORDS) {
+      const m = before.match(re);
+      if (m && m.index != null && (!best || m.index > best.at)) best = { act, at: m.index };
+    }
+    // "asks Bhen about…", "questions Vex on…": the asking word before, "about" after.
+    if (!best && /^\s+(?:about|on|over|regarding)\b/i.test(moment.slice(s.end))) {
+      const m = before.match(/\b(?:asks?|asking|questions?|presses?|pushes?|quizz(?:es)?)\s+(?:the\s+)?$/i);
+      if (m && m.index != null) best = { act: "press", at: m.index };
+    }
+    if (!best && possessive) {
+      const m = before.match(/\b(?:steals?|stealing|swipes?|pinches?|lifts?|snatches?|takes?|pockets?)\s+(?:the\s+)?$/i);
+      if (m && m.index != null) best = { act: "steal", at: m.index };
+    }
+    if (!best || (possessive && best.act !== "steal")) continue;
+    const verbAt = start + best.at;
+    const actor = [...pcSpans].reverse().find((p) => p.at < verbAt && p.at >= start);
+    const by = actor ? actor.e.name : WHOLE_PARTY.test(moment.slice(start, verbAt)) ? "party" : null;
+    if (by && !r.acts.some((a) => a.act === best!.act && a.on === s.e.name && a.by === by)) r.acts.push({ act: best.act, by, on: s.e.name, landed: "pending", from: "moment" });
+  }
+
   // Conditions: the PC named last before the condition word, in the same sentence.
   for (const clause of moment.matchAll(/[^.;!?]+/g)) {
     for (const [re, condition] of MOMENT_CONDITIONS) {
@@ -253,7 +299,10 @@ export function checkReadingRules(cast: ReadEntity[]) {
       if (ex.expect === "whole-party") got = r.wholeParty ? "whole-party" : "not whole";
       else if (ex.expect === "used" || ex.expect === "not-used") got = r.used.has(ex.name) ? "used" : "not-used";
       else if (ex.expect.startsWith("in-hand:")) got = `in-hand:${r.inHand.find((h) => h.item === ex.name)?.pc ?? "nobody"}`;
-      else if (ex.expect.startsWith("condition:")) got = `condition:${r.conditions.find((c) => c.pc === ex.name)?.condition ?? "none"}`;
+      else if (ex.expect.startsWith("act:")) {
+        const a = r.acts.find((x) => x.on === ex.name);
+        got = a ? `act:${a.act}:${a.by}` : "act:none";
+      } else if (ex.expect.startsWith("condition:")) got = `condition:${r.conditions.find((c) => c.pc === ex.name)?.condition ?? "none"}`;
       else got = r.mentions.find((m) => m.entity.name === ex.name)?.role ?? "not found";
       results.push({ rule: rule.id, moment: ex.moment, ok: got === ex.expect, got });
     }

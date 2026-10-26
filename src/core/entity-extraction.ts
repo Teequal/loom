@@ -285,7 +285,7 @@ export async function applyPropertyChanges(
     const current = path.split(".").reduce<unknown>((o, k) => (Array.isArray(o) ? o.find((x) => x?.id === k) : (o as Record<string, unknown> | undefined)?.[k]), e.traits);
     if (blanksOnly && current != null) continue;
     try {
-      result.written += (await setSubProperty(e.id, path, c.value, opts)).written.length;
+      result.written += (await setSubProperty(e.id, path, c.value, { ...opts, note: c.because })).written.length;
     } catch (err) {
       result.warnings.push(`${e.name} ${path}: ${(err as Error).message}`);
     }
@@ -303,7 +303,7 @@ export async function applyPropertyChanges(
     }
     if (blanksOnly && rows.find((r) => r.fromEntityId === a.id && r.toEntityId === b.id)?.[w.weight as PairWeight] != null) continue;
     try {
-      result.written += (await setPairWeights(campaignId, a.id, b.id, { [w.weight as PairWeight]: w.value }, opts)).written.length;
+      result.written += (await setPairWeights(campaignId, a.id, b.id, { [w.weight as PairWeight]: w.value }, { ...opts, note: w.because })).written.length;
     } catch (err) {
       result.warnings.push(`${a.name} → ${b.name} ${w.weight}: ${(err as Error).message}`);
     }

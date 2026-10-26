@@ -43,8 +43,9 @@ export async function liveSummary(campaignId: number) {
     openQuestions: entries.reduce((n, e) => n + e.questions.filter((q) => !q.answer).length, 0),
     // Rolls and fights still waiting for how they turned out (record one, or skip it).
     results: entries
-      .filter((e) => e.resultState === "pending" && e.awaiting)
-      .map((e) => ({ entryId: e.id, kind: e.awaiting!, label: e.choiceLabel || clip(e.choice, 60) })),
+      // (which side of a choice was taken is only ever asked at the table, never at wrap-up)
+      .filter((e) => e.resultState === "pending" && e.awaiting && e.awaiting !== "choice")
+      .map((e) => ({ entryId: e.id, kind: e.awaiting as "roll" | "fight", label: e.choiceLabel || clip(e.choice, 60) })),
     skippedResults: entries.filter((e) => e.resultState === "skipped").length,
     // Asked first at wrap-up: a session shouldn't close with risky changes still undecided.
     questions: entries.flatMap((e) =>

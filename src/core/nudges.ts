@@ -1,22 +1,28 @@
 import { and, eq, isNull } from "drizzle-orm";
+import { SKILL_ACT, type Act, type ActKind } from "./acts";
 import { db, schema } from "./db/client";
 import type { PairWeight } from "./db/schema";
 import { taggedNames } from "./deltas";
 import type { SubChange, WeightChange } from "./entity-extraction";
 import type { ScaffoldOption } from "./improv";
+import { readMoment, type ReadEntity } from "./moment-reading";
 import { specOf } from "./sub-properties";
 import { viewOf, type View } from "./world/engine";
+import { THREAD_ROLES } from "./world/links";
 import { loadGraph, OUTCOME, type LogEvent } from "./world/load";
 import type { NodeKey } from "./world/nodes";
 import { subOf, weightsOf } from "./world/props";
-import { readMoment } from "./moment-reading";
 
 // Table nudges (docs/design-2026-10-26-property-model.md §8.2): what happens at the table moves
 // NPCs' states and how they stand toward the party, a step at a time. Each event is typed from
-// what code already knows about a used choice (its move, its hand-off, its cast) and the result
-// the GM tapped, never from its prose. The nudges become ordinary proposal items (source
-// "table"), so they go through the same review (a DM's value or a flip from friend to foe is a
-// question), apply and Take back as everything else.
+// what code already knows, never from the model's prose:
+// - typed acts (acts.ts): what the players declared in the moment, the side of a choice they took,
+//   or a roll's skill aimed at someone;
+// - the used choice's move, cast and hand-off;
+// - the result the GM tapped;
+// - the roles characters play in the thread it moved (their stance toward its outcome).
+// The nudges become ordinary proposal items (source "table"), so they go through the same review
+// (a DM's value or a flip from friend to foe is a question), apply and Take back as everything else.
 
 export interface Nudge {
   who: string; // the character or faction whose value moves
@@ -30,11 +36,13 @@ export interface Nudge {
 export interface EventContext {
   v: View;
   o: ScaffoldOption;
-  outcome: LogEvent["outcome"]; // null when the choice was just used (no result yet)
+  phase: "used" | "result" | "side"; // just used; a roll or fight result; a choice's side taken
+  outcome: LogEvent["outcome"]; // the result tapped, for a roll or fight
   roller: string | null; // the PC who rolls, if the hand-off is a PC's roll
   target: string | null; // the NPC the roll or hand-off is aimed at, when code can tell
   foes: string[]; // NPCs and factions on the other side of a fight
   party: string[]; // PCs with the party
+  acts: Act[]; // the acts that landed (or failed) now
 }
 
 interface EventRow {
@@ -43,31 +51,69 @@ interface EventRow {
   find: (c: EventContext) => Nudge[];
 }
 
-const skillOf = (o: ScaffoldOption) => (o.hand?.skill && o.hand.skill !== "none" ? o.hand.skill : null);
-const rolls = (o: ScaffoldOption) => !!o.hand && ["check", "contest"].includes(o.hand.kind);
 const FIGHT_OUTCOMES = new Set(["won", "lost", "fled", "talked"]);
+const byPcs = (c: EventContext, a: Act) => (a.by === "party" ? c.party : [a.by]);
+const character = (c: EventContext, name: string) => c.v.g.find(name)?.kind === "character";
+// One row for every act of these kinds, nudging toward each PC who did it.
+const actRow = (id: string, says: string, kinds: ActKind[], landed: Act["landed"], make: (a: Act, pc: string, c: EventContext) => Nudge[]): EventRow => ({
+  id,
+  says,
+  find: (c) => c.acts.filter((a) => kinds.includes(a.act) && a.landed === landed).flatMap((a) => byPcs(c, a).flatMap((pc) => make(a, pc, c))),
+});
 
 export const EVENTS: EventRow[] = [
+  actRow("helped", "the party helps, protects, frees, heals or gives to X: X warms to them and trusts them more", ["help", "protect", "free", "heal", "give"], "done", (a, pc) => [
+    { who: a.on, to: pc, weight: "warmth", delta: 1, because: `${a.act === "give" ? "given something" : a.act === "free" ? "freed" : a.act === "heal" ? "healed" : a.act === "protect" ? "protected" : "helped"} by ${pc}` },
+    { who: a.on, to: pc, weight: "trust", delta: 1, because: `${a.act === "give" ? "given something" : a.act === "free" ? "freed" : a.act === "heal" ? "healed" : a.act === "protect" ? "protected" : "helped"} by ${pc}` },
+  ]),
+  actRow("spared", "the party spares X: X warms to them and respects them more", ["spare"], "done", (a, pc) => [
+    { who: a.on, to: pc, weight: "warmth", delta: 1, because: `spared by ${pc}` },
+    { who: a.on, to: pc, weight: "respect", delta: 1, because: `spared by ${pc}` },
+  ]),
+  actRow("persuaded", "the party talks X round: X warms to them", ["persuade"], "done", (a, pc) => [{ who: a.on, to: pc, weight: "warmth", delta: 1, because: `talked round by ${pc}` }]),
+  actRow("deceived, caught", "a lie to X is caught: X trusts that PC less", ["deceive"], "failed", (a, pc) => [{ who: a.on, to: pc, weight: "trust", delta: -1, because: `caught ${pc} lying` }]),
   {
-    id: "persuaded",
-    says: "a Persuasion roll on X succeeds: X warms to that PC",
-    find: (c) => (rolls(c.o) && skillOf(c.o) === "Persuasion" && c.outcome === "success" && c.target && c.roller ? [{ who: c.target, to: c.roller, weight: "warmth", delta: 1, because: `talked round by ${c.roller}` }] : []),
+    id: "threatened",
+    says: "the party threatens X: X is angrier; if it works, X fears them more",
+    find: (c) =>
+      c.acts
+        .filter((a) => a.act === "threaten" && a.landed !== "pending")
+        .flatMap((a) => [
+          ...(character(c, a.on) ? [{ who: a.on, path: "state.anger", delta: 1 as const, because: `threatened by ${a.by === "party" ? "the party" : a.by}` }] : []),
+          ...(a.landed === "done" ? byPcs(c, a).map((pc): Nudge => ({ who: a.on, to: pc, weight: "fear", delta: 1, because: `cowed by ${pc}` })) : []),
+        ]),
   },
   {
-    id: "deceived, caught",
-    says: "a Deception roll on X fails: X trusts that PC less",
-    find: (c) => (rolls(c.o) && skillOf(c.o) === "Deception" && c.outcome === "failure" && c.target && c.roller ? [{ who: c.target, to: c.roller, weight: "trust", delta: -1, because: `caught ${c.roller} lying` }] : []),
+    id: "robbed",
+    says: "the party steals from X: X is angry; if they're caught, X trusts and likes them less",
+    find: (c) =>
+      c.acts
+        .filter((a) => a.act === "steal" && a.landed !== "pending")
+        .flatMap((a) => [
+          ...(character(c, a.on) ? [{ who: a.on, path: "state.anger", delta: 1 as const, because: "robbed" }] : []),
+          ...(a.landed === "failed"
+            ? byPcs(c, a).flatMap((pc): Nudge[] => [
+                { who: a.on, to: pc, weight: "trust", delta: -1, because: `caught ${pc} stealing` },
+                { who: a.on, to: pc, weight: "warmth", delta: -1, because: `caught ${pc} stealing` },
+              ])
+            : []),
+        ]),
   },
   {
-    id: "intimidated",
-    says: "an Intimidation roll on X: X is angrier; if it works, X fears that PC more",
-    find: (c) => {
-      if (!(rolls(c.o) && skillOf(c.o) === "Intimidation" && c.outcome && c.target && c.roller)) return [];
-      const out: Nudge[] = [{ who: c.target, path: "state.anger", delta: 1, because: `threatened by ${c.roller}` }];
-      if (c.outcome === "success") out.push({ who: c.target, to: c.roller, weight: "fear", delta: 1, because: `cowed by ${c.roller}` });
-      return out;
-    },
+    id: "kept a secret",
+    says: "the party presses X on what they know and X holds out: X is under more strain, if X has a secret to keep",
+    find: (c) =>
+      c.acts
+        .filter((a) => a.act === "press" && a.landed === "failed")
+        .filter((a) => {
+          const n = c.v.g.find(a.on);
+          return n?.kind === "character" && n.knowledge.some((k) => k.secret);
+        })
+        .map((a): Nudge => ({ who: a.on, path: "state.strain", delta: 1, because: "kept a secret under pressure" })),
   },
+  actRow("hurt", "the party attacks X outside a fight's result: X is angrier and colder to them", ["harm"], "done", (a, pc, c) =>
+    c.phase === "result" && c.outcome && FIGHT_OUTCOMES.has(c.outcome) ? [] : [{ who: a.on, to: pc, weight: "warmth", delta: -1, because: `attacked by ${pc}` }, ...(character(c, a.on) ? [{ who: a.on, path: "state.anger", delta: 1 as const, because: `attacked by ${pc}` }] : [])],
+  ),
   {
     id: "fought",
     says: "a fight with X (won, lost or fled): X is colder toward the party",
@@ -100,7 +146,7 @@ export const EVENTS: EventRow[] = [
     says: "a defect or choose-a-side move is used: X's loyalty to its side slips",
     find: (c) => {
       const m = c.o.moveInfo;
-      if (c.outcome || !m || (m.kind !== "defect" && m.kind !== "choose a side")) return [];
+      if (c.phase !== "used" || !m || (m.kind !== "defect" && m.kind !== "choose a side")) return [];
       const who = m.cast[0]?.name;
       const side = who ? strongestLoyalty(c.v, who) : null;
       return who && side ? [{ who, to: side, weight: "loyalty", delta: -1, because: m.kind === "defect" ? "tempted to defect" : "made to choose a side" }] : [];
@@ -114,6 +160,20 @@ export const EVENTS: EventRow[] = [
       if (m?.source !== "resists the charm" || c.outcome !== "failure") return [];
       const who = m.cast.find((x) => x.name !== c.roller)?.name;
       return who ? [{ who, path: "state.anger", delta: 1, because: "the charm on them slipped" }] : [];
+    },
+  },
+  {
+    id: "their thread moved",
+    says: "a used choice moves a thread: NPCs who want it (seekers, creditors, the promised) are more hopeful; those against it (obstacles, rivals, guardians) less",
+    find: (c) => {
+      if (c.phase !== "used") return [];
+      const t = c.v.g.nodes.get(`thread:${Number(c.o.thread.replace(/^T/, ""))}` as NodeKey);
+      if (!t) return [];
+      return c.v.g
+        .linksOf(t.key as NodeKey, { type: "in_thread" })
+        .map((l) => ({ n: c.v.g.nodes.get(c.v.g.other(l, t.key as NodeKey)), stance: THREAD_ROLES[l.role ?? ""]?.stance }))
+        .filter((x) => x.n?.kind === "character" && x.n.side === "npc" && x.stance)
+        .map((x): Nudge => ({ who: x.n!.name, path: "state.hope", delta: x.stance === "for" ? 1 : -1, because: `"${t.name}" moved ${x.stance === "for" ? "their way" : "against them"}` }));
     },
   },
 ];
@@ -148,18 +208,31 @@ const isNpc = (v: View, name: string) => {
   return n?.kind === "character" && n.side === "npc";
 };
 
-/** Who a choice involves, as code can tell: the roller, the target, the foes and the party. */
-export function contextOf(v: View, o: ScaffoldOption, outcome: LogEvent["outcome"]): EventContext {
+const TYPE: Record<string, string> = { character: "npc", faction: "faction", item: "item", place: "location", other: "other" };
+
+/**
+ * Who a choice involves, as code can tell (the roller, the target, the foes and the party), and
+ * which typed acts land now:
+ * - on use, what the moment declared, unless a roll by whoever did it still decides it;
+ * - at a roll's result, those acts and the roll's own skill act, done or failed by the outcome;
+ * - when a choice's side is taken, that side's aim.
+ */
+export function contextOf(v: View, o: ScaffoldOption, outcome: LogEvent["outcome"], extra: { moment?: string; side?: number | null } = {}): EventContext {
   const pcs = [...v.g.nodes.values()].filter((n) => n.kind === "character" && n.side === "pc" && (!n.status || n.status === "alive"));
   const party = pcs.map((n) => n.name);
-  const roller = o.hand?.to && party.includes(o.hand.to) ? o.hand.to : null;
-  // The roll's target: an NPC named in what it's up against, else the one NPC the move or the
-  // sentences have acting here. Ambiguous means no target (no nudge beats a wrong one).
-  const named = taggedNames(o.hand?.what ?? "").filter((n) => isNpc(v, n));
-  const plain = [...v.g.nodes.values()].filter((n) => n.kind === "character" && n.side === "npc" && (o.hand?.what ?? "").includes(n.name)).map((n) => n.name);
+  const h = o.hand;
+  const roller = h?.to && party.includes(h.to) ? h.to : null;
+  // The target: an NPC named in what the roll or choice is up against, else the one NPC the move
+  // or the sentences have acting here. Ambiguous means no target (no nudge beats a wrong one).
+  const about = `${h?.what ?? ""} ${h?.kind === "choice" ? (h?.or ?? "") : ""}`;
+  const named = taggedNames(about).filter((n) => isNpc(v, n));
+  const plain = [...v.g.nodes.values()].filter((n) => n.kind === "character" && n.side === "npc" && about.includes(n.name)).map((n) => n.name);
   const acting = [...new Set([...(o.moveInfo?.cast.filter((c) => c.can === "act").map((c) => c.name) ?? []), ...o.setup.filter((b) => b.kind === "npc").map((b) => b.actor)])].filter((n) => isNpc(v, n));
   const pick = [...new Set([...named, ...plain])];
-  const target = pick.length === 1 ? pick[0] : pick.length === 0 && acting.length === 1 ? acting[0] : null;
+  // With no character to point at, an unnamed member stands for their faction ("spare the bandit",
+  // with the Red Hand in the scene), when exactly one faction is in play.
+  const factions = [...new Set([...taggedNames(about), ...o.setup.map((b) => b.actor), ...(o.refs ?? []).map((r) => r.name), ...(o.moveInfo?.cast.map((c) => c.name) ?? [])])].filter((n) => v.g.find(n)?.kind === "faction");
+  const target = pick.length === 1 ? pick[0] : pick.length === 0 && acting.length === 1 ? acting[0] : pick.length === 0 && acting.length === 0 && factions.length === 1 ? factions[0] : null;
   // A fight's other side: NPCs and factions in the choice who aren't friends of the party.
   const involved = [...new Set([...(o.moveInfo?.cast.map((c) => c.name) ?? []), ...o.setup.map((b) => b.actor), ...(o.refs ?? []).map((r) => r.name), ...named])];
   const foes = involved.filter((name) => {
@@ -169,7 +242,29 @@ export function contextOf(v: View, o: ScaffoldOption, outcome: LogEvent["outcome
     const warm = party.some((p) => (weightsOf(v, (n.key as NodeKey), (v.g.find(p)!.key as NodeKey)).warmth.value ?? 0) > 0);
     return stance < 0 || (!warm && stance <= 0 && (n.kind === "faction" || name === target || acting.includes(name)));
   });
-  return { v, o, outcome, roller, target, foes, party };
+
+  const phase: EventContext["phase"] = extra.side != null ? "side" : outcome ? "result" : "used";
+  const rolling = !!h && ["check", "contest", "attack"].includes(h.kind);
+  const decides = (a: Act) => rolling && (a.by === roller || (a.by === "party" && h!.to === "table"));
+  const landedBy = (oc: LogEvent["outcome"]): Act["landed"] => (oc === "failure" ? "failed" : oc === "success" || oc === "partial" || (oc && FIGHT_OUTCOMES.has(oc)) ? "done" : "pending");
+  const entities: ReadEntity[] = [...v.g.nodes.values()].filter((n) => TYPE[n.kind]).map((n) => ({ id: n.id, name: n.name, aliases: n.aliases, type: n.kind === "character" ? (n.side === "pc" ? "pc" : "npc") : TYPE[n.kind] }));
+  const declared = extra.moment ? readMoment(entities, extra.moment).acts : [];
+  const acts: Act[] = [];
+  const add = (a: Act) => {
+    if (a.landed !== "pending" && !acts.some((x) => x.act === a.act && x.by === a.by && x.on === a.on)) acts.push(a);
+  };
+  if (phase === "used") for (const a of declared) if (!decides(a)) add({ ...a, landed: "done" });
+  if (phase === "result") {
+    for (const a of declared) if (decides(a)) add({ ...a, landed: landedBy(outcome) });
+    const skillAct = h?.kind === "attack" ? "harm" : h?.skill ? SKILL_ACT[h.skill] : undefined;
+    if (rolling && skillAct && roller && target) add({ act: skillAct, by: roller, on: target, landed: landedBy(outcome), from: "roll" });
+  }
+  if (phase === "side" && h) {
+    const aim = extra.side === 0 ? h.aim : h.or_aim;
+    const by = h.to === "table" ? "party" : h.to;
+    if (aim && aim !== "none" && target) add({ act: aim as ActKind, by, on: target, landed: "done", from: "choice" });
+  }
+  return { v, o, phase, outcome, roller, target, foes, party, acts };
 }
 
 /** The nudges an event makes, one per value (several rows touching one value count once). */
@@ -187,10 +282,10 @@ const SESSION_CAP = 2;
  * stood at the start of this session, and within its range. A weight that would go from warm to
  * cold (or back) is marked, and the review asks first.
  */
-export async function tableNudges(campaignId: number, o: ScaffoldOption, outcome: string | null, evidence: string) {
+export async function tableNudges(campaignId: number, o: ScaffoldOption, outcome: string | null, evidence: string, extra: { moment?: string; side?: number | null } = {}) {
   const g = await loadGraph(campaignId);
   const v = viewOf(g, readMoment([], ""));
-  const ctx = contextOf(v, o, outcome ? (OUTCOME[outcome.trim().toLowerCase()] ?? null) : null);
+  const ctx = contextOf(v, o, extra.side == null && outcome ? (OUTCOME[outcome.trim().toLowerCase()] ?? null) : null, extra);
   const nudges = nudgesOf(ctx);
   const subs: SubChange[] = [];
   const weights: WeightChange[] = [];
