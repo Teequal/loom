@@ -152,6 +152,9 @@ export interface CheckContext {
   outcomePcs: Set<string>; // PCs whose declared action this moment is about
   checkTo: string[]; // who a check, contest or attack may go to: those PCs, or "table" for the whole party
   possession: Possession;
+  // The skills what the moment declares can call for ("begs" is talking, "sneaks" is sneaking), or
+  // null when its verbs say nothing either way. A check with another skill wasn't declared.
+  declaredSkills?: Set<string> | null;
 }
 
 // ---------- Possession (L3: one holder per item, inherited through sets) ----------

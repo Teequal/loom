@@ -779,6 +779,20 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
       - **Fixed in passing:** "Vex'ahlia her own gaze hardens" (in both arms). A sentence opening with the actor's own possessive keeps it ("Vex'ahlia's gaze hardens").
       - **Seen, not fixed:** self-references ("Tomas warns Tomas", "Vex'ahlia asks Vex'ahlia where Vex'ahlia…"); a contest for a PC who didn't declare one (Varek's grab, no-plans set).
       - 16 crafted checks (337/337).
+      - **Soft plans** (`LOOM_BEAT_PLANS=soft`, off): code picks 1–2 anchor facts per move by fit with the moment (never a summary); in the same call the model names its anchor and writes a one-line intent, then writes freely.
+        - Quick check (4 moments, not blind): 2 better, 1 even, 1 worse.
+        - 3–4 s slower (9.8–13.4 s vs 5.7–8.3 s).
+        - Anchors barely varied between moves.
+        - Raw trace: https://claude.ai/artifact/UgGq7PvgYvsTZgcBTu6VAB; version 1 (hard plans) is a separate copy.
+      - **Verdict (Jacob agreed, 26 Oct): plans don't help.** The gains come from the engine putting the right facts in front of the model (moves, standing, pulls); Haiku uses them well when it's free to write. Hard and soft plans stay in the code, off. The trace hook (`onTrace` on improv) stays for debugging.
+    - [x] **What's kept from step 8, and the faults the traces showed** (26 Oct):
+      - **Never lines in every improv and Develop prompt** (`neverLines`, `neverBlock`, in `contextPrompt`): "IN CHARACTER (whatever happens, these never do)". It covers each NPC in play who must never harm or refuse their charmer, never turn on the one they're devoted to, never give up a goal they're committed to (unless conflicted), and allies who never threaten or rob the party. A charmed fondness no longer counts as an ally.
+      - **Checks only for what a PC declared** (`declaredSkills`): the moment's verbs give its approaches (begs = talk, picks a fight = force, sneaks = sneak, searches = study…), and a PC's check must use a skill one of them allows. Otherwise it becomes a notice roll (perception and knowledge skills), a save (Athletics or Acrobatics against something coming at them), or a question (anything they'd choose to do). Develop steps keep following the turn, not the moment's verbs.
+      - **Self-reference** (`selfReference` in `slots.ts`): a sentence where a character names themself as someone else ("Varek sends word to Varek", "Tomas warns Tomas") is dropped. The model wrote it from another character's side. Their own possessive is fine.
+      - **Body parts:** a sentence opening on a body part after a named character reads as theirs ("Vex'ahlia's jaw tightens", not "Vex'ahlia jaw tightens").
+      - **Live** (the six blind-set moments, Haiku, no plans): 18 of 18 options shown, 1 rejected, 3 sentences dropped. No self-references or broken possessives; Darius begging now gets a question, not a Stealth roll. 9.7 s average against 8.0 s in the blind run, from a prompt only ~100 tokens longer; probably API variance, not proven.
+      - **Seen, not fixed:** when a sentence is dropped, a later one can still mention what it set up ("pocket the note?" after Vex's note was dropped).
+      - 14 crafted checks (351/351).
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

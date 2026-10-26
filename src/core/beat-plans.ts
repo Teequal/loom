@@ -413,7 +413,10 @@ export function neverLines(v: View, names: string[]) {
       const ref = boundBreak(v, k, "refuse", pc.key as NodeKey, { ...dummy(k), object: pc.key as NodeKey });
       if (ref) never.add(`refuse ${pc.name} (charmed by them)`);
     }
-    const ally = (n.stance ?? 0) > 0 || pcs.some((pc) => (v.g.pairs.get(`${k}|${pc.key}`)?.weights.warmth ?? 0) > 1);
+    // An ally: friendly to the party, or warm toward one of them and not hostile. A charmed fondness
+    // doesn't make an ally (Vex'ahlia likes Iresia, but is the party's enemy).
+    const charmed = (v.body.get(k) ?? n.body).conditions.some((c) => /^charmed/i.test(c.name));
+    const ally = (n.stance ?? 0) > 0 || ((n.stance ?? 0) >= 0 && !charmed && pcs.some((pc) => (v.g.pairs.get(`${k}|${pc.key}`)?.weights.warmth ?? 0) > 1));
     if (ally) never.add("threaten or rob the party (an ally)");
     const goal = n.mind.goals.filter((g) => !g.status || g.status === "active").sort((a, b) => a.priority - b.priority)[0];
     if (goal && (goal.commitment ?? 0) >= 2 && !boundsFor(v, k).allowed.includes("act-against-goal")) never.add(`give up "${goal.text}"`);
@@ -429,6 +432,9 @@ export function anchorLanded(a: Anchor, text: string) {
   const hits = own.filter((w) => t.has(w));
   return { landed: hits.length >= Math.min(2, own.length), hits };
 }
+
+/** The "never" lines as a prompt block (improv and Develop). */
+export const neverBlock = (never: string[]) => (never.length ? `\nIN CHARACTER (whatever happens, these never do)\n${never.join("\n")}\n` : "");
 
 export function anchorsBlock(anchors: Map<string, Anchor[]>, never: string[]) {
   const lines = [...anchors].filter(([, a]) => a.length).flatMap(([m, as]) => [`${m}:`, ...as.map((a) => `- ${a.id} ${a.owner ? `[${a.owner}] ` : ""}${a.about}${a.secret ? " [GM secret: hint, never state]" : ""}`)]);

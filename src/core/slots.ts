@@ -148,6 +148,21 @@ export function ownPossessive(actor: string, tagged: string, tagger: Tagger): st
   return tagged.replace(/\{([^{}|]+)(?:\|[^{}]*)?\}['’]s\b/g, (whole, n: string, at: number) => (at > 0 && tagger.entityOf(n.trim())?.name === e.name ? own : whole));
 }
 
+/**
+ * Whether a character's own sentence names them again as someone else: "{Varek} sends word to
+ * {Varek}", "{Tomas} warns {Tomas}". The model wrote it from another character's side, and code put
+ * the actor in front. Their own possessive ("{Varek}'s men") is fine, and so is opening with their name.
+ */
+export function selfReference(actor: string, tagged: string, tagger: Tagger) {
+  const e = tagger.entityOf(actor);
+  if (!e || (e.type !== "npc" && e.type !== "pc")) return false;
+  for (const m of tagged.matchAll(/\{([^{}|]+)(?:\|[^{}]*)?\}(['’]s\b)?/g)) {
+    if (m.index === 0 || m[2]) continue;
+    if (tagger.entityOf(m[1].trim())?.name === e.name) return true;
+  }
+  return false;
+}
+
 /** A "happens" beat as a sentence, written by code. */
 export function renderHappens(h: Happens, refs: Ref[], tagger: Tagger): string {
   const cause = causeOf(h.cause, refs, tagger);
@@ -179,6 +194,7 @@ export function fillSlots<O extends SlotOption>(o: O, tagger: Tagger): { option:
     }
     const r = expand(b.does, refs, tagger);
     if (r.problem) dropped.push(r.problem);
+    else if (selfReference(b.actor, r.tagged, tagger)) dropped.push(`${b.actor} names themself as someone else ("${tagger.render(r.tagged).slice(0, 60)}…"): the sentence was written from another character's side`);
     else setup.push({ ...b, does: ownPossessive(b.actor, r.tagged, tagger) });
   }
   if (!setup.length && dropped.length) problem = dropped[0];

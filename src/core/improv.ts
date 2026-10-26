@@ -1,4 +1,4 @@
-import { anchorLanded, anchorsBlock, anchorsFor, applyPlans, neverLines, planMode, planMoves, plansBlock, PLAN_TEXT, SOFT_TEXT, spentThisSession, type Anchor, type PlanBeat } from "./beat-plans";
+import { anchorLanded, anchorsBlock, anchorsFor, applyPlans, neverBlock, neverLines, planMode, planMoves, plansBlock, PLAN_TEXT, SOFT_TEXT, spentThisSession, type Anchor, type PlanBeat } from "./beat-plans";
 import { ACTS } from "./acts";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -78,6 +78,21 @@ export const APPROACH_SKILLS: Record<Approach, string[]> = {
   item: [],
   wait: ["Perception", "Insight"],
 };
+// How the moment's verbs declare an approach, for which skills a PC's own check may use.
+const DECLARES: [Approach, RegExp][] = [
+  ["talk", /\b(?:ask|beg|plead|order|tell|say|demand|persuad|convinc|threaten|intimidat|lie|lying|bluff|negotiat|haggl|bargain|question|interrogat|talk|speak|shout|call|whisper|charm|flatter|insult|reason|argu|offer|warn|sing|perform)\w*/i],
+  ["force", /\b(?:attack|fight|punch|kick|grab|shove|push|break|smash|lift|throw|wrestl|charge|tackl|forc|pin|hold|bash|pry|haul|drag)\w*/i],
+  ["sneak", /\b(?:sneak|hide|hid|steal|pickpocket|slip|creep|pocket|palm|swipe|pinch|tail|shadow)\w*/i],
+  ["study", /\b(?:search|examin|inspect|stud|read|investigat|look|watch|listen|brows|track|sense|recall|check|peer|scan|test)\w*/i],
+  ["magic", /\b(?:cast|spell|ritual|chant|invoke|pray|dispel|scry)\w*/i],
+  ["move", /\b(?:run|flee|jump|leap|swim|climb|dash|chase|escape|ride|vault|dodge|balanc)\w*/i],
+  ["wait", /\b(?:wait|rest|guard|keep watch)\w*/i],
+];
+export function declaredSkills(moment: string): Set<string> | null {
+  const found = DECLARES.filter(([, re]) => re.test(moment)).map(([a]) => a);
+  return found.length ? new Set(found.flatMap((a) => APPROACH_SKILLS[a])) : null;
+}
+
 export type Hand = {
   kind: "question" | "choice" | "check" | "contest" | "attack" | "notice" | "save" | "rule" | "death_save";
   to: string;
@@ -298,6 +313,9 @@ const capitalise = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // One beat as readable text: the actor's name is put in front by code, so the subject is
 // always the actor the scaffold named.
+// A sentence that opens on a body part (or a voice, a look) belongs to the actor in front of it.
+const OWN_PART = /^(?:jaw|eyes?|gaze|voice|face|hands?|fingers?|shoulders?|breath|lips|mouth|expression|smile|grip|knuckles|brow|cheeks?|heart|throat|head|chin|hair|posture|stance|tone|words|smirk|frown|ears|tail|wings?)\b/i;
+
 export function renderBeat(b: ScaffoldBeat, tagger: Tagger) {
   const tagged = tagger.tag(b.does.replace(/\b(an?\s+)?walk-on\s+/gi, "$1")).trim();
   // "Uses the tables as cover" after a name reads "Vex'ahlia uses…"; names (tagged) keep their capital.
@@ -309,6 +327,8 @@ export function renderBeat(b: ScaffoldBeat, tagger: Tagger) {
   if (!extra && (b.kind === "world" || b.actor === "world")) return sentence(capitalise(/^[a-z]+s\b/.test(does) && !/^(?:this|its|has|is|was)\b/.test(does) ? `someone ${does}` : does));
   const subject = extra ? capitalise(tagger.render(b.walk_on).replace(/\bwalk-on\b\s*/gi, "").trim() || "someone") : b.actor;
   const startsWithSubject = does.toLowerCase().startsWith(subject.toLowerCase()) || does.toLowerCase().startsWith(subject.split(/[\s,]+/)[0].toLowerCase());
+  // "jaw tightens…" after a named character is their jaw: "Vex'ahlia's jaw tightens".
+  if (!startsWithSubject && !extra && OWN_PART.test(does)) return sentence(`${subject}'s ${does}`);
   // "a voice rasps through the murmur…" after a named actor: their part, set off with a dash.
   if (!startsWithSubject && !extra && /^(?:a|an|the|some)\b/i.test(does)) return sentence(`${subject}: ${does}`);
   return sentence(startsWithSubject ? capitalise(does) : `${subject} ${does}`);
@@ -366,12 +386,22 @@ export function normaliseHandOff(o: ScaffoldOption, c: CheckContext) {
   // Rolls the engine can put right from what it knows, rather than throwing the option away.
   if (o.hand) {
     const h = o.hand;
-    const declared = c.checkTo.includes(h.to);
+    // Declared: the PC is acting in this moment, and the skill fits what they declared ("begs" is
+    // talking, so not Stealth). A check with no skill (an ability alone) fits anything they declared.
+    const skill = h.skill && h.skill !== "none" ? h.skill : null;
+    const fits = !skill || !c.declaredSkills || c.declaredSkills.has(skill);
+    const declared = c.checkTo.includes(h.to) && fits;
     if ((h.kind === "check" || h.kind === "contest" || h.kind === "attack") && !declared) {
-      // A PC who didn't declare this doesn't attempt it: noticing is a notice roll, anything else
-      // that comes at them is a save.
-      const notice = h.skill && NOTICE_SKILLS.includes(h.skill as (typeof NOTICE_SKILLS)[number]);
-      o.hand = notice ? { ...h, kind: "notice" } : { ...h, kind: "save", ability: h.skill && h.skill !== "none" ? (SKILL_ABILITY[h.skill] ?? h.ability) : h.ability, skill: "none" };
+      // A PC who didn't declare this doesn't attempt it: noticing is a notice roll; a physical
+      // reaction to something coming at them is a save; anything else they'd choose to do (sneak,
+      // talk, palm something) is theirs to decide, so it's a question.
+      const notice = skill && NOTICE_SKILLS.includes(skill as (typeof NOTICE_SKILLS)[number]);
+      const physical = !skill || ["Athletics", "Acrobatics"].includes(skill);
+      o.hand = notice
+        ? { ...h, kind: "notice" }
+        : physical
+          ? { ...h, kind: "save", ability: skill ? (SKILL_ABILITY[skill] ?? h.ability) : h.ability, skill: "none" }
+          : { ...h, kind: "question", skill: "none", ability: "none" };
     }
     // A choice is something the player would do: a phrase that starts with someone's name ("Tomas
     // proposes a tavern…") isn't one, so it becomes a question.
@@ -561,7 +591,7 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
     notes: [...s.notes],
     fixes: [...s.fixes],
     stated: s.stated,
-    check: { scene, tagger, present, remoteOk, outcomePcs, checkTo, possession } satisfies CheckContext,
+    check: { scene, tagger, present, remoteOk, outcomePcs, checkTo, possession, declaredSkills: declaredSkills(moment) } satisfies CheckContext,
     // Who each kind of beat may name, within reach of the moment (and anyone it names). The answer
     // format offers each kind only its own list, so an absent NPC can't be written acting here and a
     // PC can't be written as an NPC: the model can't choose them, rather than code catching it.
@@ -795,7 +825,7 @@ OPEN THREADS
 ${p.threads.map((t) => (t.detail === "full" ? threadBlock(t, p.titleOf, p.typeOf) : `T${t.id} [${t.kind}] ${t.title}: ${t.summary}`)).join("\n")}
 
 MOVES (the engine's picks for this moment: build each ${unit} on a different one)
-${movesBlock(moves, p.titleOf)}
+${movesBlock(moves, p.titleOf)}${neverBlock(neverLines(p.scene.situation.view, moves.flatMap((m) => m.cast.map((c) => c.name)).concat([...p.lists.check.present])))}
 ${standingBlock(p, moves, unit)}${(() => {
     const lately = derivedLines(p.scene.situation.view);
     return lately.length ? `\nLATELY (worked out from this session, not recorded)\n${lately.map((l) => `- ${l}`).join("\n")}\n` : "";
@@ -853,7 +883,7 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   }
   const planIds = [...plans.values()].flat().map((b) => b.id);
   const OptionsSchema = optionsSchema({ moves: moves.map((m) => m.id), threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`), plans: planIds, anchors: anchorIds });
-  const prompt = `${contextPrompt(P, moves)}${planIds.length ? `${plansBlock(scene.situation.view, plans)}\nPLANNED BEATS\n${PLAN_TEXT}\n` : ""}${anchorIds.length ? `${anchorsBlock(anchors, never)}\nSOFT PLAN\n${SOFT_TEXT}\n` : ""}
+  const prompt = `${contextPrompt(P, moves)}${planIds.length ? `${plansBlock(scene.situation.view, plans)}\nPLANNED BEATS\n${PLAN_TEXT}\n` : ""}${anchorIds.length ? `${anchorsBlock(anchors, [])}\nSOFT PLAN\n${SOFT_TEXT}\n` : ""}
 ${lengthFor(moment)}
 MIX: ${MIXES[opts.mix ?? "mix"]}${
     opts.steer

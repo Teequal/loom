@@ -225,7 +225,7 @@ export class StepRunner {
     // Who a check may go to: nobody has declared anything yet in the first step; after a question
     // or a choice, the PC (or table) who answered it.
     const answered = this.prevHand && !ROLLS.has(this.prevHand.kind) ? [this.prevHand.to] : [];
-    const ctx: CheckContext = { ...base, present: this.present, checkTo: answered, outcomePcs: new Set(answered.filter((x) => x !== "table")), possession: { ...base.possession, holders: this.holders } };
+    const ctx: CheckContext = { ...base, present: this.present, checkTo: answered, outcomePcs: new Set(answered.filter((x) => x !== "table")), possession: { ...base.possession, holders: this.holders }, declaredSkills: null };
     // A move's cast member who has arrived may now act here.
     const move = this.move && { ...this.move, cast: this.move.cast.map((c) => (c.can === "arrive" && this.present.has(c.name) ? { ...c, can: "act" as const } : c)) };
     const stepOption = { ...this.head, label: this.label, setup: raw.setup, hand: raw.hand, on_fail: raw.on_fail, why: "", hand_off: { to: raw.hand.to, kind: "question" as const, mechanic: "none", text: "" } } as ScaffoldOption;
