@@ -44,8 +44,9 @@ export interface LogEvent {
   mechanic: string | null; // a house rule's name, for its roll
   fight: boolean; // a fight was set up or started
   outcome: "success" | "failure" | "partial" | "won" | "lost" | "fled" | "talked" | null; // results only
+  payloads: string[]; // what a used option or step delivered (beat plans), so it isn't made twice
 }
-type Scaffoldish = { hand?: { kind?: string; to?: string; mechanic?: string }; hand_off?: { to?: string; kind?: string; mechanic?: string } };
+type Scaffoldish = { hand?: { kind?: string; to?: string; mechanic?: string }; hand_off?: { to?: string; kind?: string; mechanic?: string }; setup?: { payload?: string }[] };
 export const OUTCOME: Record<string, LogEvent["outcome"]> = { succeeded: "success", success: "success", failed: "failure", failure: "failure", partly: "partial", partial: "partial", won: "won", lost: "lost", fled: "fled", "talked it out": "talked" };
 
 type Entity = typeof schema.entities.$inferSelect;
@@ -420,9 +421,10 @@ function liveLog(rows: LiveRow[]): LogEvent[] {
       const parent = r.parentId != null ? byId.get(r.parentId) : undefined;
       const roll = parent ? rollOf(parent) : { roller: null, rollKind: null, mechanic: null };
       const fight = parent?.awaiting === "fight" || !!parent?.encounter;
-      return { id: r.id, session: r.session, kind, ...roll, fight, outcome: OUTCOME[r.label.trim().toLowerCase()] ?? null };
+      return { id: r.id, session: r.session, kind, ...roll, fight, outcome: OUTCOME[r.label.trim().toLowerCase()] ?? null, payloads: [] };
     }
     const roll = kind === "asked" ? { roller: null, rollKind: null, mechanic: null } : rollOf(r);
-    return { id: r.id, session: r.session, kind, ...roll, fight: r.awaiting === "fight" || !!r.encounter || roll.rollKind === "attack", outcome: null };
+    const payloads = kind === "option" || kind === "branch" ? (scaffoldOf(r)?.setup ?? []).map((b) => b.payload).filter((x): x is string => !!x) : [];
+    return { id: r.id, session: r.session, kind, ...roll, fight: r.awaiting === "fight" || !!r.encounter || roll.rollKind === "attack", outcome: null, payloads };
   });
 }

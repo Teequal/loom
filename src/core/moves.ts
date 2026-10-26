@@ -72,6 +72,15 @@ interface Part {
   secret: boolean;
 }
 
+// Situational property bands worth a move (and a planned beat): what someone would do here.
+export const NOTABLE: Record<string, Record<string, string>> = {
+  candour: { lies: "would lie to them now", evades: "would dodge the question" },
+  courage: { reckless: "is brave to the point of recklessness here", cowed: "is too frightened to stand up here" },
+  restraint: { snaps: "is close to snapping" },
+  susceptibility: { pliable: "could be talked into almost anything right now" },
+  generosity: { gives: "would give freely" },
+};
+
 export function findMoves(
   v: View,
   threads: SelectedThread[],
@@ -193,13 +202,6 @@ export function findMoves(
     }
   }
   // Notable situational properties of NPCs in play, as moves of their own (at most two).
-  const NOTABLE: Record<string, Record<string, string>> = {
-    candour: { lies: "would lie to them now", evades: "would dodge the question" },
-    courage: { reckless: "is brave to the point of recklessness here", cowed: "is too frightened to stand up here" },
-    restraint: { snaps: "is close to snapping" },
-    susceptibility: { pliable: "could be talked into almost anything right now" },
-    generosity: { gives: "would give freely" },
-  };
   const propMoves: Omit<Move, "id" | "resting">[] = [];
   for (const n of propertyMoves ? v.g.nodes.values() : []) {
     if (n.kind !== "character" || n.side !== "npc" || !inPlay(n.key as NodeKey)) continue;

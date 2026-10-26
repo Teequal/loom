@@ -143,7 +143,9 @@ export function ownPossessive(actor: string, tagged: string, tagger: Tagger): st
   const e = tagger.entityOf(actor);
   if (!e || (e.type !== "npc" && e.type !== "pc")) return tagged;
   const own = pronounsOf(e)?.own ?? "their own";
-  return tagged.replace(/\{([^{}|]+)(?:\|[^{}]*)?\}['’]s\b/g, (whole, n: string) => (tagger.entityOf(n.trim())?.name === e.name ? own : whole));
+  // At the very start, "{Vex'ahlia}'s gaze hardens" is the sentence's own subject: it stays, and
+  // reads "Vex'ahlia's gaze hardens" (not "Vex'ahlia her own gaze…").
+  return tagged.replace(/\{([^{}|]+)(?:\|[^{}]*)?\}['’]s\b/g, (whole, n: string, at: number) => (at > 0 && tagger.entityOf(n.trim())?.name === e.name ? own : whole));
 }
 
 /** A "happens" beat as a sentence, written by code. */

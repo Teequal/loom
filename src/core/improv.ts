@@ -1,3 +1,4 @@
+import { applyPlans, beatPlansOn, planMoves, plansBlock, PLAN_TEXT, spentThisSession, type PlanBeat } from "./beat-plans";
 import { ACTS } from "./acts";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -201,7 +202,7 @@ ${SCAFFOLD_TEXT}
 
 const nonEmpty = (xs: string[], fallback: string): [string, ...string[]] => (xs.length ? (xs as [string, ...string[]]) : [fallback]);
 
-export type SchemaLists = { moves: string[]; threads: string[]; nameable: string[]; npcActors: string[]; absentActors: string[]; outcomeActors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[] };
+export type SchemaLists = { moves: string[]; threads: string[]; nameable: string[]; npcActors: string[]; absentActors: string[]; outcomeActors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[]; plans?: string[] };
 
 /** The shapes a scaffold is built from, each with only the values allowed right now. */
 export function scaffoldParts(lists: SchemaLists) {
@@ -217,7 +218,10 @@ export function scaffoldParts(lists: SchemaLists) {
   ];
   // What happens to a PC, from parts: code writes the sentence.
   const happens = z.object({ kind: z.literal("happens"), pc: z.enum(nonEmpty(lists.handOff, "none")), part: z.enum(BODY_PARTS), sense: z.enum(SENSATIONS), cause: z.string() });
-  const all = [...kinds, happens];
+  // A beat the engine planned: which plan beat, and its sentence. Code fills in who (beat-plans.ts).
+  const planned = lists.plans?.length ? [z.object({ kind: z.literal("planned"), plan: z.enum(nonEmpty(lists.plans, "none")), does: z.string() })] : [];
+  // With plans on, named characters act only through their plan beats: the actor kinds go.
+  const all = planned.length ? [kinds[0], kinds[1], happens, ...planned] : [...kinds, happens];
   const Beat = z.union(all as unknown as [(typeof all)[number], (typeof all)[number], ...(typeof all)[number][]]);
   const thread = z.enum(nonEmpty(lists.threads, "T0"));
   // The hand-off, in one flat shape (a union per kind made the format too large for the API to
@@ -616,6 +620,7 @@ export interface ImprovOptions {
   // page can show the first one in ~2 s instead of waiting for all of them. With safety lines set,
   // options are held until the safety check has seen them.
   onOption?: (o: ImprovOption) => void;
+  beatPlans?: boolean; // the engine plans each beat (beat-plans.ts); default from LOOM_BEAT_PLANS
 }
 
 // The complete objects so far in the "options" array of a JSON answer that's still being written.
@@ -828,8 +833,17 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   // got, so asking the same thing again gives the same answer.
   const surprise = { chance: SURPRISE_CHANCE[opts.surprises ?? "rare"], seed: `${campaignId}|${moment}|${scene.situation.view.g.log.length}|${opts.steer ?? ""}` };
   const moves = findMoves(scene.situation.view, threads, { callbacks, liveRules: liveRulesOf(scene), surprise });
-  const OptionsSchema = optionsSchema({ moves: moves.map((m) => m.id), threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`) });
-  const prompt = `${contextPrompt(P, moves)}
+  // Beat plans: the engine decides what each beat delivers (who, which act, which fact).
+  const plans = new Map<string, PlanBeat[]>();
+  const planDropped: { about: string; why: string }[] = [];
+  if (beatPlansOn(opts.beatPlans)) {
+    const pl = planMoves(scene.situation.view, moves, { size: 3, spent: spentThisSession(scene.situation.view) });
+    for (const [k, b] of pl.plans) plans.set(k, b);
+    planDropped.push(...pl.dropped);
+  }
+  const planIds = [...plans.values()].flat().map((b) => b.id);
+  const OptionsSchema = optionsSchema({ moves: moves.map((m) => m.id), threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`), plans: planIds });
+  const prompt = `${contextPrompt(P, moves)}${planIds.length ? `${plansBlock(scene.situation.view, plans)}\nPLANNED BEATS\n${PLAN_TEXT}\n` : ""}
 ${lengthFor(moment)}
 MIX: ${MIXES[opts.mix ?? "mix"]}${
     opts.steer
@@ -893,7 +907,7 @@ ${moment}`;
         rejected.push({ label: (raw as { label?: string })?.label ?? "an option", reason: "unusable answer (a value outside the allowed lists)" });
         return;
       }
-      const filled = fillSlots(adoptHand(parsed.data as unknown as ScaffoldOption), lists.tagger);
+      const filled = fillSlots(applyPlans(adoptHand(parsed.data as unknown as ScaffoldOption), plans, droppedSentences), lists.tagger);
       for (const d of filled.dropped) droppedSentences.push({ label: (parsed.data as { label: string }).label, reason: `sentence dropped: ${d}` });
       if (filled.problem) return rejected.push({ label: (parsed.data as { label: string }).label, reason: filled.problem });
       const o = filled.option;
@@ -955,7 +969,7 @@ ${moment}`;
 IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}. Every option must steer away from it: keep it off-screen, redirect the danger elsewhere (often onto the party or the villain's plans), or resolve it without depicting or threatening it.`;
     const res = await callLlm({ feature: "improv", campaignId, system: SYSTEM, prompt: steer, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
     calls.push(res);
-    const fresh = (res.data.options as unknown as ScaffoldOption[]).map(adoptHand).map((o) => fillSlots(o, lists.tagger)).filter((f) => {
+    const fresh = (res.data.options as unknown as ScaffoldOption[]).map(adoptHand).map((o) => fillSlots(applyPlans(o, plans, droppedSentences), lists.tagger)).filter((f) => {
       if (f.problem) rejected.push({ label: f.option.label, reason: f.problem });
       return !f.problem;
     }).map((f) => f.option).filter((o) => {
@@ -997,5 +1011,5 @@ IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}
     .slice(0, 2)
     .map((e) => `bring in ${e.name.split(",")[0]}`);
   const steers = ["darker", "funnier", "smaller stakes", ...bring];
-  return { options, steers, dropped: rejected.length, rejected, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes, fixes: lists.fixes, quiet: new Map(seats.map((x) => [x.pc.name, x.quietFor])), meaning: meaningSummary(meaning, base.entities, sessionNumber, provider?.model ?? null, meaningNote) };
+  return { options, steers, dropped: rejected.length, rejected, plans: { beats: planIds.length, skipped: planDropped, sentences: droppedSentences }, threads, titleOf, llm, moment, campaignId, safetyNote, notes: lists.notes, fixes: lists.fixes, quiet: new Map(seats.map((x) => [x.pc.name, x.quietFor])), meaning: meaningSummary(meaning, base.entities, sessionNumber, provider?.model ?? null, meaningNote) };
 }

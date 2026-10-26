@@ -1,3 +1,4 @@
+import { applyPlans, beatPlansOn, planMoves, plansBlock, PLAN_TEXT, spentThisSession, type PlanBeat } from "./beat-plans";
 import { z } from "zod";
 import { APPROACH_SKILLS, FLAVOURS, adoptHand, handText, type Approach, checkOption, contextPrompt, fitToMove, liveRulesOf, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
 import { callLlm, type LlmResult } from "./llm";
@@ -70,6 +71,7 @@ export interface Chain {
 }
 
 export interface ChainInput {
+  beatPlans?: boolean; // the engine plans each beat (beat-plans.ts); default from LOOM_BEAT_PLANS
   moment: string; // what happened at the table
   label?: string; // the choice developed from
   text: string;
@@ -120,10 +122,10 @@ function towardDirection(p: Prepared) {
   return new Set(p.threads.filter((t) => (`${t.title} ${t.summary}`.toLowerCase().match(/[a-z']{5,}/g) ?? []).some((w) => words.has(w))).map((t) => t.id));
 }
 
-function chainSchema(p: Prepared, moves: Move[], turn: Hand | null, foes?: string[]) {
+function chainSchema(p: Prepared, moves: Move[], turn: Hand | null, foes?: string[], plans: string[] = []) {
   // Kind "npc" offers only who's here: someone away can only arrive or act from afar, and once
   // they've arrived their later lines stay kind "arrival" (rendered the same: name, then what they do).
-  const lists = { moves: moves.map((m) => m.id), threads: p.threads.map((t) => `T${t.id}`), nameable: p.lists.nameable, npcActors: p.lists.npcActors, absentActors: p.lists.absentActors, outcomeActors: p.lists.outcomeActors, handOff: p.lists.handOff, pcs: p.lists.pcs, mechanics: p.lists.mechanics, moments: p.callbacks.map((m) => `M${m.id}`) };
+  const lists = { moves: moves.map((m) => m.id), threads: p.threads.map((t) => `T${t.id}`), nameable: p.lists.nameable, npcActors: p.lists.npcActors, absentActors: p.lists.absentActors, outcomeActors: p.lists.outcomeActors, handOff: p.lists.handOff, pcs: p.lists.pcs, mechanics: p.lists.mechanics, moments: p.callbacks.map((m) => `M${m.id}`), plans };
   const { Beat, Hand, thread, refs, move } = scaffoldParts(lists);
   const step = (after: [string, ...string[]]) => z.object({ after: z.enum(after), if_they: z.string(), setup: z.array(Beat), hand: Hand, on_fail: z.object({ target: z.string(), effect: z.string() }) });
   // The first step can only follow an outcome of the turn the GM's choice ended on, so it can't
@@ -184,6 +186,8 @@ export class StepRunner {
   private holders: Map<string, Set<string>>;
   private named = new Set<string>(); // everyone and everything the chain (and the choice) has named so far
   private said: string[] = []; // what the choice and the steps so far say, for what a turn may ask about
+  plans = new Map<string, PlanBeat[]>(); // the moves' beat plans, when they're on
+  private usedPlans = new Set<string>(); // plan beats the chain has already written
   constructor(
     private p: Prepared,
     private head: RawHead,
@@ -225,7 +229,7 @@ export class StepRunner {
     // A move's cast member who has arrived may now act here.
     const move = this.move && { ...this.move, cast: this.move.cast.map((c) => (c.can === "arrive" && this.present.has(c.name) ? { ...c, can: "act" as const } : c)) };
     const stepOption = { ...this.head, label: this.label, setup: raw.setup, hand: raw.hand, on_fail: raw.on_fail, why: "", hand_off: { to: raw.hand.to, kind: "question" as const, mechanic: "none", text: "" } } as ScaffoldOption;
-    const filled = fillSlots(adoptHand(stepOption), this.p.lists.tagger);
+    const filled = fillSlots(applyPlans(adoptHand(stepOption), this.plans, this.log, this.usedPlans), this.p.lists.tagger);
     for (const d of filled.dropped) this.log.push({ label: this.label, reason: `step ${n + 1}: sentence dropped: ${d}` });
     if (filled.problem) return void this.end(`step ${n + 1}: ${filled.problem}`);
     const o = filled.option;
@@ -425,7 +429,13 @@ export async function developChain(campaignId: number, input: ChainInput) {
   const turn = lastKept ? (lastKept.scaffold.hand ?? null) : input.turn !== undefined ? input.turn : choiceHand(input.text, p.lists.pcs);
   // Who could start a fight: hostile or unfriendly characters and factions within reach, alive.
   const foes = steer === "fight" ? p.scene.entities.filter((e) => (e.type === "npc" || e.type === "faction") && ["hostile", "unfriendly"].includes(e.attitude ?? "") && e.status !== "dead" && p.lists.nameable.includes(e.name)).map((e) => e.name) : undefined;
-  const { Schema, Chain } = chainSchema(p, moves, turn, foes);
+  // Beat plans: the engine decides what each step's beats deliver; a chain uses each plan beat once.
+  const plans = new Map<string, PlanBeat[]>();
+  if (beatPlansOn(input.beatPlans)) {
+    for (const [k, b] of planMoves(p.scene.situation.view, moves, { size: 4, spent: spentThisSession(p.scene.situation.view) }).plans) plans.set(k, b);
+  }
+  const planIds = [...plans.values()].flat().map((b) => b.id);
+  const { Schema, Chain } = chainSchema(p, moves, turn, foes, planIds);
   const StepSchema = Chain.shape.steps.element;
   const sized = stepsFor(input);
   const steps = keep.length ? { ...sized, max: Math.max(1, sized.max - keep.length), text: `STEPS: ${Math.max(1, sized.max - keep.length)} new step${sized.max - keep.length > 1 ? "s" : ""} after the kept ones, each 1-2 beats, under 35 words.` } : refine && refine.how !== "shorter" ? { ...sized, text: `STEPS: ${refine.chain.steps.length} steps, as now, each 1-2 beats, under 35 words.` } : sized;
@@ -446,7 +456,7 @@ CHANGE IT: ${
       } Stay on the same move and threads. Write new sentences, not the old ones with a word changed.`
     : "";
 
-  const prompt = `${contextPrompt(p, moves, "chain")}
+  const prompt = `${contextPrompt(p, moves, "chain")}${planIds.length ? `${plansBlock(p.scene.situation.view, plans)}\nPLANNED BEATS\n${PLAN_TEXT} Across a chain, spread its move's plan over the steps: each beat once, in order.\n` : ""}
 ${steps.text}
 STEER: ${[steer ? STEER_TEXT[steer] : "", input.words ? `The GM's own words (follow them): ${input.words}` : ""].filter(Boolean).join(" ") || "your best read of where this goes next."}
 ${TONE_TEXT[Math.max(0, Math.min(4, input.tone ?? 1))]}
@@ -473,6 +483,7 @@ ${!turn ? 'None: opens_on is "start".' : ROLLS.has(turn.kind) ? 'The roll above.
   const startRun = (index: number, head: Head) => {
     const move = moves.find((m) => m.id === head.move);
     const run = new StepRunner(p, head, move, `chain ${index + 1}`, steer, log, turn, input.text);
+    run.plans = plans;
     for (const st of keep) run.keep(st);
     const l: Live = { run, used: 0, move, dropped: false };
     live.set(index, l);

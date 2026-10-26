@@ -750,6 +750,35 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
       - **Undo fix:** the records of a pull starting or ending no longer block undoing an earlier change ("was changed again later").
       - **Tested in the browser** (enriched copy, desktop and phone width): set a disposition, set and clear a weight, switch a pull off and put it back, and history grouped by edit. All test edits were undone afterwards. The CLI already covers the same (`entity set`, `relate … warmth=`, `entity interplay`).
       - 20 crafted checks for acts, sides, history and editing (321/321); engine 29/29 interplays and 26/26 reading rules; the sample campaign was reseeded.
+    - [x] **Property model step 8: beat plans and behaviour bounds** (`src/core/beat-plans.ts`, 26 Oct). **Built, measured, and left off by default** (`LOOM_BEAT_PLANS=on`, or `beatPlans: true` on improv and Develop).
+      - **Payloads** (`payloadsFor`): what a move's beats could deliver, each with a stable key. In order:
+        1. the move's own pull or property, or its main thread's payoff ideas, stakes, deadline and items (price, true power);
+        2. the cast's secrets (hinted), knowledge, top goal, fears, bonds, false beliefs, notable states and properties;
+        3. a faction's aim and clock;
+        4. the place's hazards;
+        5. the thread's summary, as filler (at most one).
+
+        A payload delivered this session ranks last (`spentThisSession`; used options and steps record their payloads in `Graph.log`). Moves are planned together (`planMoves`), so they deliver different things.
+      - **Plans** (`planMove`): a beat is an actor (the payload's owner from the cast: here, arriving or from afar; else the move's lead; else the world or a faction's walk-on), an act (reveal, hint, offer, give, ask, warn, threaten, take, hesitate, refuse, stall, lie, insist, yield, arrive, send word, hazard, remind, respond), the act's object, and the payload. Cast members with no beat get an open "respond" line; the wildcard is only those.
+      - **Bounds on planned acts** (`boundBreak`): someone devoted won't be planned threatening, taking from or lying to the one they're bound to. The charmed can't harm their charmer, and refuse them only when the charm strains. Giving up a goal they're committed to needs "conflicted"; "steadfast" forbids it. A beat that breaks a bound isn't planned, and the next payload is. On the enriched copy this skipped Tomas threatening Darius and Vex'ahlia harming Iresia.
+      - **Format:** with plans on, a named character acts only through a "planned" beat (its plan id from an enforced list; code fills in the actor, kind and payload, `applyPlans`); world, walk-on and "happens" beats stay free. An instruction alone wasn't enough: with the npc kinds still offered, Haiku wrote 0 planned beats. Dropping them also brought Develop's format back under the API's size limit.
+      - **Blind run** (`data/runs/2026-10-26-beat-plans-blind.md`, key in `…-key.md`; enriched copy, Haiku, step 5 vs step 5 + plans, the same 6 moments, 2 runs each; Claude's picks made before opening the key):
+
+        | | Preferred | Time | Cost per call | Shown | Rejected | Sentences dropped | Beats from plans |
+        |---|---|---|---|---|---|---|---|
+        | Improv, no plans | 3 of 6 | 8.0 s | $0.0023 | 2.92 | 4 | 8 | 0% |
+        | Improv, plans | 3 of 6 | 8.6 s | $0.0024 | 3.00 | 2 | 12 | 54% |
+        | Develop (heartfelt), no plans | 5 of 6 | 6.6 s | $0.0020 | 1 chain | | 4 | 0% |
+        | Develop (heartfelt), plans | 1 of 6 | 6.7 s | $0.0020 | 1 chain | | 1 | 60% |
+        | Sonnet improv, plans | (not compared) | 13.2 s | $0.046 | 3.00 | 1 | 0 | 74% |
+
+        - Plans won where the payload was the point: hints at Vex'ahlia's secret ("an outpost fighter she seems to have trained beside"), Tomas warning of the deadline, the guard mocking Darius's delusion.
+        - They lost where the act mapping was off ("Arlen threatens to take the figurines back") or the plan crowded out the scene (Arlen nervously giving up Varek's street was the no-plans set's).
+        - **Develop:** plans made chains shorter and less on-steer. Acts follow the move, not the steer, and "each beat once" leaves later steps without material.
+        - **To make them pay:** steer-aware acts, more beats per plan for chains, and acts that fit an ally (a complication's threat comes from the situation, not from Tomas). Measure again before switching them on.
+      - **Fixed in passing:** "Vex'ahlia her own gaze hardens" (in both arms). A sentence opening with the actor's own possessive keeps it ("Vex'ahlia's gaze hardens").
+      - **Seen, not fixed:** self-references ("Tomas warns Tomas", "Vex'ahlia asks Vex'ahlia where Vex'ahlia…"); a contest for a PC who didn't declare one (Varek's grab, no-plans set).
+      - 16 crafted checks (337/337).
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

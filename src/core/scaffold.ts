@@ -20,6 +20,8 @@ export interface ScaffoldBeat {
   walk_on: string; // description of an unnamed extra ("a nervous merchant"), else ""
   does: string;
   byCode?: boolean; // written by Loom from parts (a "happens" beat): nothing in it is the model's to check
+  plan?: string; // the beat plan it was written from ("M2.1"), when beat plans are on
+  payload?: string; // the payload it delivers (beat-plans.ts), so it counts as spent this session
 }
 
 const TAG = /\{([^{}]+)\}/g;
