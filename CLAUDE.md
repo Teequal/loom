@@ -564,6 +564,13 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - PC profile lines say "rattled lately (failed 2 rolls)", and so does the inspector chip.
       - 8 crafted checks (213/213). Live on the sample campaign with a staged rattled Bram: the LATELY block reached the prompt; improv (Haiku, 8.1 s) and Develop (Sonnet, 9.1 s, $0.023) both ran.
       - **Next** (in the plan): tag events on direct changes (fight, help, theft, against whom) for disposition drift and faction alert; then the payload index and beat plans in Develop, behind a flag, measured blind on Haiku.
+    - **Design: the property model** ([docs/design-2026-10-26-property-model.md](docs/design-2026-10-26-property-model.md), for Jacob's review; not built). This corrects what "derived" was meant to be (Jacob, 26 Oct). Typed objects get:
+      - **sub-properties:** small, sourced and individually addressable. A goal's intent and commitment; values; pair weights (warmth, trust, fear, respect, debt, loyalty) on each direction of a relationship; item pull and cost; faction aims and alert.
+      - **properties made from them** by tested formulas: intent, resolve, standing, pressure, confidence, cohesion, temptation, reputation.
+      - **interplays:** named relationships between properties, tensions or alignments, with handles, strengths and engine effects. Examples: conflicted, resists the charm, hollow loyalty, devoted, torn loyalties.
+      - **Uses:** these feed moves, casts, hand-offs, behaviour bounds and beat-plan payloads.
+      - **How values change:** DM edits, extraction, capped table nudges from direct changes and results, and a reviewed inference pass; with fades and undo.
+      - **Build order:** 8 steps. Beat plans come after it. Derived state v1 becomes its log-derived sub-properties.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 
