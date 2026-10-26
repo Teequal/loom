@@ -582,6 +582,7 @@ function EntityView({ n }: { n: Node }) {
           Part of <RefLink r={n.partOf} />
         </p>
       )}
+      <Properties items={n.properties} />
       <Section
         title="Ties"
         items={n.ties}
@@ -669,6 +670,7 @@ function ThreadView({ n }: { n: Node }) {
           {n.deadline.secret && <Lock />}
         </p>
       )}
+      <Properties items={n.properties} />
       <Section title="Involves" items={n.involves} initial={8} render={(r: Ref) => <li key={r.id}><RefLink r={r} /> <span className="text-xs text-muted">{r.sub}{r.status && !["alive", "intact"].includes(r.status) ? ` · ${r.status}` : ""}</span></li>} />
       <Section title="Connected threads" items={n.linked} render={(r: any) => <li key={r.id}><RefLink r={r} />{r.note && <span className="text-xs text-muted">: {r.note}</span>}</li>} />
       <Section
@@ -721,5 +723,34 @@ function SessionView({ n }: { n: Node }) {
         </p>
       </section>
     </>
+  );
+}
+
+// The property model's properties, worked out from the records (never stored): each with its band
+// and the strongest reasons, and the full working folded underneath.
+function Properties({ items }: { items?: { name: string; band: string; because: string[]; known: number; of: number; situational: boolean; terms: { label: string; value: number; known: boolean }[] }[] }) {
+  if (!items?.length) return null;
+  return (
+    <Section
+      title="How they stand"
+      items={items}
+      initial={5}
+      render={(p: NonNullable<typeof items>[number]) => (
+        <li key={p.name} className="text-[13.5px]">
+          <span className="font-medium">{p.name}</span> <span className="rounded-full bg-thread-soft px-1.5 py-px text-[11.5px] text-thread">{p.band}</span>
+          {p.because.length > 0 && <span className="text-muted">: <Linked text={p.because.join("; ")} /></span>}
+          <details className="mt-0.5 text-xs text-muted">
+            <summary className="cursor-pointer select-none">
+              how it&apos;s worked out{p.known < p.of ? ` · ${p.known} of ${p.of} known` : ""}{p.situational ? " · changes with the scene" : ""}
+            </summary>
+            <ul className="mt-1 space-y-0.5 pl-3">
+              {p.terms.map((t, i) => (
+                <li key={i}>{t.known ? `${t.value > 0 ? "+" : ""}${t.value} · ${t.label}` : `not known: ${t.label}`}</li>
+              ))}
+            </ul>
+          </details>
+        </li>
+      )}
+    />
   );
 }

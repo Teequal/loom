@@ -599,7 +599,27 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - `entity show` lists goals with their ids and weights, dispositions, states, condition sources and "How they stand".
       - **Enriched copy:** `scenarios/private/duradan-properties.ts 12` writes 73 starter values (Vex'ahlia charmed by Iresia but committed to her ritual; Tomas devoted to Darius; Arlen greedy but afraid of Varek; factions' aims; the figurines' pull). It refuses any campaign but the copy.
       - 17 new crafted checks (230/230); world, engine and adversarial suites pass.
-      - **Not built yet:** properties (step 2), interplays (step 3), and display in the inspector.
+    - [x] **Property model step 2: properties** (`src/core/world/properties.ts`, 26 Oct).
+      - **The table** (`PROPERTIES`): each property is a row of terms (an input and a factor), summed and banded, with the inputs that must be known.
+        - Characters: intent, confidence, resolve, standing (NPCs), pressure, courage, restraint, candour, generosity, susceptibility, temptation.
+        - Factions: intent, cohesion, reputation.
+        - Threads: pressure.
+      - **Inputs** (`INPUTS`):
+        - sub-properties, worded from the registry's poles ("timid (−2)");
+        - priority-weighted goal intent; trust-weighted standing; fear and debt toward anyone in the scene;
+        - health, momentum, captured, charmed, an item's pull plus its rule's uses;
+        - for factions: members' loyalty and warmth;
+        - for threads: stakes, urgency, neglect.
+      - **Scene inputs** for the situational properties: what's at stake here (a goal whose target is in the moment, someone they love named in it), friends beside them, threats here, someone they respect watching.
+      - **Properties use properties** (resolve uses confidence; courage uses confidence; susceptibility uses resolve). `checkNetwork` refuses loops and depth over 4 when the module loads.
+      - **Unknown stays unknown:** a property is null unless one of its needed inputs is known, and it says "2 of 6 known".
+      - **Explanations:** the strongest reasons for where it landed come first, then what pulled the other way as "though…" ("courage wary: timid (−1); fear (+1); though Pip is in this"). The full working folds underneath.
+      - Nothing is stored; results are cached per moment.
+      - **Shown:**
+        - the inspector's entity and thread views have a "How they stand" section (band, reasons, the working folded, "changes with the scene");
+        - `entity why "<name>" ["<moment>"]` gives every property and its terms, including for a given scene.
+      - **On the enriched copy:** when Varek walks in, Arlen Hoder's pressure becomes "pressed" (afraid of Varek) and his candour "lies". Tomas's resolve gains "Pip is in this". Vex'ahlia's susceptibility is "resistant", though charmed by Iresia.
+      - 12 crafted checks (242/242). Properties don't reach any prompt yet; that comes with interplays (step 3).
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

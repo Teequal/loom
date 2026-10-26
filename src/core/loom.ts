@@ -3,6 +3,9 @@ import { db, schema } from "./db/client";
 import { type EntityTraits, hasTrait, traitText } from "./entity-fields";
 import { historyOf } from "./history";
 import { momentumOf } from "./world/derived";
+import { propertiesOf } from "./world/properties";
+import type { View } from "./world/engine";
+import type { NodeKey } from "./world/nodes";
 import { activityOf, viewOf } from "./world/engine";
 import { loadGraph } from "./world/load";
 import { readMoment } from "./moment-reading";
@@ -98,9 +101,13 @@ async function entityNode(campaignId: number, id: number) {
   const secret = (f: string) => !!e.fieldMeta[f]?.secret;
   // How much an NPC has been on stage lately (the engine's measure, from notes and the table log).
   // Derived, never recorded: an NPC's time on stage, a PC's run of luck at the table.
-  const view = e.type === "npc" || e.type === "pc" ? viewOf(await loadGraph(campaignId), readMoment([], "")) : null;
-  const activity = view && e.type === "npc" ? (activityOf(view).get(e.name) ?? null) : null;
-  const momentum = view && e.type === "pc" ? (momentumOf(view).get(e.name) ?? null) : null;
+  const graph = await loadGraph(campaignId);
+  const view = viewOf(graph, readMoment([], ""));
+  const activity = e.type === "npc" ? (activityOf(view).get(e.name) ?? null) : null;
+  const momentum = e.type === "pc" ? (momentumOf(view).get(e.name) ?? null) : null;
+  // The property model: what they're like and how they stand, worked out (never stored), with why.
+  const nodeKey = graph.entityKey(e.id);
+  const properties = nodeKey ? propertiesView(view, nodeKey) : [];
   // Where it is, as a chain of places (the Ritual Site › the Time Pocket › the Woods).
   const chain: NodeRef[] = [];
   for (let cur = e.actualLocationId ?? e.lastKnownLocationId ?? (e.type === "location" ? e.parentId : null), hops = 0; cur != null && hops < 6; hops++) {
@@ -140,6 +147,7 @@ async function entityNode(campaignId: number, id: number) {
     importance: e.importance,
     activity: activity && { band: activity.band, lastSession: activity.lastSession },
     momentum: momentum?.band ? { band: momentum.band, because: momentum.because } : null,
+    properties,
     description: e.description,
     aliases: e.aliases,
     where: chain,
@@ -175,8 +183,10 @@ async function threadNode(campaignId: number, id: number) {
     db.select().from(schema.keyMoments).where(eq(schema.keyMoments.campaignId, campaignId)),
   ]);
   const meta = (f: string) => !!t.fieldMeta[f]?.secret;
+  const properties = propertiesView(viewOf(await loadGraph(campaignId), readMoment([], "")), `thread:${t.id}` as NodeKey);
   return {
     kind: "thread" as const,
+    properties,
     id: t.id,
     name: t.title,
     sub: threadSub(t),
@@ -249,3 +259,10 @@ async function sessionNode(campaignId: number, number: number) {
 }
 
 export type LoomNode = Awaited<ReturnType<typeof loomNode>>;
+
+// Properties as the inspector shows them: the ones with something behind them, outside any scene.
+function propertiesView(view: View, key: NodeKey) {
+  return propertiesOf(view, key)
+    .filter((p) => p.because.length)
+    .map((p) => ({ name: p.name, band: p.band, because: p.because, known: p.known, of: p.of, situational: p.situational, terms: p.terms.map((t) => ({ label: t.label, value: t.value, known: t.known })) }));
+}

@@ -29,6 +29,10 @@ import {
   setSubProperty,
 } from "@/core/entities";
 import { specOf } from "@/core/sub-properties";
+import { readMoment } from "@/core/moment-reading";
+import { viewOf } from "@/core/world/engine";
+import { loadGraph } from "@/core/world/load";
+import { propertiesOf, propertyLine } from "@/core/world/properties";
 
 const DM = { source: "dm" as const };
 
@@ -226,6 +230,7 @@ entity set "<name>" field=value [field=value …] [--secret field,field]
   An empty value clears a field: voice=
   Sub-properties by path: disposition.boldness=2  state.anger=1  goals.g1.intent=-2  goals.g1.target="<name>"
     (see the ids with: entity show "<name>"; dispositions: compassion honesty boldness temper pride greed curiosity discipline faith fidelity)
+entity why "<name>" ["<a moment>"]   the properties worked out for them (intent, resolve, courage…), and why
 entity goal "<name>" "<goal text>" [priority=1-3] [intent=-3…3] [commitment=0-3]   adds a goal (a faction's aim)
 entity merge "<duplicate>" "<real one>" [--secret]   two records are the same character; the duplicate's names become aliases
   --secret: the players don't know; the identity is kept GM-only and the duplicate's threads aren't linked to the real one`;
@@ -297,6 +302,24 @@ export async function entityCommand(campaignId: number, args: string[]) {
         throw new Error(`Status for ${e.name} (${e.type.toUpperCase()}) is one of: ${ENTITY_STATUSES[e.type].join(", ")}`);
       }
       return report(await updateEntity(e.id, patch, { ...DM, secret }));
+    }
+    case "why": {
+      // entity why "<name>" ["<moment>"]: the properties worked out for them, with their reasons;
+      // with a moment, the situational ones (courage, candour…) for that scene.
+      if (!pos[0]) return console.log(ENTITY_USAGE);
+      const e = await findEntity(campaignId, pos[0]);
+      const g = await loadGraph(campaignId);
+      const ents = [...g.nodes.values()].filter((n) => n.kind === "character" || n.kind === "faction" || n.kind === "item" || n.kind === "place").map((n) => ({ name: n.name, type: n.kind === "character" ? n.side : n.kind === "place" ? "location" : n.kind, aliases: n.aliases }));
+      const v = viewOf(g, readMoment(ents as never, pos[1] ?? ""));
+      const key = g.entityKey(e.id);
+      const props = key ? propertiesOf(v, key) : [];
+      console.log(`\n${e.name}${pos[1] ? `, in: "${pos[1]}"` : " (outside any scene)"}`);
+      if (!props.length) return console.log("  Nothing to work out yet: no dispositions, states, goals or weights recorded.");
+      for (const p of props) {
+        console.log(`  ${propertyLine(p)}`);
+        for (const t of p.terms) console.log(`      ${t.known ? `${t.value > 0 ? "+" : ""}${t.value}`.padStart(5) : "    ?"}  ${t.label}`);
+      }
+      return;
     }
     case "goal": {
       // entity goal "<name>" "<text>" [priority=1] [intent=-2] [commitment=3]: adds a goal (or an aim, for a faction).
