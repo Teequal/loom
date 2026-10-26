@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { and, asc, desc, eq, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
+import { settleStates, tableNudges } from "./nudges";
 import { deltasOf, untag } from "./deltas";
 import type { ScaffoldOption } from "./improv";
 import { applyProposal, numberItems, proposeRecapChanges, type Proposal, type ProposalFile } from "./recap";
@@ -35,6 +36,17 @@ export async function liveSessionNumber(campaignId: number) {
     if (live || event) return s.number + 1;
   }
   return 1;
+}
+
+/**
+ * A new session at the table starts with the last one's moving states settling (nudges.ts). Call it
+ * before the first ask or note; it does nothing once the session has begun, or twice.
+ */
+export async function beginSession(campaignId: number) {
+  const [open] = await db.select({ id: schema.liveEntries.id }).from(schema.liveEntries).where(and(eq(schema.liveEntries.campaignId, campaignId), eq(schema.liveEntries.wrapped, false))).limit(1);
+  if (open) return null;
+  const n = await liveSessionNumber(campaignId);
+  return n > 1 ? settleStates(campaignId, n - 1).catch((err) => (console.error(err), null)) : null;
 }
 
 export async function logAsk(campaignId: number, moment: string, options: Entry["options"]) {
@@ -237,6 +249,16 @@ async function runExtraction(e: Entry) {
     // A choice Loom built applies its own changes; only the GM's own words need reading.
     const scaffold = await scaffoldFor(e);
     const proposal = scaffold ? await directProposal(e, scaffold, text) : (await proposeRecapChanges(e.campaignId, text, undefined, { live: true })).data;
+    // Table nudges (nudges.ts): a used choice from its own structure; a result from the choice it
+    // settles, with the outcome the GM tapped.
+    const parent = e.choiceKind === "result" && e.parentId ? (await db.select().from(schema.liveEntries).where(eq(schema.liveEntries.id, e.parentId)))[0] : null;
+    const settles = parent ? await scaffoldFor(parent) : null;
+    const nudgeFrom = scaffold ?? settles;
+    if (nudgeFrom) {
+      const n = await tableNudges(e.campaignId, nudgeFrom, settles ? e.choiceLabel : null, clip(e.choice, 110));
+      proposal.sub_properties = [...proposal.sub_properties, ...n.subs];
+      proposal.pair_weights = [...proposal.pair_weights, ...n.weights];
+    }
     const file: ProposalFile = await splitRisky({ kind: "live", campaignId: e.campaignId, sessionNumber: e.sessionNumber, recap: text, proposal });
     mkdirSync("data/proposals", { recursive: true });
     writeFileSync(proposalPath(e), JSON.stringify(file, null, 2));

@@ -36,6 +36,8 @@ export interface ScaffoldOption {
   hand?: Hand; // what the model chose, in parts
   refs?: Ref[]; // who and what the sentences name, with the part each plays ({1}, {2} in the text)
   move?: string; // the engine's move it builds on ("M2"), from moves.ts
+  // That move, as it was: kept with the scaffold so a used choice knows what it was (table nudges).
+  moveInfo?: { kind: string; source?: string; cast: { name: string; can: string; part?: string }[] };
   on_fail: { target: string; effect: string };
   why: string;
   callback?: string; // "M12" if it calls back a key moment, else "none"
@@ -794,6 +796,7 @@ ${p.direction ? `\nWHERE THE GM WANTS THE STORY TO GO\n${p.direction}\n` : ""}${
 export function fitToMove(o: ScaffoldOption, moves: Move[], c: CheckContext, droppedSentences: { label: string; reason: string }[]) {
   const move = moves.find((m) => m.id === o.move);
   if (move && !move.threads.includes(Number(o.thread.replace(/^T/, "")))) o.thread = `T${move.threads[0]}`;
+  if (move) o.moveInfo = { kind: move.kind, source: move.source, cast: move.cast.map((c) => ({ name: c.name, can: c.can, part: c.part })) };
   let supportLines = 0;
   const outsideCast = (b: ScaffoldBeat) => {
     if (!move || (b.kind !== "npc" && b.kind !== "arrival" && b.kind !== "remote") || b.actor === "walk-on" || b.actor === "world") return null;

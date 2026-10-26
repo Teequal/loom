@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { improv, type ImprovOption } from "@/core/improv";
 import { SURPRISES } from "@/core/moves";
-import { logAsk } from "@/core/live";
+import { beginSession, logAsk } from "@/core/live";
 import { loadThreadContexts } from "@/core/retrieval";
 import { dbReady } from "@/server/db";
 import { overrides } from "@/server/route";
@@ -42,6 +42,7 @@ export async function POST(request: Request) {
   if (!parsed.success) return Response.json({ error: "Type what the players just did." }, { status: 400 });
   const { campaignId, moment, model, tone, mix, steer, overrides, surprises } = parsed.data;
   await dbReady();
+  await beginSession(campaignId);
   const titleOf = new Map((await loadThreadContexts(campaignId)).map((t) => [t.id, t.title]));
 
   const encoder = new TextEncoder();

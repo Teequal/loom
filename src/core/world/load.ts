@@ -46,7 +46,7 @@ export interface LogEvent {
   outcome: "success" | "failure" | "partial" | "won" | "lost" | "fled" | "talked" | null; // results only
 }
 type Scaffoldish = { hand?: { kind?: string; to?: string; mechanic?: string }; hand_off?: { to?: string; kind?: string; mechanic?: string } };
-const OUTCOME: Record<string, LogEvent["outcome"]> = { succeeded: "success", success: "success", failed: "failure", failure: "failure", partly: "partial", partial: "partial", won: "won", lost: "lost", fled: "fled", "talked it out": "talked" };
+export const OUTCOME: Record<string, LogEvent["outcome"]> = { succeeded: "success", success: "success", failed: "failure", failure: "failure", partly: "partial", partial: "partial", won: "won", lost: "lost", fled: "fled", "talked it out": "talked" };
 
 type Entity = typeof schema.entities.$inferSelect;
 const KIND: Record<string, NodeKind> = { pc: "character", npc: "character", item: "item", location: "place", faction: "faction", other: "other" };

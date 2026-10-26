@@ -686,6 +686,37 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - Crafted session notes on the copy (Sonnet, 7.7 s, $0.066 with the recap) gave 10 sensible values with exact quotes, all "confirm": Arlen's fear of Varek 2 → 3, Zara's trust in Tomas −2, Vex's debt to Salaena 3, Zara angry.
       - **Limits:** an NPC that's new in the same notes, or a goal the same recap adds, isn't in the lists yet; it gets values from the next notes or `infer`.
       - 17 crafted checks (279/279).
+    - [x] **Property model step 6: table nudges** (`src/core/nudges.ts`, 26 Oct).
+      - **Events are typed from structure, not prose:**
+        - each scaffold now keeps the move it was built on (`moveInfo`: kind, source, cast);
+        - `contextOf` reads the roller (the hand-off's PC), the target (an NPC named in what the roll is up against, else the one NPC acting; ambiguous means no target), the foes (NPCs and factions in the choice who aren't friends of the party), and the party.
+      - **The event table** (`EVENTS`, in words like the interplay table):
+        - **persuaded:** a Persuasion roll that works warms X to that PC;
+        - **deceived, caught:** a failed Deception roll lowers X's trust in that PC;
+        - **intimidated:** X angrier, and more afraid of that PC if it works;
+        - **fought:** any fight not talked out makes the foes colder to every PC;
+        - **beaten:** a won fight makes the foes more afraid and less sure of themselves, and their faction more alert;
+        - **won against them:** a lost or fled fight makes the foes surer of themselves;
+        - **loyalty tested:** a defect or choose-a-side move used weakens X's loyalty to its side;
+        - **charm strains:** a failed roll to hold a charm makes X angry. Whether the charm breaks stays the GM's call.
+      - **Not built yet** (needs more typing): helping X, sparing a beaten foe, goals advanced or thwarted (hope, mood drift), keeping a secret under pressure.
+      - **Into values** (`tableNudges`):
+        - each value moves one step from where it is: recorded, else what its ties imply (enemy, hostile), else 0;
+        - at most ±2 from where it stood at the start of the session, and within its range;
+        - several rows touching one value count once;
+        - the nudges become ordinary proposal items with a reason ("fought the party"), applied as source "table".
+      - **When they run:** a used option or step adds its nudges to its direct changes. A result adds them from the choice it settles, with the outcome tapped. Take back reverses them with everything else.
+      - **The review asks first:**
+        - for a nudge to the DM's own value (unless auto-approve is on);
+        - for a weight that would cross from warm to cold, or back, from the table alone.
+      - **Settling** (`settleStates`): NPCs' confidence, hope, anger and strain settle a step toward 0 after each session; fear every two sessions; a faction's alert a step. DM values stay.
+        - It runs when the next session starts: the first ask or note at the table (`beginSession`), or reading the next session's notes. Between sessions, Prep shows the states as the session left them.
+        - It's once per session, as one undoable batch ("Moods settled after session N").
+      - **Live on the sample campaign** (Haiku asks, the result read by Sonnet): a won fight with the Red Hand recorded "alert 1 → 2 (lost a fight to the party)" and "warmth toward Bram: −1 (fought the party)", the same for Kira. A Stealth option used on Ysolde moved nothing, which is right.
+      - **Limits:**
+        - The reason isn't in the change log yet, only in the moment's "added" list.
+        - Choices logged before this step have no `moveInfo`, so they give no loyalty nudges.
+      - 22 crafted checks (301/301); the sample campaign was reseeded after testing.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

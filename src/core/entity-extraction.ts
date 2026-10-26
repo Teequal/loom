@@ -55,8 +55,10 @@ export const SUB_KEYS = ["intent", "commitment", ...DISPOSITIONS, ...STATES] as 
 export const SubChangeSchema = z.object({ name: z.string(), key: z.string(), goal: z.string(), value: z.number().int(), evidence: z.string() });
 export const WeightChangeSchema = z.object({ from: z.string(), to: z.string(), weight: z.string(), value: z.number().int(), evidence: z.string() });
 // The inference pass also says whether the notes state a value or only imply it.
-export type SubChange = z.infer<typeof SubChangeSchema> & { basis?: "stated" | "implied" };
-export type WeightChange = z.infer<typeof WeightChangeSchema> & { basis?: "stated" | "implied" };
+// Code adds a few fields of its own: table nudges name the path directly (a faction's "alert"),
+// say why in plain words, and mark a weight that would flip between warm and cold.
+export type SubChange = z.infer<typeof SubChangeSchema> & { basis?: "stated" | "implied"; path?: string; because?: string };
+export type WeightChange = z.infer<typeof WeightChangeSchema> & { basis?: "stated" | "implied"; because?: string; crosses?: boolean };
 
 export const EntityChangesShape = {
   entity_updates: z.array(EntityUpdateSchema),
@@ -252,7 +254,7 @@ export async function applyPropertyChanges(
   sessionId: number | null,
   changes: { subs: SubChange[]; weights: WeightChange[] },
   batch: string | undefined,
-  source: "dm" | "extracted" | "inferred",
+  source: "dm" | "extracted" | "inferred" | "table",
   blanksOnly = false,
 ) {
   const result = { written: 0, warnings: [] as string[] };
@@ -260,7 +262,7 @@ export async function applyPropertyChanges(
   const find = (n: string) => entities.find((e) => [e.name, ...e.aliases].some((a) => norm(a) === norm(n)));
   const opts = { source, sessionId, batch };
   for (const c of changes.subs) {
-    if (!(SUB_KEYS as readonly string[]).includes(c.key)) {
+    if (!c.path && !(SUB_KEYS as readonly string[]).includes(c.key)) {
       result.warnings.push(`"${c.key}" isn't something Loom records; skipped for ${c.name}`);
       continue;
     }
@@ -270,7 +272,8 @@ export async function applyPropertyChanges(
       continue;
     }
     let path: string;
-    if (c.key === "intent" || c.key === "commitment") {
+    if (c.path) path = c.path;
+    else if (c.key === "intent" || c.key === "commitment") {
       const goals = ((e.traits as EntityTraits).goals ?? []) as { id?: string; text: string }[];
       const g = goals.find((x) => norm(x.text) === norm(c.goal)) ?? goals.find((x) => norm(x.text).includes(norm(c.goal)) || norm(c.goal).includes(norm(x.text)));
       if (!g?.id) {

@@ -124,7 +124,7 @@ export async function reviewProposal(file: ProposalFile): Promise<Reviewed[]> {
 
   const pairs = await db.select().from(schema.pairWeights).where(eq(schema.pairWeights.campaignId, file.campaignId));
   // Scales that run negative read with a sign; 0-3 amounts (commitment, fear, debt…) don't.
-  const AMOUNTS = new Set(["commitment", "fear", "anger", "hope", "strain", "debt", "loyalty"]);
+  const AMOUNTS = new Set(["commitment", "fear", "anger", "hope", "strain", "debt", "loyalty", "alert", "aggression", "danger", "urgency"]);
   const say = (key: string) => (n: number) => (n > 0 && !AMOUNTS.has(key) ? `+${n}` : String(n));
 
   return items.map((i): Reviewed => {
@@ -242,17 +242,18 @@ export async function reviewProposal(file: ProposalFile): Promise<Reviewed[]> {
         group = e?.name ?? c.name;
         const goals = ((e?.traits as { goals?: { id?: string; text: string }[] } | undefined)?.goals ?? []);
         const goal = c.key === "intent" || c.key === "commitment" ? goals.find((g) => g.text.trim().toLowerCase() === c.goal.trim().toLowerCase()) ?? goals.find((g) => g.text.toLowerCase().includes(c.goal.trim().toLowerCase())) : undefined;
-        const path = goal ? `goals.${goal.id}.${c.key}` : `${["confidence", "fear", "anger", "hope", "strain"].includes(c.key) ? "state" : "disposition"}.${c.key}`;
+        const path = c.path ? c.path : goal ? `goals.${goal.id}.${c.key}` : `${["confidence", "fear", "anger", "hope", "strain"].includes(c.key) ? "state" : "disposition"}.${c.key}`;
         const current = path.split(".").reduce<unknown>((o, k) => (Array.isArray(o) ? o.find((x) => x?.id === k) : (o as Record<string, unknown> | undefined)?.[k]), e?.traits);
         const label = goal ? `"${goal.text}": ${c.key}` : c.key;
+        const why = c.because ? ` (${c.because})` : c.basis === "implied" ? " (implied)" : "";
         if (current === c.value || (file.kind === "infer" && current != null)) {
           summary = SAME_PLACE; // nothing to change (the inference pass only fills blanks)
           break;
         }
         const signed = say(c.key);
-        summary = `${current == null ? `${label} ${signed(c.value)}` : `${label} ${signed(current as number)} → ${signed(c.value)}`}${c.basis === "implied" ? " (implied)" : ""}`;
+        summary = `${current == null ? `${label} ${signed(c.value)}` : `${label} ${signed(current as number)} → ${signed(c.value)}`}${why}`;
         if (e?.fieldMeta[`traits.${path}`]?.source === "dm") must(`changes your own entry for ${label}`);
-        if ((c.key === "intent" || c.key === "commitment") && !goal) {
+        if (!c.path && (c.key === "intent" || c.key === "commitment") && !goal) {
           summary = SAME_PLACE; // no recorded goal to attach it to (apply skips it with a warning)
           break;
         }
@@ -271,9 +272,9 @@ export async function reviewProposal(file: ProposalFile): Promise<Reviewed[]> {
           break;
         }
         const signed = say(w.weight);
-        summary = `${w.weight} toward ${b?.name ?? w.to}: ${current == null ? signed(w.value) : `${signed(current)} → ${signed(w.value)}`}${w.basis === "implied" ? " (implied)" : ""}`;
+        summary = `${w.weight} toward ${b?.name ?? w.to}: ${current == null ? signed(w.value) : `${signed(current)} → ${signed(w.value)}`}${w.because ? ` (${w.because})` : w.basis === "implied" ? " (implied)" : ""}`;
         if (row?.fieldMeta[w.weight as PairWeight]?.source === "dm") must(`changes your own entry for ${w.weight} toward ${b?.name ?? w.to}`);
-        if (current != null && Math.sign(current) * Math.sign(w.value) < 0) must(`turns ${w.weight} toward ${b?.name ?? w.to} around`);
+        if ((current != null && Math.sign(current) * Math.sign(w.value) < 0) || w.crosses) must(`turns ${w.weight} toward ${b?.name ?? w.to} around`);
         break;
       }
       case "moment": {

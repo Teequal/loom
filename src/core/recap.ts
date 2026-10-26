@@ -1,4 +1,5 @@
 import { recordInterplayChanges } from "./interplay-history";
+import { settleStates } from "./nudges";
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "./db/client";
@@ -332,6 +333,8 @@ const norm = (s: string) => s.trim().toLowerCase();
 // they can change values the GM recorded earlier.
 export async function applyProposal(file: ProposalFile, skip: Set<number> = new Set(), batch = newBatch(file), confirmed: Set<number> = new Set()) {
   const { campaignId, sessionNumber, recap } = file;
+  // A new session's notes: the last session's moving states settle first (once; nudges.ts).
+  if ((!file.kind || file.kind === "recap") && sessionNumber > 1) await settleStates(campaignId, sessionNumber - 1).catch(() => null);
   const items = numberItems(file.proposal).filter((i) => !skip.has(i.n));
   const warnings: string[] = [];
   const counts = { entities: 0, threads: 0, updates: 0, links: 0 };
@@ -474,11 +477,13 @@ export async function applyProposal(file: ProposalFile, skip: Set<number> = new 
   entityResult.conflicts.push(...confirmedResult.conflicts);
   warnings.push(...entityResult.warnings);
 
-  // The property model's values: unconfirmed ones as extracted; a yes as the DM's own; the
-  // inference pass as "inferred", and only into blanks.
+  // The property model's values: unconfirmed ones as extracted (as the table's, at the table); a
+  // yes as the DM's own; the inference pass as "inferred", and only into blanks.
   const infer = file.kind === "infer";
   for (const dm of [false, true]) {
-    const r = await applyPropertyChanges(campaignId, sessionId, { subs: of("sub", dm), weights: of("weight", dm) }, batch, dm ? "dm" : infer ? "inferred" : "extracted", infer && !dm);
+    // At the table, these are code's nudges (nudges.ts), so they're the table's.
+    const source = dm ? "dm" : infer ? "inferred" : file.kind === "live" ? "table" : "extracted";
+    const r = await applyPropertyChanges(campaignId, sessionId, { subs: of("sub", dm), weights: of("weight", dm) }, batch, source, infer && !dm);
     entityResult.updated += r.written;
     warnings.push(...r.warnings);
   }
