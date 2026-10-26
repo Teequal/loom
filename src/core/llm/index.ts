@@ -29,7 +29,7 @@ const FEATURE_MODELS: Record<string, string> = {
   encounter: "claude-sonnet-5-5", // fight setup: stat blocks need a careful model, but it's at the table
   rules: "claude-sonnet-5-5", // rules questions: accuracy matters, the answer is short
   fresh: "claude-opus-5-5", // new material between sessions: invention needs the strongest model
-  chain: "claude-haiku-5-5", // Develop v2's chains: at the table, so the table's tier (Quick by default)
+  chain: "claude-sonnet-5-5", // Develop v2's chains: Sonnet 8/8 usable vs Haiku 3/24 (blind run 2); Opus when the table is on Best
   hook: "claude-opus-5-5", // a starter campaign from a random hook, for someone brand new
   suggest: "claude-opus-5-5", // between-session prep: quality over speed
   enrich: "claude-opus-5-5", // one-off backfill of entity details from stored recaps

@@ -12,6 +12,7 @@ import { listMoments, momentLine } from "./moments";
 import { personalLines, spotlightScore, tableSeats } from "./players";
 import { buildScene, type Scene } from "./scene";
 import { findMoves, movesBlock, type Move } from "./moves";
+import { derivedLines } from "./world/derived";
 import { BODY_PARTS, expand, fillSlots, pcOpensClause, SENSATIONS, type Ref } from "./slots";
 import type { Overrides, RecordFix } from "./situation";
 export type { RecordFix };
@@ -744,7 +745,10 @@ ${p.threads.map((t) => (t.detail === "full" ? threadBlock(t, p.titleOf, p.typeOf
 
 MOVES (the engine's picks for this moment: build each ${unit} on a different one)
 ${movesBlock(moves, p.titleOf)}
-${p.sceneBlock}${p.callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${p.callbacks.map(momentLine).join("\n")}\n` : ""}${p.tableBlock ? `\n${p.tableBlock}\n` : ""}
+${(() => {
+    const lately = derivedLines(p.scene.situation.view);
+    return lately.length ? `\nLATELY (worked out from this session, not recorded)\n${lately.map((l) => `- ${l}`).join("\n")}\n` : "";
+  })()}${p.sceneBlock}${p.callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${p.callbacks.map(momentLine).join("\n")}\n` : ""}${p.tableBlock ? `\n${p.tableBlock}\n` : ""}
 ${p.direction ? `\nWHERE THE GM WANTS THE STORY TO GO\n${p.direction}\n` : ""}${p.soFar ? `\nTHIS SESSION SO FAR (what already happened at the table, oldest first)\n${p.soFar}\n` : ""}`;
 }
 

@@ -560,7 +560,7 @@ const Lock = () => (
 function EntityView({ n }: { n: Node }) {
   return (
     <>
-      <Head n={n} chips={[n.status !== "alive" && n.status !== "intact" && n.status, n.attitude, n.importance, n.activity && n.activity.band !== "active" && (n.activity.band === "very active" ? "on stage a lot lately" : "quiet lately")]} />
+      <Head n={n} chips={[n.status !== "alive" && n.status !== "intact" && n.status, n.attitude, n.importance, n.activity && n.activity.band !== "active" && (n.activity.band === "very active" ? "on stage a lot lately" : "quiet lately"), n.momentum && `${n.momentum.band} lately: ${n.momentum.because.join(", ")}`]} />
       {n.description && (
         <p className="story leading-relaxed">
           <Linked text={n.description} />

@@ -1,3 +1,4 @@
+import { momentumOf } from "./derived";
 import type { MomentReading } from "../moment-reading";
 import { capabilitiesOf, type Capabilities } from "../rules";
 import type { Graph } from "./load";
@@ -389,6 +390,9 @@ export function profileOf(v: View, key: NodeKey, memo?: Map<NodeKey, Presence>):
     const caps = capabilities(v, n);
     const cant = (["act", "speak", "aware"] as const).filter((k) => !caps[k]);
     if (n.mind.mood != null) facts.push(`mood: ${MOOD[n.mind.mood + 3]}`);
+    // Derived, not recorded: how the dice have gone for a PC lately.
+    const mo = n.side === "pc" ? momentumOf(v).get(n.name) : undefined;
+    if (mo?.band) facts.push(`${mo.band} lately (${mo.because.join(", ")})`);
     const act = n.side === "npc" ? activityOf(v).get(n.name) : undefined;
     if (act && act.band !== "active") facts.push(act.band === "very active" ? "very active lately: give others room" : "quiet lately");
     if (n.side === "npc" && n.stance != null) facts.push(`${["hostile", "hostile", "unfriendly", "indifferent", "friendly", "helpful", "devoted"][n.stance + 3]} to the party`);

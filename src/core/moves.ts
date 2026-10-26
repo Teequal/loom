@@ -1,4 +1,5 @@
 import type { SelectedThread } from "./retrieval";
+import { momentumOf, paceOf, ruleUsesOf } from "./world/derived";
 import { activityOf, heat, presenceOf, type View } from "./world/engine";
 import { THREAD_ROLES } from "./world/links";
 import type { AnyNode, NodeKey, Thread } from "./world/nodes";
@@ -130,7 +131,9 @@ export function findMoves(
     const src = r.sourceName ? v.g.find(r.sourceName) : undefined;
     const onThreads = threads.filter((t) => partsOf(t).some((p) => src && p.node.key === src.key));
     const t = onThreads[0] ?? threads[0];
-    if (t) add({ kind: "rule", threads: [t.id], cast: castOf(partsOf(t)), because: `${r.name} is triggered (${r.why})`, score: 1 + WEIGHT.rule });
+    // Which use this is: a rule's cost can grow with use.
+    const uses = ruleUsesOf(v).get(r.name)?.session ?? 0;
+    if (t) add({ kind: "rule", threads: [t.id], cast: castOf(partsOf(t)), because: `${r.name} is triggered (${r.why})${uses ? `; this would be use ${uses + 1} this session, so its cost should grow` : ""}`, score: 1 + WEIGHT.rule + Math.min(uses, 3) * 0.1 });
   }
   for (const cb of opts.callbacks.slice(0, 2)) {
     const t = threads[0];
@@ -150,6 +153,22 @@ export function findMoves(
       if (opts.steer === "story" && m.threads.some((t) => opts.toward?.has(t))) m.score += 0.8;
     }
     for (let i = moves.length - 1; i >= 0; i--) if ((w[moves[i].kind] ?? 0) <= -1) moves.splice(i, 1);
+  }
+  // Derived state leans the moves too: after a fight or a run of rolls, a breather; after a long
+  // quiet, a push. A rattled PC in a move's threads draws a moment of their own; one on a roll, a
+  // complication that raises the stakes.
+  const pace = paceOf(v).band;
+  const momentum = momentumOf(v);
+  const PACE: Record<string, Partial<Record<MoveKind, number>>> = {
+    tense: { hint: 0.3, callback: 0.3, complication: -0.2, arrival: -0.2, collision: -0.1 },
+    slack: { complication: 0.3, arrival: 0.3, hint: -0.1 },
+  };
+  for (const m of moves) {
+    if (pace) m.score += PACE[pace][m.kind] ?? 0;
+    const pcs = m.threads.flatMap((t) => v.g.linksOf(`thread:${t}` as NodeKey, { type: "in_thread", dir: "in" }).map((l) => node(endKey(l.from)))).filter((n): n is AnyNode => n?.kind === "character" && n.side === "pc");
+    const bands = new Set(pcs.map((p) => momentum.get(p.name)?.band));
+    if (bands.has("rattled") && (m.kind === "callback" || m.kind === "payoff")) m.score += 0.3;
+    if (bands.has("on a roll") && m.kind === "complication") m.score += 0.3;
   }
   if (opts.exclude?.length) for (let i = moves.length - 1; i >= 0; i--) if (opts.exclude.includes(moveKey(moves[i]))) moves.splice(i, 1);
   // Pick a varied set: each pick costs the rest a little for sharing its kind, main thread or cast.

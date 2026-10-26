@@ -551,6 +551,19 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
         - Fixed after the run: the fight finale's agreement ("a patron attacks") and a group cut off mid-phrase (205/205 checks).
         - **Direct changes vs extraction** (8 options): the same main thread in 5–6 of 8. Direct changes find nothing new; the extractor found new threads, items or places in 3 of 8, but treated an unrolled failure as having happened in 2 of 8.
         - **Proposed:** Develop on Sonnet by default; beat plans next; direct changes plus a background "anything new?" pass (Haiku).
+    - **Develop runs on Sonnet** (Opus when the table is on Best), whatever the table's tier (`developModel` in `develop.tsx`; `FEATURE_MODELS.chain`). Jacob, 26 Oct, on blind run 2.
+    - **Plan: derived state, then beat plans** ([docs/plan-2026-10-26-beat-plans-and-derived-state.md](docs/plan-2026-10-26-beat-plans-and-derived-state.md)). Jacob: the richer the data and metadata, the better the scaffolds; state should evolve, e.g. mood derived from recent success or failure.
+    - [x] **Derived state v1** (`src/core/world/derived.ts`). Computed from the live log, never stored as facts. Each value says why, and fades: this session counts fully, the last one half.
+      - **The log as events:** `Graph.log` (`load.ts` `liveLog`) records, for each entry, who rolled what and with which rule (from the choice's scaffold, or read from Loom's sentence for older entries), whether it was a fight, and a result's outcome (the tapped button).
+      - **PC momentum** (`momentumOf`): results are worth +1 for a success, −1 for a failure, +1.5 for a won fight, −2 for a lost one… A table roll counts for everyone. ≥2 is "on a roll", ≤−2 "rattled", with the reason ("failed 2 rolls").
+      - **Rule use** (`ruleUsesOf`): each house rule's rolls used this session, by whom, and in all. A rule move says "this would be use 3 this session, so its cost should grow". This counts the escalation Jacob wanted, rather than hoping the model remembers it.
+      - **Pace** (`paceOf`): "tense" after a fight or 3+ rolls in the last 4 choices (a roll counts when it's asked, not again at its result); "slack" after 5+ choices with neither.
+      - **Used by:**
+        - every improv and Develop prompt gets a LATELY block (`derivedLines`);
+        - moves lean on pace (tense favours hints and callbacks; slack, complications and arrivals) and on momentum (a rattled PC in a move's threads favours callbacks and payoffs; one on a roll, complications);
+        - PC profile lines say "rattled lately (failed 2 rolls)", and so does the inspector chip.
+      - 8 crafted checks (213/213). Live on the sample campaign with a staged rattled Bram: the LATELY block reached the prompt; improv (Haiku, 8.1 s) and Develop (Sonnet, 9.1 s, $0.023) both ran.
+      - **Next** (in the plan): tag events on direct changes (fight, help, theft, against whom) for disposition drift and faction alert; then the payload index and beat plans in Develop, behind a flag, measured blind on Haiku.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

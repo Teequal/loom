@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import { type EntityTraits, hasTrait, traitText } from "./entity-fields";
 import { historyOf } from "./history";
+import { momentumOf } from "./world/derived";
 import { activityOf, viewOf } from "./world/engine";
 import { loadGraph } from "./world/load";
 import { readMoment } from "./moment-reading";
@@ -96,7 +97,10 @@ async function entityNode(campaignId: number, id: number) {
   const traits = e.traits as EntityTraits;
   const secret = (f: string) => !!e.fieldMeta[f]?.secret;
   // How much an NPC has been on stage lately (the engine's measure, from notes and the table log).
-  const activity = e.type === "npc" ? activityOf(viewOf(await loadGraph(campaignId), readMoment([], ""))).get(e.name) ?? null : null;
+  // Derived, never recorded: an NPC's time on stage, a PC's run of luck at the table.
+  const view = e.type === "npc" || e.type === "pc" ? viewOf(await loadGraph(campaignId), readMoment([], "")) : null;
+  const activity = view && e.type === "npc" ? (activityOf(view).get(e.name) ?? null) : null;
+  const momentum = view && e.type === "pc" ? (momentumOf(view).get(e.name) ?? null) : null;
   // Where it is, as a chain of places (the Ritual Site › the Time Pocket › the Woods).
   const chain: NodeRef[] = [];
   for (let cur = e.actualLocationId ?? e.lastKnownLocationId ?? (e.type === "location" ? e.parentId : null), hops = 0; cur != null && hops < 6; hops++) {
@@ -135,6 +139,7 @@ async function entityNode(campaignId: number, id: number) {
     attitude: e.attitude,
     importance: e.importance,
     activity: activity && { band: activity.band, lastSession: activity.lastSession },
+    momentum: momentum?.band ? { band: momentum.band, because: momentum.because } : null,
     description: e.description,
     aliases: e.aliases,
     where: chain,

@@ -23,7 +23,27 @@ export interface Graph {
   problems: { at: string; issue: string }[];
   /** What happened at the table, session by session: the notes and the live log, for activity. */
   record: { session: number; text: string; weight: number }[];
+  /** The live log as events, oldest first: what was used, who rolled what, how it turned out. */
+  log: LogEvent[];
 }
+
+/**
+ * One entry of the live log, read for what the engine derives from it (derived.ts). Who rolled
+ * and which rule come from the choice's scaffold when Loom built it; a result's outcome is the
+ * button the GM tapped.
+ */
+export interface LogEvent {
+  id: number;
+  session: number;
+  kind: "asked" | "option" | "own" | "branch" | "result" | "note";
+  roller: string | null; // a PC's name, "table", or null when there's no roll
+  rollKind: string | null; // check, save, attack, notice, rule…
+  mechanic: string | null; // a house rule's name, for its roll
+  fight: boolean; // a fight was set up or started
+  outcome: "success" | "failure" | "partial" | "won" | "lost" | "fled" | "talked" | null; // results only
+}
+type Scaffoldish = { hand?: { kind?: string; to?: string; mechanic?: string }; hand_off?: { to?: string; kind?: string; mechanic?: string } };
+const OUTCOME: Record<string, LogEvent["outcome"]> = { succeeded: "success", success: "success", failed: "failure", failure: "failure", partly: "partial", partial: "partial", won: "won", lost: "lost", fled: "fled", "talked it out": "talked" };
 
 type Entity = typeof schema.entities.$inferSelect;
 const KIND: Record<string, NodeKind> = { pc: "character", npc: "character", item: "item", location: "place", faction: "faction", other: "other" };
@@ -73,9 +93,22 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     db.select().from(schema.effects).where(eq(schema.effects.campaignId, campaignId)),
   ]);
   const live = await db
-    .select({ session: schema.liveEntries.sessionNumber, moment: schema.liveEntries.moment, choice: schema.liveEntries.choice, kind: schema.liveEntries.choiceKind })
+    .select({
+      id: schema.liveEntries.id,
+      parentId: schema.liveEntries.parentId,
+      session: schema.liveEntries.sessionNumber,
+      moment: schema.liveEntries.moment,
+      choice: schema.liveEntries.choice,
+      kind: schema.liveEntries.choiceKind,
+      label: schema.liveEntries.choiceLabel,
+      options: schema.liveEntries.options,
+      developments: schema.liveEntries.developments,
+      awaiting: schema.liveEntries.awaiting,
+      encounter: schema.liveEntries.encounter,
+    })
     .from(schema.liveEntries)
-    .where(eq(schema.liveEntries.campaignId, campaignId));
+    .where(eq(schema.liveEntries.campaignId, campaignId))
+    .orderBy(schema.liveEntries.id);
   const threadIds = threads.map((t) => t.id);
   const [threadEntities, threadLinks, threadEvents] = threadIds.length
     ? await Promise.all([
@@ -309,6 +342,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     },
     entityKey,
     problems,
+    log: liveLog(live),
     // The notes count fully; what was used at the table counts fully; a moment only asked about
     // counts a little.
     record: [
@@ -316,4 +350,50 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
       ...live.map((l) => ({ session: l.session, text: l.kind ? `${l.moment} ${l.choice}` : l.moment, weight: l.kind ? 1 : 0.3 })),
     ],
   };
+}
+
+type LiveRow = { id: number; parentId: number | null; session: number; moment: string; choice: string; kind: string | null; label: string; options: { text: string; scaffold?: unknown }[]; developments: unknown[]; awaiting: string | null; encounter: unknown };
+
+/** The live log as events: who rolled what (from each choice's scaffold) and how it went. */
+function liveLog(rows: LiveRow[]): LogEvent[] {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  // The scaffold behind a used option (on the entry) or a used step (on the chain it came from).
+  const scaffoldOf = (r: LiveRow): Scaffoldish | null => {
+    if (r.kind === "option") return (r.options.find((o) => o.text === r.choice)?.scaffold as Scaffoldish) ?? null;
+    if (r.kind !== "branch") return null;
+    for (let up = r.parentId, hops = 0; up != null && hops < 10; hops++) {
+      const a = byId.get(up);
+      if (!a) break;
+      for (const d of a.developments as { kind?: string; chains?: { steps: { when: string | null; text: string; scaffold: Scaffoldish }[] }[] }[]) {
+        if (d?.kind !== "chain") continue;
+        for (const c of d.chains ?? []) for (const st of c.steps) if (`${st.when ? `${st.when} ` : ""}${st.text}` === r.choice) return st.scaffold;
+      }
+      up = a.parentId;
+    }
+    return null;
+  };
+  // Without a scaffold (older entries, the GM's own text), the roll is read from Loom's sentence.
+  const rollIn = (text: string) => {
+    const m = /(?:^|[.!?]\s+)([A-Z][\w' -]*?) makes an? [^.]*?\b(check|saving throw|contest|attack roll|death saving throw|roll)\b/.exec(text);
+    return m ? { roller: m[1] === "Everyone" ? "table" : m[1].trim(), rollKind: m[2] === "saving throw" ? "save" : m[2] === "attack roll" ? "attack" : m[2] } : null;
+  };
+  const rollOf = (r: LiveRow) => {
+    const s = scaffoldOf(r);
+    const h = s?.hand_off;
+    if (h?.kind === "roll") return { roller: h.to ?? null, rollKind: s?.hand?.kind ?? "check", mechanic: h.mechanic && h.mechanic !== "none" ? h.mechanic : null };
+    if (s) return { roller: null, rollKind: null, mechanic: null };
+    const t = rollIn(r.choice);
+    return t ? { ...t, mechanic: null } : { roller: null, rollKind: null, mechanic: null };
+  };
+  return rows.map((r) => {
+    const kind = (r.kind ?? (r.moment.startsWith("(noted") ? "note" : "asked")) as LogEvent["kind"];
+    if (kind === "result") {
+      const parent = r.parentId != null ? byId.get(r.parentId) : undefined;
+      const roll = parent ? rollOf(parent) : { roller: null, rollKind: null, mechanic: null };
+      const fight = parent?.awaiting === "fight" || !!parent?.encounter;
+      return { id: r.id, session: r.session, kind, ...roll, fight, outcome: OUTCOME[r.label.trim().toLowerCase()] ?? null };
+    }
+    const roll = kind === "asked" ? { roller: null, rollKind: null, mechanic: null } : rollOf(r);
+    return { id: r.id, session: r.session, kind, ...roll, fight: r.awaiting === "fight" || !!r.encounter || roll.rollKind === "attack", outcome: null };
+  });
 }

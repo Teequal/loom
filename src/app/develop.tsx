@@ -53,6 +53,9 @@ interface ChainDev {
 type Slot = { steps: Step[]; chain?: Chain };
 type Llm = { model: string; seconds: number; costUsd: number };
 
+// Develop runs on Sonnet whatever the table's tier, and on Opus when the table is on Best: on chains,
+// Haiku managed 3 of 24 usable in blind run 2 against Sonnet's 8 of 8.
+const developModel = (tier: string) => (tier === "opus" ? "opus" : "sonnet");
 const isChainDev = (d: unknown): d is ChainDev => !!d && typeof d === "object" && (d as { kind?: string }).kind === "chain";
 const stepText = (s: Step) => `${s.when ? `${s.when} ` : ""}${s.text}`;
 const threadRefs = (ts: { id: number; title: string }[]) => ts.map((t) => ({ kind: "thread" as const, id: t.id, name: t.title }));
@@ -118,7 +121,7 @@ export function Develop({
           count: more ? 1 : prefs.developOptions,
           devId: more ? (devId ?? undefined) : undefined,
           exclude: more ? slots.flatMap((s) => (s.chain ? [s.chain.move] : [])) : undefined,
-          model: live.model,
+          model: developModel(live.model),
           tone: live.tone,
         },
         (e) => {
@@ -303,7 +306,7 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
     try {
       const done = await stream<{ chain: Chain }>(
         "/api/develop/refine",
-        { entryId, devId, chain: index, how: h, fromStep, model: live.model, tone: live.tone },
+        { entryId, devId, chain: index, how: h, fromStep, model: developModel(live.model), tone: live.tone },
         (e) => {
           if (e.type === "step" && fromStep != null) setPreview((p) => Object.assign([...(p ?? [])], { [Number(e.n)]: e.step as Step }));
         },
