@@ -1,6 +1,6 @@
 # Design: the property model (sub-properties, properties and interplays)
 
-26 Oct 2026. Status: **design, for Jacob's review.** Nothing here is built yet.
+26 Oct 2026. Status: **design, reviewed by Jacob (answers in section 16).** Nothing here is built yet.
 
 ## 1. What this is for
 
@@ -70,16 +70,42 @@ Ranges use the existing scale where one exists (−3 … +3, as for mood, stance
 | `mind.beliefs[b].text`, `.true` | text, yes/no/unknown | as now ("he can't die", untrue) | DM, extraction |
 | `mind.beliefs[b].conviction` | 1–3 | how firmly held | DM, extraction, inferred |
 | `mind.mood` | −3 … +3 | the recorded mood, as now | DM, extraction; table (a slow drift, section 8.4) |
-| `mind.values.compassion` | −3 … +3 | cruel ↔ kind | DM, extraction, inferred |
-| `mind.values.honesty` | −3 … +3 | deceitful ↔ honest | DM, extraction, inferred |
-| `mind.values.courage` | −3 … +3 | timid ↔ bold (Bram's recklessness is +3) | DM, extraction, inferred |
-| `mind.values.ambition` | 0–3 | how much they want more | DM, extraction, inferred |
-| `mind.values.loyalty` | 0–3 | how much loyalty means to them, in general | DM, extraction, inferred |
 | `mind.fears[f]` | text, strength 1–3, optional target | what they fear | DM, extraction |
 | `mind.bonds[b]` | text, strength 1–3, optional target | who or what they hold dear | DM, extraction |
 | `mind.wants`, `flaws`, `ideals` | text lists | as now: description, read by the model, not the engine | DM, extraction |
 
-Five values is deliberate: few enough to fill, enough to make the interplays below work. More can be added as rows later (open question 2).
+**Temperament comes in layers, not a flat list of values** (Jacob: "courage is really a mixture of other things… an NPC may become courageous because of a rise in confidence or stakes or something else"). Something like courage isn't recorded at all. It's a **situational property** (section 5.2), worked out for each moment from three layers:
+
+**Dispositions:** what someone is like underneath. They're stable and change slowly, only through big events or the DM. Each is −3 … +3, optional.
+
+| Path | Poles | Notes |
+|---|---|---|
+| `mind.disposition.compassion` | cruel ↔ kind | |
+| `mind.disposition.honesty` | deceitful ↔ honest | |
+| `mind.disposition.boldness` | timid ↔ daring | temperament, not courage: what they start from before anything is at stake |
+| `mind.disposition.temper` | calm ↔ volatile | how quickly anger takes over |
+| `mind.disposition.pride` | humble ↔ proud | how much face matters |
+| `mind.disposition.greed` | content ↔ grasping | |
+| `mind.disposition.curiosity` | incurious ↔ prying | |
+| `mind.disposition.discipline` | impulsive ↔ controlled | how far they act on feeling |
+| `mind.disposition.faith` | cynical ↔ devout | in a god, a cause or a person |
+| `mind.disposition.fidelity` | fickle ↔ steadfast | how much loyalty itself means to them |
+
+**States:** how they are *right now*. They move with events and settle back toward a baseline (section 8.3). Each is 0–3 unless noted.
+
+| Path | Meaning | Moved by |
+|---|---|---|
+| `mind.state.confidence` | −3 … +3: shaken ↔ sure of themselves | wins and losses, momentum, praise, humiliation |
+| `mind.state.fear` | general fear (fear *of someone* is a pair weight) | threats, wounds, a fearsome presence |
+| `mind.state.anger` | how angry they are | insults, harm to them or theirs, being thwarted |
+| `mind.state.hope` | how much they believe things can go well | a goal advanced or thwarted; good or bad news |
+| `mind.state.strain` | how worn down they are | sustained pressure, no rest, a secret kept |
+
+Mood stays as the recorded summary. A drift built from the states (hope and confidence lift it; fear, anger and strain lower it) is shown beside it (8.4).
+
+**Situational properties** (section 5.2) combine dispositions, states, the scene and the threads. Courage, restraint, candour in the moment, generosity and susceptibility are examples. They're never stored, and always worked out for the moment in front of the table.
+
+Ten dispositions and five states is a first set. They're rows in the registry, so more can be added. The aim (Jacob's) is depth that makes the model's output far more aware of context *without extra model thinking*. The engine does the composing; the model gets the result and the reason.
 
 **Body and state:** as now. Status, health band, conditions and form already drive capabilities. **Conditions gain a source and a target:** "charmed *by Iresia*", "frightened *of Varek*". The charm law ("can't harm the one who charmed them") and the interplays below need to know who.
 
@@ -144,6 +170,8 @@ What's there now (stakes level, `ifIgnored`, deadline, roles, heat) plus:
 
 ## 5. Properties: made from sub-properties
 
+Properties can be made from sub-properties, **from other properties**, and **from the scene**. That's how the model goes deep. Courage is made from boldness (a disposition), confidence (a state) and what's at stake *here* (the scene), and confidence is in turn moved by momentum and recent results. The engine computes them as a small network: each property lists its inputs. The network is checked at load for loops, and its depth is capped at 4, so it stays explainable and fast.
+
 A property is a row in the **property table**, which gives:
 - **inputs:** paths, which may include links;
 - **a formula**, from a short list of combinators in code: weighted mean, sum, clamp, the larger or smaller of two, and "adjust by";
@@ -153,23 +181,45 @@ A property is a row in the **property table**, which gives:
 
 The formulas are deliberately simple and visible. A DM can read why "resolve: iron" and agree or not.
 
-### 5.1 The first set
+### 5.1 The first set (built from records)
 
 | Property | Made from | Formula (plain words) | Bands |
 |---|---|---|---|
 | **intent** (a character's, or a faction's) | each active goal's intent and priority | average of goal intents, weighted 3 / 2 / 1 by priority | malign ≤ −1.5 · self-serving −1.5…−0.5 · mixed −0.5…+0.5 · benign ≥ +0.5 |
-| **resolve** | top goal's commitment; strongest belief's conviction; courage; mood; health; momentum (PCs) | commitment + conviction/2 + courage/2, adjusted −1 if critical or unconscious, +1 or −1 for mood ≥ +2 or ≤ −2, ±1 for momentum | wavering ≤ 1 · steady 2–3 · iron ≥ 4 |
+| **resolve** | top goal's commitment; strongest belief's conviction; confidence; strain; wounds; what's at stake (5.2) | commitment + conviction/2 + confidence/2 + at stake/2 − strain/2, −1 if critical or unconscious | wavering ≤ 1 · steady 2–3 · iron ≥ 4 |
 | **standing with the party** (NPCs) | warmth from them to each PC, weighted by trust; their stance to the party as fallback | trust-weighted average warmth to PCs | hostile ≤ −2 · cold −2…−0.5 · neutral · warm ≥ +0.5 · devoted ≥ +2.5 |
 | **pressure on** a character | fear of anyone near; debt to anyone near; health; a goal blocked | fear (max) + debt (max) + blocked goals | at ease · pressed ≥ 2 · cornered ≥ 4 |
-| **confidence** (PCs) | mood; momentum; health | mood + momentum ± health | shaken · steady · bold |
+| **confidence** (as shown) | the confidence state; momentum (PCs); health | confidence + momentum ± health | shaken · steady · sure |
 | **cohesion** (factions) | members' loyalty to the faction, and warmth to its leader | average loyalty, less one for each member with loyalty ≤ 1 and leader warmth ≤ 0 | fractured · holding · united |
 | **pressure** (threads) | stakes, urgency or deadline, neglect, heat | as heat today, plus urgency | quiet · building · urgent |
 | **temptation** (holder and item) | item's pull; holder's resolve; uses this session | pull + uses/2 − resolve/2 | none · tugging · gripping |
 | **reputation** (the party, with a faction) | warmth to the PCs from the faction's members, weighted by their importance; the faction's stance and alert | weighted average warmth, less alert/2 | wanted · distrusted · unknown · welcome · honoured |
 
+### 5.2 Situational properties: worked out for this moment
+
+These take **scene inputs**, which the engine already knows for every moment:
+- **at stake for them:** stakes of threads they have a role in and that are in play; a goal of theirs the moment touches; a bond whose target is in danger;
+- **allies present:** characters here with warmth +2 toward them;
+- **threat present:** characters here they fear, or who are hostile to them, and danger at the place;
+- **provocation:** the moment or the last choice harms, insults or thwarts them;
+- **observed:** whether people whose regard they care about (respect ≥ +2) are here.
+
+| Property | Made from | Plain words | Bands |
+|---|---|---|---|
+| **courage** | boldness + confidence + at stake (a bond or top goal raises it most) + allies present − threat present − fear − wounds | someone timid finds courage when the one they love is in danger; someone bold loses it when wounded, alone and outmatched | cowed · wary · steady · brave · reckless |
+| **restraint** | discipline − temper − anger − provocation + (observed × pride) | whether they keep their head, or say and do what they'll regret | snaps · strained · holds |
+| **candour** (here) | honesty − pressure − (at stake × greed) + trust toward the one asking | whether they'll tell the truth to *this* person *now* | lies · evades · half-truths · candid |
+| **generosity** (toward someone) | compassion − greed + warmth toward them + hope | whether they'll give, share or help without being paid | grasping · trades · gives |
+| **susceptibility** (to persuasion, charm, fear) | −(fidelity to the goal it cuts against) − resolve + strain + trust toward the persuader | how easily they're moved, and by whom | immovable · resistant · open · pliable |
+| **resolve** (now layered) | commitment + conviction + confidence + at stake − strain − wounds | as in 5.1, now built from states | as in 5.1 |
+
+Situational properties are what interplays and moves mostly read. That's why an NPC can be brave in one scene and cowed in the next, for reasons the DM can see ("courage brave: Pip is in danger (bond 3), Tomas is beside her; despite being timid").
+
+### 5.3 Unknowns and explanations
+
 **Unknowns:** each property says how many of its inputs are known ("resolve steady (2 of 4 known)"). Below a set minimum it's unknown; "intent" needs at least one goal with an intent. The engine only acts on a band when the property is known enough; the prompt says "partly known" when it isn't.
 
-**Explanations:** each property's *because* lists its strongest inputs, worded from the registry ("committed to finishing the ritual (3); confident (mood +2); unhurt"). These are the lines the inspector shows and the prompt uses.
+**Explanations:** a layered property explains itself in layers, folded. The top line gives the two or three strongest inputs ("brave: Pip in danger; Tomas beside her"), and the inspector opens each one ("confidence +2: won the fight at the gate, session 6"). Each property's *because* lists its strongest inputs, worded from the registry ("committed to finishing the ritual (3); confident (mood +2); unhurt"). These are the lines the inspector shows and the prompt uses.
 
 ## 6. Interplays: relationships between properties
 
@@ -230,6 +280,12 @@ One character can carry several at once (devoted to Kira *and* conflicted about 
 - **Bounds:** a tension on the same character can loosen an alignment's bound only where the table says it may. Conflicted can loosen steadfast's "won't act against their goal"; nothing loosens the charm law or devoted's "won't attack the one they're devoted to". The table lists, for each tension, which bounds it may loosen.
 - **Moves:** each interplay is its own move source. When two point the same way (devoted and torn loyalties, both toward Pip), they add up; when they point opposite ways, both moves are offered and the steers and variety pick.
 - **Contradictory records** (an intent of +3 and a goal "murder the council") are a data problem, not an interplay. The inspector flags them for the DM ("these disagree: check one"), and the engine treats the property as partly known until they're fixed.
+
+### 6.4 History and the DM's overrides
+
+Interplays are worked out fresh for every moment, from their parts; they aren't stored on the object. So a change to a part is reflected at once, and nothing goes stale. Two things are kept:
+- **When an interplay starts or stops holding** (after a session's changes, or after a used choice), the engine writes it to the change log. The inspector can say "conflicted since session 5", and a callback can use the moment it began.
+- **The DM's override:** an entry on the object switches an interplay on or off for that character ("Ysolde isn't conflicted, she's just greedy"; "treat Tomas as torn, whatever the numbers say"). It's stored as the DM's own entry, wins over the computed result, and is marked ✎ in the inspector. The same works for a property's band ("treat her courage as brave").
 
 ## 7. How the scaffold pulls them
 
@@ -313,6 +369,15 @@ Some interplays **offer** a turn, which the DM can take or leave:
 - Interplays: **hollow loyalty** and **fear over greed**.
 - The toll-house raid's options now include "a guard quietly tells them where the key is, if they can promise the captain won't know", rather than another generic lookout.
 
+### 7.8 Surprises
+
+Jacob wants occasional surprises. The engine has chance, but only over **explicable** choices: it never picks something the records can't explain.
+- **What a surprise is:** a move that breaks with the obvious expectation, for a reason the data supports. Examples: a minor bond outweighing a major goal ("the brute spares the child: a bond he never talks about"); a weak interplay winning over a strong one; a GM-secret goal surfacing as a hint; a disposition at odds with a state (a timid NPC's courage spiking when a bond is at stake).
+- **How often:** a **surprise setting** (Settings: off · rare · sometimes · often; default rare). On each ask, a chance of that size (rare about 1 in 8, sometimes 1 in 4, often 1 in 2) swaps one move for a **surprise move**: the best-scoring move among those built from a minor input (a low-priority goal, a bond, a weak interplay, a disposition against the band). It's never one that breaks a law: the dead stay dead, the charm law holds, PCs stay the players'.
+- **Seeded, not random:** the chance is decided from the entry's id, so a rerun of the same moment gives the same result, and tests can pin it.
+- **Marked for the DM:** the option is tagged *surprise* with its reason ("a surprise: Varek has a soft spot for children (bond 1)"), so it's always the DM's call, and never mistaken for the engine misreading someone.
+- **Measured:** do surprises get used, and do they read as in character once explained?
+
 ## 8. How sub-properties change
 
 ### 8.1 Where changes come from, and who wins
@@ -340,7 +405,11 @@ Events are typed from what's already known when a choice is used: its move kind,
 | party spares a beaten foe | a won fight, then a choice side with approach talk or wait | X→PCs warmth +1, respect +1 |
 | X's goal advanced or thwarted | a thread progressed or resolved where X's goal targets it (goal.target = thread) | that goal's status; X's mood ±1 |
 | X's loyalty tested | a defect or choose-a-side move used | X→leader loyalty −1 |
-| a charm breaks | a failed hold-the-charm check | the condition removed (risky tier: a question) |
+| a charm breaks | a failed hold-the-charm check | the condition removed (risky tier: a question); X anger +1 |
+| X wins or loses a fight, or is wounded | a fight result; health dropping | confidence ±1; fear +1 on a loss; strain +1 if wounded |
+| X is insulted, harmed or thwarted | a hand-off or move with the party against X (Intimidation on X, a theft from X, a goal of X's blocked) | anger +1 |
+| good or bad news for X's goal | a thread they have a role in progressing toward or away from their goal | hope ±1 |
+| X keeps a secret under pressure | a turn about what X knows that X didn't answer, or a lie that held | strain +1 |
 
 **Caps and size:**
 - each nudge is ±1;
@@ -349,8 +418,8 @@ Events are typed from what's already known when a choice is used: its move kind,
 
 ### 8.3 Fading and settling
 
-- **Lasting** (until changed): goals, values, intent, the pair weights, loyalty, debt.
-- **Settling back toward a baseline:** mood (toward the recorded value, one step per session), fear (one step every two sessions, unless the cause is still present), faction alert (one step per session).
+- **Lasting** (until changed): goals, intent, the pair weights, loyalty, debt. Dispositions are lasting too, and move only through big events (a goal achieved or lost, a betrayal, a death), at most one step a session, always as a question.
+- **Settling back toward a baseline:** the states settle each session: confidence and hope one step toward 0; anger one step toward 0, or two if the cause is gone; fear one step every two sessions unless its cause is still present; strain one step after a rest. So do faction alert (one step a session) and the mood drift (toward the recorded mood).
 - **Log-derived:** as built (this session counts fully, the last half).
 
 ### 8.4 Mood that moves
@@ -373,7 +442,7 @@ Every write, from any source, goes through `state_changes` with before and after
 
 - **Character, item, faction, place and thread sub-properties** live in `traits` (validated by `TraitsSchema`) and the typed node fields, extended:
   - goals, beliefs, fears and bonds become **items with ids and weights**. Old plain strings and `{text, priority}` items are read as items with blanks; nothing is lost.
-  - `mind.values` is a new object of five optional numbers.
+  - `mind.disposition` (ten optional numbers) and `mind.state` (five optional numbers) are new objects. States carry the session they were last set, for settling.
   - Conditions gain `by` and `target` (node references).
   - Items gain `power`, `pull`, `cost.severity` and `cost.grows`; factions gain `aims`, `aggression` and `alert`; places gain `danger` and hazard severity; threads gain `urgency`.
 - **Pair weights** get a new table, `pair_weights` (campaign, from, to, warmth, trust, fear, respect, debt, loyalty, field_meta), one row per direction of a pair. Relationship types stay in `entity_relations`. Defaults from types are computed, not stored.
@@ -386,8 +455,8 @@ Every write, from any source, goes through `state_changes` with before and after
 The model is only as good as its data, and today's data is thin. Real Duradan has 0 of 18 characters with goals; the copy has them but no intents. Four routes, in order:
 
 1. **Defaults from what exists:** warmth, trust, fear, debt and loyalty from relationship types; stance to the party from attitude. This is free and immediate, and shown as defaults.
-2. **The enriched copy**, filled by hand for testing: intents, commitments, values and pair weights for about eight characters, enough for every first-set interplay to fire at least once and for some to be near misses.
-3. **An inference pass** for an existing campaign: one call per campaign (Haiku or Sonnet), proposing intent and commitment for each goal, values for each named character, and pair weights for each relationship, each with a quote from the notes and an "implied" confidence. It's reviewed in the existing tiered review: implied values go to "confirm", and anything contradicting a DM value becomes a question. Blanks stay blank where the notes say nothing.
+2. **The enriched copy** ("Duradan (enriched test copy)", campaign 12), filled by hand for testing: intents, commitments, dispositions, states and pair weights for about eight characters, enough for every first-set interplay and situational property to fire at least once, and for some to be near misses.
+3. **An inference pass** for an existing campaign: one call per campaign (Haiku or Sonnet), proposing intent and commitment for each goal, dispositions for each named character, and pair weights for each relationship, each with a quote from the notes and an "implied" confidence. It's reviewed in the existing tiered review: implied values go to "confirm", and anything contradicting a DM value becomes a question. Blanks stay blank where the notes say nothing. **It runs on the enriched copy** (Jacob, 26 Oct), never the real Duradan. Real Duradan fills from Jacob's own entries and future notes.
 4. **Extraction going forward:** the recap and live extractors propose the new sub-properties alongside what they propose now, under the same evidence rules, and the "don't assert causes the notes don't state" rule.
 5. **Asking only when it matters:** when a move would turn on an unknown ("would Vex'ahlia resist? her commitment isn't known"), the engine can raise a one-tap question in the tray. It never asks for everything.
 
@@ -436,13 +505,13 @@ Each step is testable on its own.
    - engine accessors that return value, source, known or unknown, and *because*.
 
    Checks.
-2. **Properties:** the table, the combinators, the first set (5.1), unknown handling and explanations. The inspector shows them read-only. Checks.
-3. **Interplays:** the table, the first set (6.1) with examples, strength and budgets; prompt lines; the campaign page's tensions list. `test:engine` runs the rows.
+2. **Properties:** the table, the combinators, the network (properties from properties, loop check, depth cap), the scene inputs, the first set (5.1) and the situational set (5.2), unknown handling and layered explanations. The inspector shows them read-only. Checks.
+3. **Interplays:** the table, the first set (6.1) with examples, strength and budgets, overlap rules (6.3), starts and ends in the change log, DM overrides (6.4); prompt lines; the campaign page's tensions list. `test:engine` runs the rows.
 4. **Data:**
    - the enriched copy filled by hand;
-   - the inference pass (reviewed) for the sample campaign and Duradan;
+   - the inference pass (reviewed) on the enriched copy and the sample campaign;
    - extraction proposing the new fields.
-5. **Moves, casts and hand-offs** from interplays (7.3, 7.6). Blind run on Haiku and Sonnet.
+5. **Moves, casts and hand-offs** from interplays and situational properties (7.3, 7.6), and surprises (7.8). Blind run on Haiku and Sonnet.
 6. **Table events:** the event table (8.2), caps, fades, the sign-crossing question, and undo through direct changes and results. Checks.
 7. **DM editing:** inspector controls, the pair view, the CLI.
 8. **Beat plans:** payloads from sub-properties, properties and interplays (7.4), and behaviour bounds on typed acts (7.5). Blind run, measured against step 5.
@@ -455,12 +524,18 @@ Each step is testable on its own.
 - **Beat plans** (planned) get their richest payloads from here, so this comes first, as agreed.
 - **Stage 4** (storage, extraction and typed editing) is largely this: the typed fields, extraction into them, and the inspector editing them.
 
-## 16. Open questions for Jacob
+## 16. Decisions (Jacob, 26 Oct)
 
-1. **What intent measures.** I've proposed *who a goal is good for*, from −3 (harms others) to +3 (helps others), with how a character stands toward the party handled separately by warmth and trust. The alternative is intent toward the party specifically. I'd keep it general: that's what lets "harmful goals but friendly with the party" be a tension at all.
-2. **The five values** (compassion, honesty, courage, ambition, loyalty). Too many, too few, or the wrong ones for your table?
-3. **How fast the table moves people.** Proposed: ±1 per meaningful event, at most ±2 per session, with a question before anyone flips from friend to foe. Faster feels more alive; slower feels more stable.
-4. **Interplays on PCs.** Proposed: only as offers (temptations, spotlight, sensations, questions), never shaping what a PC does. Is that the line you want?
-5. **Chance.** Proposed: no dice inside the engine. A conflicted NPC's waver is a likelier move, not a 1-in-3 roll. Do you want an occasional "they surprise you" element?
-6. **Which interplays first.** The fourteen in 6.1 are a starting set. Are there ones from your table you'd add (a curse that feeds on a vice, a rivalry that softens)?
-7. **Inference on the real campaign.** Should the one-off pass run on Duradan, reviewed in the usual tiers, or should Duradan be filled only by hand and from future notes?
+1. **Intent is general:** who a goal is good for, −3 harms others … +3 helps others. How someone stands toward the party is handled by warmth and trust. That's what makes "harmful goals but friendly with the party" a tension at all.
+2. **Depth over a flat list of values.** Jacob: "courage is really a mixture of other things… an NPC may become courageous because of a rise in confidence or stakes or something else… It makes the models outputs far more contextually aware without extra model thinking." Temperament is now layered:
+   - dispositions (stable);
+   - states (moving, settling);
+   - situational properties worked out per moment from both and the scene (courage, restraint, candour, generosity, susceptibility, resolve).
+
+   Properties can be built from properties, to a depth of 4 (sections 4.1, 5.2).
+3. **Table nudges:** start at ±1 per meaningful event, at most ±2 per session, with a question before anyone flips from friend to foe.
+4. **Interplays on PCs** are only offers (temptations, spotlight, sensations, questions). They never shape what a PC does.
+5. **Surprises, yes:** seeded chance over explicable moves only, with a setting and a *surprise* tag with its reason (section 7.8).
+6. **Start with the fourteen interplays** in 6.1, and expand from play.
+7. **Inference and test data on the enriched copy** (campaign 12), not the real Duradan.
+8. **Interplays are computed, not stored.** Their starts and ends go to the change log, and the DM can override one per character (section 6.4).

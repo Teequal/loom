@@ -571,6 +571,15 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
       - **Uses:** these feed moves, casts, hand-offs, behaviour bounds and beat-plan payloads.
       - **How values change:** DM edits, extraction, capped table nudges from direct changes and results, and a reviewed inference pass; with fades and undo.
       - **Build order:** 8 steps. Beat plans come after it. Derived state v1 becomes its log-derived sub-properties.
+      - **Jacob's decisions (26 Oct):**
+        - intent is general (who a goal is good for);
+        - temperament is layered: ten dispositions (stable), five states (confidence, fear, anger, hope, strain; moving and settling), and situational properties worked out per moment from both and the scene (courage, restraint, candour, generosity, susceptibility, resolve), with properties built from properties to a depth of 4;
+        - table nudges ±1 per event, ±2 per session, with a question before a friend-to-foe flip;
+        - interplays on PCs are only offers;
+        - seeded surprises over explicable moves, with a setting and a reason shown;
+        - the 14 interplays to start;
+        - inference and test data on the enriched copy only;
+        - interplays computed, not stored, with their starts and ends in the change log and per-character DM overrides.
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 
