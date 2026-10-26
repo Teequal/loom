@@ -1,6 +1,6 @@
 import { applyPlans, beatPlansOn, planMoves, plansBlock, PLAN_TEXT, spentThisSession, type PlanBeat } from "./beat-plans";
 import { z } from "zod";
-import { APPROACH_SKILLS, FLAVOURS, adoptHand, handText, type Approach, checkOption, contextPrompt, fitToMove, liveRulesOf, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
+import { APPROACH_SKILLS, FLAVOURS, adoptHand, handText, type Approach, checkOption, contextPrompt, fitToMove, liveRulesOf, settleLost, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
 import { callLlm, type LlmResult } from "./llm";
 import { db, schema } from "./db/client";
 import { PILLARS } from "./db/schema";
@@ -188,6 +188,7 @@ export class StepRunner {
   private said: string[] = []; // what the choice and the steps so far say, for what a turn may ask about
   plans = new Map<string, PlanBeat[]>(); // the moves' beat plans, when they're on
   private usedPlans = new Set<string>(); // plan beats the chain has already written
+  private lost = new Set<string>(); // things dropped sentences introduced: later steps can't refer to them
   constructor(
     private p: Prepared,
     private head: RawHead,
@@ -229,6 +230,9 @@ export class StepRunner {
     // A move's cast member who has arrived may now act here.
     const move = this.move && { ...this.move, cast: this.move.cast.map((c) => (c.can === "arrive" && this.present.has(c.name) ? { ...c, can: "act" as const } : c)) };
     const stepOption = { ...this.head, label: this.label, setup: raw.setup, hand: raw.hand, on_fail: raw.on_fail, why: "", hand_off: { to: raw.hand.to, kind: "question" as const, mechanic: "none", text: "" } } as ScaffoldOption;
+    // Each sentence remembers its place, so code can tell later which were dropped.
+    const rawSetup = (raw.setup ?? []) as unknown as { does?: string; kind?: string; src?: number }[];
+    rawSetup.forEach((b, i) => (b.src = i));
     const filled = fillSlots(applyPlans(adoptHand(stepOption), this.plans, this.log, this.usedPlans), this.p.lists.tagger);
     for (const d of filled.dropped) this.log.push({ label: this.label, reason: `step ${n + 1}: sentence dropped: ${d}` });
     if (filled.problem) return void this.end(`step ${n + 1}: ${filled.problem}`);
@@ -260,6 +264,13 @@ export class StepRunner {
       if (calm.length) o.setup = calm;
       else return void this.end(`step ${n + 1}: only an arrival, in a ${this.steer} chain`);
     }
+    // What a dropped sentence set up (in this step or an earlier one) never happened.
+    const keepLog = (x: { label: string; reason: string }) => this.log.push({ label: x.label, reason: `step ${n + 1}: ${x.reason}` });
+    const sink: { label: string; reason: string }[] = [];
+    const left = settleLost(o, rawSetup, sink, this.lost);
+    sink.forEach(keepLog);
+    this.lost = new Set(o.lost ?? []);
+    if (!left) return void this.end(`step ${n + 1}: nothing left once what dropped sentences set up was removed`);
     if (this.steer === "quiet" && o.hand && ["attack", "save"].includes(o.hand.kind)) {
       o.hand = { kind: "question", to: o.hand.to };
       o.hand_off = { to: o.hand.to, ...handText(o.hand) };

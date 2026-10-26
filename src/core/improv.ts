@@ -18,7 +18,7 @@ import { derivedLines } from "./world/derived";
 import { interplayLine, interplaysOf } from "./world/interplays";
 import type { NodeKey } from "./world/nodes";
 import { propertiesOf } from "./world/properties";
-import { BODY_PARTS, expand, fillSlots, pcOpensClause, SENSATIONS, type Ref } from "./slots";
+import { BODY_PARTS, cascadeDropped, expand, fillSlots, pcOpensClause, refersTo, SENSATIONS, type Ref } from "./slots";
 import type { Overrides, RecordFix } from "./situation";
 export type { RecordFix };
 import { capabilitiesOf, checkBeat, checkOnFail, checkPossession, makeTagger, notInScene, type CheckContext, type Possession, type ScaffoldBeat, type Tagger } from "./scaffold";
@@ -38,6 +38,7 @@ export interface ScaffoldOption {
   hand?: Hand; // what the model chose, in parts
   refs?: Ref[]; // who and what the sentences name, with the part each plays ({1}, {2} in the text)
   move?: string; // the engine's move it builds on ("M2"), from moves.ts
+  lost?: string[]; // things dropped sentences introduced: nothing may refer to them (headline included)
   anchor?: string; // soft plans: the anchor fact it lands ("M2.a1")
   intent?: string; // soft plans: how that fact lands in this moment, in the model's words
   // That move, as it was: kept with the scaffold so a used choice knows what it was (table nudges).
@@ -838,6 +839,19 @@ ${p.direction ? `\nWHERE THE GM WANTS THE STORY TO GO\n${p.direction}\n` : ""}${
  * outside the move's cast is dropped with their sentence (anyone else is a walk-on), as is any
  * sentence breaking a world-model check. Only an option left with nothing loses its setup.
  */
+/**
+ * Runs the dropped-sentence cascade (slots.ts) on an option and rewrites its hand-off sentence if
+ * the hand changed. False when nothing is left to show.
+ */
+export function settleLost(o: ScaffoldOption, rawSetup: { does?: string; kind?: string }[], log: { label: string; reason: string }[], carried: Iterable<string> = []) {
+  const before = JSON.stringify(o.hand);
+  const lost = cascadeDropped(o, rawSetup, (reason) => log.push({ label: o.label, reason: `sentence dropped: ${reason}` }), carried);
+  o.lost = [...lost];
+  if (o.hand && JSON.stringify(o.hand) !== before) o.hand_off = { to: o.hand.to, ...handText(o.hand) };
+  if (o.hand_off.kind !== "roll" && o.on_fail.target !== "none") o.on_fail = { target: "none", effect: "" };
+  return o.setup.length > 0;
+}
+
 export function fitToMove(o: ScaffoldOption, moves: Move[], c: CheckContext, droppedSentences: { label: string; reason: string }[]) {
   const move = moves.find((m) => m.id === o.move);
   if (move && !move.threads.includes(Number(o.thread.replace(/^T/, "")))) o.thread = `T${move.threads[0]}`;
@@ -906,7 +920,7 @@ ${moment}`;
       // A headline is about the world or an NPC: one that opens with a PC ("Kira must signal Bram…")
       // is about what the player does, so it falls back.
       const pcLed = (t: string) => scene.pcs.some((p) => new RegExp(`^${p.name.split(/\s+/)[0]}\\b(?!['’]s)`, "i").test(t));
-      const fine = (t: string) => !!t && t.split(/\s+/).length <= 13 && !planSlips(t, scene.pcs).length && !/\bwalk-on\b/i.test(t) && !pcLed(t) && !notInScene(lists.tagger.tag(t), lists.check) && !pcOpensClause(lists.tagger.tag(t), lists.tagger);
+      const fine = (t: string) => !!t && !refersTo(t, o.lost ?? []) && t.split(/\s+/).length <= 13 && !planSlips(t, scene.pcs).length && !/\bwalk-on\b/i.test(t) && !pcLed(t) && !notInScene(lists.tagger.tag(t), lists.check) && !pcOpensClause(lists.tagger.tag(t), lists.tagger);
       const h = lists.tagger.render(lists.tagger.tag(o.headline ?? ""));
       if (fine(h)) return h;
       // Otherwise the first beat, or its first clause, or the label: whole words, never cut off.
@@ -949,12 +963,17 @@ ${moment}`;
         rejected.push({ label: (raw as { label?: string })?.label ?? "an option", reason: "unusable answer (a value outside the allowed lists)" });
         return;
       }
+      // Each sentence remembers its place in the answer, so code can tell later which were dropped.
+      const rawSetup = (parsed.data as { setup: { does?: string; kind?: string; src?: number }[] }).setup;
+      rawSetup.forEach((b, i) => (b.src = i));
       const filled = fillSlots(applyPlans(adoptHand(parsed.data as unknown as ScaffoldOption), plans, droppedSentences), lists.tagger);
       for (const d of filled.dropped) droppedSentences.push({ label: (parsed.data as { label: string }).label, reason: `sentence dropped: ${d}` });
       if (filled.problem) return rejected.push({ label: (parsed.data as { label: string }).label, reason: filled.problem });
       const o = filled.option;
       normaliseHandOff(o, lists.check);
       fitToMove(o, moves, lists.check, droppedSentences);
+      // What a dropped sentence set up never happened: nothing later may refer back to it.
+      if (!settleLost(o, rawSetup, droppedSentences)) return rejected.push({ label: o.label, reason: "nothing left once what dropped sentences set up was removed" });
       const reason = checkOption(o, lists.check);
       if (reason) return rejected.push({ label: o.label, reason });
       accepted.push(o);

@@ -791,8 +791,20 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
       - **Self-reference** (`selfReference` in `slots.ts`): a sentence where a character names themself as someone else ("Varek sends word to Varek", "Tomas warns Tomas") is dropped. The model wrote it from another character's side. Their own possessive is fine.
       - **Body parts:** a sentence opening on a body part after a named character reads as theirs ("Vex'ahlia's jaw tightens", not "Vex'ahlia jaw tightens").
       - **Live** (the six blind-set moments, Haiku, no plans): 18 of 18 options shown, 1 rejected, 3 sentences dropped. No self-references or broken possessives; Darius begging now gets a question, not a Stealth roll. 9.7 s average against 8.0 s in the blind run, from a prompt only ~100 tokens longer; probably API variance, not proven.
-      - **Seen, not fixed:** when a sentence is dropped, a later one can still mention what it set up ("pocket the note?" after Vex's note was dropped).
       - 14 crafted checks (351/351).
+    - [x] **What a dropped sentence set up stays gone** (26 Oct; Jacob: "once dropped it should not be able to come up").
+      - **How it knows what was dropped:** each raw sentence gets its position (`src`) before any check runs, so whatever is missing at the end was dropped, by any check.
+      - **What it set up:** the things that sentence brought in with "a", "an", "some" or "another", by head noun (`introducedNouns`: "sends a scrawled note by a courier" → note, courier). A kept sentence that brings one in itself keeps it alive.
+      - **The cascade** (`cascadeDropped` in `slots.ts`, `settleLost` in `improv.ts`): anything referring back ("the note", "Vex's note", "his courier"; `refersTo`) goes.
+        - A later sentence is dropped, and so is what it set up in turn.
+        - A choice or question about it becomes a plain "what do you do?".
+        - A failure line about it is removed.
+        - The headline falls back to the first kept sentence.
+        - An option left with nothing is rejected.
+        - In Develop, the losses carry from step to step.
+      - **Also fixed:** a faction's name describing a thing ("a Ka'Anshar tabard", "the Ka'Anshar chapel") no longer counts as the faction being present; followed by a verb ("the Red Hand attacks"), it still does. This had cost 3 options in one Arlen moment.
+      - **Live** (Haiku, the six moments twice): 34 of 36 shown at 6.9 s average. The cascade fired 4 times ("the note" twice, "the runner"), and one option with nothing left was rejected. Arlen moment ×3 after the faction fix: 9 of 9 shown.
+      - 12 crafted checks (363/363).
     - [ ] Stage 4: storage, extraction and typed editing.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 

@@ -20,6 +20,7 @@ export interface ScaffoldBeat {
   walk_on: string; // description of an unnamed extra ("a nervous merchant"), else ""
   does: string;
   byCode?: boolean; // written by Loom from parts (a "happens" beat): nothing in it is the model's to check
+  src?: number; // its position in the model's answer, so code can tell which sentences were dropped
   plan?: string; // the beat plan it was written from ("M2.1"), when beat plans are on
   payload?: string; // the payload it delivers (beat-plans.ts), so it counts as spent this session
 }
@@ -275,6 +276,9 @@ export function notInScene(tagged: string, c: CheckContext, own?: { actor?: Enti
     if (!next || REFERENCE_NEXT.has(next) || PAST.test(next)) continue;
     // "Ka'Anshar guards", "Red Hand riders": the faction's agents, who arrive like anyone else.
     if ((e.type === "faction" || e.type === "other") && AGENTS.test(next)) continue;
+    // "a Ka'Anshar tabard", "the Ka'Anshar seal": the faction's name describing a thing, not the
+    // faction acting ("the Red Hand attacks" still is: a verb follows).
+    if ((e.type === "faction" || e.type === "other") && /\b(?:a|an|the|this|that|his|her|their|its|every|some)\s*$/i.test(tagged.slice(0, m.index)) && !/^[a-z]{3,}s$/.test(next) && !/(?:ed|ing)$/.test(next)) continue;
     return p.role === "remembered"
       ? `${e.name} can only be remembered here (${p.standing}), but "${e.name} ${next}…" has it here now`
       : `${e.name} isn't here (${p.standing}), but "${e.name} ${next}…" has it here; it can only arrive or send word`;

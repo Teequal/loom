@@ -204,3 +204,83 @@ export function fillSlots<O extends SlotOption>(o: O, tagger: Tagger): { option:
   if (otherPc && o.on_fail.effect.trim()) problem ??= `on a failure, ${otherPc}`;
   return { option: { ...o, setup, on_fail: { ...o.on_fail, effect: fail.tagged } }, problem, dropped };
 }
+
+// ---------- What a dropped sentence set up stays gone ----------
+// A sentence can be dropped by any check (a cast rule, presence, agency, a self-reference). Whatever
+// it introduced ("a scrawled note", "a courier") never happened, so nothing later in the option may
+// refer back to it ("pocket the note?"): a later sentence that does is dropped too, a choice or a
+// question about it becomes a plain question, a failure line about it goes, and so does a headline.
+
+const STOP_HEAD = new Set("moment word words look glance way time while bit sound voice breath step hush pause beat second chance sense smile nod shiver flicker chill silence stillness little few lot single thing something someone name part kind sort piece side half".split(" "));
+const PREP = new Set("of from by to in on at with near for into onto across through over under beside behind against about toward towards around along and or but as that who which while".split(" "));
+const plain = (t: string) => t.replace(/\{([^{}|]+)(?:\|([^{}]*))?\}/g, (_, n: string, r?: string) => (r ?? n).trim());
+
+/** The things a sentence brings in with "a", "an", "some" or "another": their head nouns. */
+export function introducedNouns(text: string): string[] {
+  const out: string[] = [];
+  const words = plain(text).replace(/[.,;:!?—"“”()]/g, " | ").split(/\s+/).filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    if (!/^(?:a|an|some|another)$/i.test(words[i])) continue;
+    let head = "";
+    for (let j = i + 1; j < Math.min(words.length, i + 5); j++) {
+      const w = words[j].toLowerCase();
+      if (w === "|" || PREP.has(w)) break;
+      // After the first word, a verb-looking word ends the phrase ("a faint hum rises").
+      if (j > i + 1 && /^[a-z]{4,}(?:s|ed|ing)$/.test(w) && !/(?:ss|us|is)$/.test(w)) break;
+      head = w.replace(/['’]s$/, "");
+    }
+    if (head.length >= 3 && !STOP_HEAD.has(head)) out.push(head);
+  }
+  return [...new Set(out)];
+}
+
+/** Whether a text refers back to one of these things ("the note", "Vex's note", "his courier"). */
+export function refersTo(text: string, nouns: Iterable<string>) {
+  const t = plain(text);
+  for (const n of nouns) {
+    const head = n.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`(?:\\b(?:the|that|this|those|these|his|her|their|its|your)|['’]s)\\s+(?:[\\w'’-]+\\s+){0,2}?${head}(?:s|es)?\\b`, "i").test(t)) return n;
+  }
+  return null;
+}
+
+/**
+ * After the checks: the raw sentences that didn't survive (by position, `src`), what they introduced,
+ * and everything later that refers back to it. `carried` brings losses forward from earlier steps of
+ * a chain. Returns what's now lost (for the headline, and the next step).
+ */
+export function cascadeDropped(o: { setup: ScaffoldBeat[]; hand?: { kind: string; what?: string; or?: string }; on_fail: { target: string; effect: string } }, raw: { does?: string; kind?: string }[], dropped: (reason: string) => void, carried: Iterable<string> = []) {
+  const kept = new Set(o.setup.map((b) => b.src).filter((x): x is number => x != null));
+  const lost = new Set(carried);
+  raw.forEach((b, i) => {
+    if (kept.has(i) || b.kind === "happens" || !b.does) return;
+    for (const n of introducedNouns(b.does)) lost.add(n);
+  });
+  // Something a kept sentence brings in itself isn't lost.
+  for (const b of o.setup) for (const n of introducedNouns(b.does)) lost.delete(n);
+  if (!lost.size) return lost;
+  o.setup = o.setup.filter((b) => {
+    if (b.byCode) return true;
+    const hit = refersTo(b.does, lost);
+    if (!hit) return true;
+    dropped(`refers to "${hit}", set up by a sentence that was dropped`);
+    for (const n of introducedNouns(b.does)) lost.add(n);
+    return false;
+  });
+  const h = o.hand;
+  if (h) {
+    const sides = [h.what, h.kind === "choice" ? h.or : ""].filter(Boolean).join(" · ");
+    const hit = refersTo(sides, lost) ?? (h.kind === "choice" ? [...lost].find((n) => new RegExp(`\\b${n}(?:s|es)?\\b`, "i").test(plain(sides))) : null);
+    if (hit) {
+      dropped(`the hand-off referred to "${hit}", set up by a sentence that was dropped`);
+      if (h.kind === "choice" || h.kind === "question" || h.kind === "notice") Object.assign(h, { kind: "question", what: "", or: "" });
+      else h.what = "";
+    }
+  }
+  const failHit = refersTo(o.on_fail.effect, lost);
+  if (failHit) {
+    dropped(`the failure line referred to "${failHit}", set up by a sentence that was dropped`);
+    o.on_fail = { target: "none", effect: "" };
+  }
+  return lost;
+}
