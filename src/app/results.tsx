@@ -70,7 +70,12 @@ export function ResultPrompt({
             key={o}
             type="button"
             aria-pressed={outcome === o}
-            onClick={() => setOutcome(outcome === o ? "" : o)}
+            // One tap records it, with whatever detail is already typed.
+            onClick={() => {
+              setOutcome(o);
+              send({ outcome: o, detail });
+            }}
+            disabled={busy}
             className={`rounded-full px-3 py-0.5 text-[13px] transition-colors ${outcome === o ? "bg-foreground text-background" : "border border-line bg-surface text-foreground/80 hover:border-thread/60"}`}
           >
             {o}
@@ -87,12 +92,14 @@ export function ResultPrompt({
         <input
           value={detail}
           onChange={(e) => setDetail(e.target.value)}
-          placeholder={kind === "fight" ? "What happened? Who fell, what was taken…" : "What happened? (optional)"}
+          placeholder={kind === "fight" ? "Anything to add? Who fell, what was taken… (optional, before you tap)" : "Anything to add? (optional, before you tap)"}
           className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-3 py-1 text-[13px] outline-none focus:border-thread/60"
         />
-        <button disabled={busy || (!outcome && !detail.trim())} className="btn-primary text-sm">
-          Record
-        </button>
+        {detail.trim() && (
+          <button disabled={busy} className="btn-secondary text-sm">
+            Just this
+          </button>
+        )}
       </form>
     </div>
   );

@@ -152,20 +152,20 @@ export async function reviewProposal(file: ProposalFile): Promise<Reviewed[]> {
         const it = i.item;
         evidence = it.evidence ?? "";
         group = "Threads";
-        summary = `+ ${it.title} (${it.kind})`;
+        summary = `New thread: ${it.title} (${it.kind})`;
         break;
       }
       case "update": {
         const it = i.item;
         evidence = it.evidence ?? "";
         group = "Threads";
-        summary = `${it.change === "resolved" ? "✓ resolved" : "~ progressed"}: ${title(it.thread)} — ${it.note}`;
+        summary = `${it.change === "resolved" ? "Resolved" : "Moved on"}: ${title(it.thread)}. ${it.note}`;
         if (it.change === "resolved") must("closes a thread for good");
         break;
       }
       case "link": {
         group = "Threads";
-        summary = `link: ${title(i.item.from)} → ${title(i.item.to)} (${i.item.note})`;
+        summary = `Connected: ${title(i.item.from)} and ${title(i.item.to)}${i.item.note ? ` (${i.item.note})` : ""}`;
         break;
       }
       case "entity_update": {
@@ -188,7 +188,12 @@ export async function reviewProposal(file: ProposalFile): Promise<Reviewed[]> {
           const label = field === "lastKnownLocationId" ? "last seen at" : field === "parentId" ? "inside" : field.replace(/^traits\./, "").replace(/_/g, " ");
           const same = String(current ?? "").toLowerCase() === String(proposed).toLowerCase();
           if (same) continue;
-          parts.push(blank(current) ? `${label}: ${proposed}` : `${label}: ${Array.isArray(current) ? current.join("; ") : current} → ${proposed}`);
+          // A list that gains items shows only what's new ("wants: + find her missing brother").
+          const listed = (x: unknown) => (Array.isArray(x) ? x.map((y) => (typeof y === "object" && y && "text" in y ? String((y as { text: string }).text) : String(y))) : String(x).split(/;\s*/)).map((y) => y.trim()).filter(Boolean);
+          const added = Array.isArray(current) ? listed(proposed).filter((y) => !listed(current).some((c) => c.toLowerCase() === y.toLowerCase())) : [];
+          const kept = Array.isArray(current) && listed(current).every((c) => listed(proposed).some((y) => y.toLowerCase() === c.toLowerCase()));
+          if (Array.isArray(current) && kept && added.length) parts.push(`${label}: + ${added.join("; + ")}`);
+          else parts.push(blank(current) ? `${label}: ${proposed}` : `${label}: ${Array.isArray(current) ? listed(current).join("; ") : current} → ${proposed}`);
           let t: Tier = blank(current) ? "auto" : "quick";
           if (e?.fieldMeta[field]?.source === "dm") {
             t = "must";

@@ -6,6 +6,7 @@ import { Icon } from "../icons";
 import { MIXES, MODELS, TONES } from "../improv-box";
 import { type ChipsMode, resetPrefs, setPref, usePrefs } from "../prefs";
 import { Header, Note, useCampaigns } from "../shell";
+import { LoomProvider } from "../loom-ui";
 
 // Settings: how Loom looks and what it starts with, in this browser. What belongs to a campaign
 // (its tone, where the story is heading, asking before risky changes) is on the campaign page.
@@ -27,6 +28,17 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function SettingsBoard() {
   const c = useCampaigns();
+  // The Rules panel and Jump anywhere work here too: they need the campaign around them.
+  return c.campaignId ? (
+    <LoomProvider key={c.campaignId} campaignId={c.campaignId}>
+      <Board c={c} />
+    </LoomProvider>
+  ) : (
+    <Board c={c} />
+  );
+}
+
+function Board({ c }: { c: ReturnType<typeof useCampaigns> }) {
   const p = usePrefs();
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 pb-24 pt-8 sm:pt-14">
@@ -44,10 +56,10 @@ export function SettingsBoard() {
               <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px]" aria-hidden>
                 {p.chips === "chips" ? (
                   <>
-                    <span className="inline-flex items-center gap-1 rounded-full border border-thread/40 bg-thread/10 px-2 py-0.5"><Icon name="person" size={12} />Tomas here</span>
-                    <span className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-muted line-through decoration-muted/50"><Icon name="person" size={12} />Bhen not here</span>
-                    <span className="inline-flex items-center gap-1 rounded-full border border-thread/40 bg-thread/10 px-2 py-0.5"><Icon name="item" size={12} />Khayiulad: Knight figurine</span>
-                    <span className="inline-flex items-center gap-1 rounded-full border border-thread/40 bg-thread/10 px-2 py-0.5"><Icon name="die" size={12} />Figurine madness</span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-thread/40 bg-thread/10 px-2 py-0.5"><Icon name="person" size={12} />The innkeeper here</span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-muted line-through decoration-muted/50"><Icon name="person" size={12} />The captain not here</span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-thread/40 bg-thread/10 px-2 py-0.5"><Icon name="item" size={12} />Kira: silver key</span>
+                    <span className="inline-flex items-center gap-1 rounded-full border border-thread/40 bg-thread/10 px-2 py-0.5"><Icon name="die" size={12} />Curse of the key</span>
                   </>
                 ) : (
                   <span className="inline-flex items-center gap-2.5 text-muted">
@@ -68,12 +80,21 @@ export function SettingsBoard() {
             <Choice label="Kinds of option" options={MIXES} value={p.mix} onChange={(v) => setPref("mix", v)} />
             <p className="mt-1 text-xs text-muted">{MIXES.find((m) => m.id === p.mix)?.hint}</p>
           </Field>
-          <Field label="Tone">
-            <Steps label="Tone" steps={TONES} value={p.tone} onChange={(v) => setPref("tone", v)} />
+          <Field label="Drama">
+            <Steps label="Drama" steps={TONES} value={p.tone} onChange={(v) => setPref("tone", v)} />
+            <p className="mt-1 text-xs text-muted">How dramatic the wording is. The campaign&apos;s own tone (grim, comedic…) is on the campaign page.</p>
           </Field>
           <Field label="On each option">
             <Switch checked={p.why} onChange={(v) => setPref("why", v)} hint="The short line under an option saying why it fits now">
               Show why it fits
+            </Switch>
+          </Field>
+        </Section>
+
+        <Section title="Behind the scenes">
+          <Field label="Costs and timings">
+            <Switch checked={p.costs} onChange={(v) => setPref("costs", v)} hint="Which model answered, how long it took and what it cost, under each answer">
+              Show costs and timings
             </Switch>
           </Field>
         </Section>

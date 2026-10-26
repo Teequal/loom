@@ -33,7 +33,9 @@ Offer 5 ideas, a mix of kinds:
 - connection: a hidden link between two things already in play that nobody has noticed.
 
 For each: title (3-6 words), pitch (2-3 sentences the GM can use), ties_to (ids of existing threads it touches; at least one), and thread: how it would be recorded (title, kind, summary, entities by exact name, existing or new).
-New material must fit the world, tone and direction, and must not contradict established facts. Never decide what player characters do: write what the world offers, or what follows "if the party…".`;
+New material must fit the world, tone and direction, and must not contradict established facts. Never decide what player characters do: write what the world offers, or what follows "if the party…".
+
+Pronouns: use the ones the records give. Where they give none, use the character's name or "they"; never guess from a name.`;
 
 export async function freshIdeas(campaignId: number) {
   const threads = await loadThreadContexts(campaignId);

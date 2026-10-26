@@ -316,12 +316,13 @@ function Palette({ index, onPick, onClose }: { index: IndexNode[]; onPick: (n: I
 
 // ---------- refs, previews and linked text ----------
 
-export function RefLink({ r, chip = false, children }: { r: Ref; chip?: boolean; children?: React.ReactNode }) {
+export function RefLink({ r, chip = false, mid = false, children }: { r: Ref; chip?: boolean; mid?: boolean; children?: React.ReactNode }) {
   const loom = useLoom();
   const [preview, setPreview] = useState<DOMRect | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const el = useRef<HTMLButtonElement>(null);
-  const label = children ?? r.name;
+  // Mid-sentence, "The humming crate" reads "the humming crate".
+  const label = children ?? (mid ? r.name.replace(/^The\s/, "the ") : r.name);
   if (!loom) return chip ? <span className="rounded-full bg-thread-soft px-2.5 py-0.5 text-xs text-thread">{label}</span> : <>{label}</>;
   const show = () => {
     timer.current = setTimeout(() => el.current && setPreview(el.current.getBoundingClientRect()), 350);
@@ -633,7 +634,7 @@ function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
             {/* Ties read as sentences: "holds the Knight figurine", "Varek hunts". */}
             {t.out ? (
               <>
-                <span className="text-muted">{t.type}</span> <RefLink r={t.other} />
+                <span className="text-muted">{t.type}</span> <RefLink r={t.other} mid />
               </>
             ) : (
               <>
@@ -643,10 +644,10 @@ function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
             {t.note && <span className="text-muted">: {t.note}</span>}
             {t.secret && <Lock />}
             {/* The tie's story, condensed: what it was, and how long ago it changed. */}
-            {(t.was.length > 0 || t.since) && (
+            {(t.was.length > 0 || t.since != null) && (
               <span className="block text-xs text-muted">
                 {t.was.map((w: any) => `was ${w.type}${w.until != null ? ` until ${ago(w.until, n.latestSession)}` : ""}`).join(" · ")}
-                {!t.was.length && t.since != null ? `since session ${t.since}` : ""}
+                {!t.was.length && t.since != null ? (t.since === 0 ? "from the start" : `since session ${t.since}`) : ""}
               </span>
             )}
           </li>

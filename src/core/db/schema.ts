@@ -35,6 +35,8 @@ export const campaigns = sqliteTable("campaigns", {
   direction: text("direction").notNull().default(""),
   // At the table: apply risky changes without asking (still logged, still undoable).
   autoApprove: integer("auto_approve", { mode: "boolean" }).notNull().default(false),
+  // The latest prep ideas and fresh ideas, kept so leaving the Prep page doesn't lose them.
+  savedIdeas: text("saved_ideas", { mode: "json" }).$type<{ prep?: { at: string; session: number; data: unknown }; fresh?: { at: string; session: number; data: unknown } }>(),
   // Superseded by the effects table (structured house rules); kept until old data is migrated.
   mechanics: text("mechanics", { mode: "json" }).$type<CampaignMechanic[]>().notNull().default([]),
   ruleToggles: text("rule_toggles", { mode: "json" }).$type<Toggles>().notNull().default({}),

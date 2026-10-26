@@ -1,3 +1,4 @@
+import { midName } from "./entity-fields";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import type { EffectInPlay } from "./effects";
@@ -121,7 +122,7 @@ export function buildSituation(world: World, moment: string, overrides: Override
     row.traits = (condition === "unconscious" ? { ...t, health: "unconscious" } : { ...t, conditions: [...(t.conditions ?? []), condition] }) as Entity["traits"];
     fixes.push({ say: `Loom treated ${pc.name} as ${condition} for these options, because the moment says so. Your records don't have that yet.`, apply: `Record ${pc.name} as ${condition}`, fix: { kind: "condition", entityId: pc.id, condition } });
   }
-  for (const { pc, item, records } of view.holdFixes) fixes.push({ say: `Loom treated ${pc.name} as having ${item.name} for these options. ${records}`, apply: `${pc.name} has it now`, fix: { kind: "holds", holderId: pc.id, itemId: item.id } });
+  for (const { pc, item, records } of view.holdFixes) fixes.push({ say: `Loom treated ${pc.name} as having ${midName(item.name)} for these options. ${records}`, apply: `${pc.name} has it now`, fix: { kind: "holds", holderId: pc.id, itemId: item.id } });
 
   const memo = new Map();
   const presenceOfRow = (e: Entity) => presenceOf(view, keyOf(e), memo);

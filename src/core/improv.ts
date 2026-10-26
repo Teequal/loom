@@ -155,10 +155,10 @@ export type Flavour = (typeof FLAVOURS)[number];
 // The kinds of option to offer. "mix" is the default most DMs will never change.
 export const MIXES = {
   mix: "Offer a mix: one that pays off or advances a thread (payoff), one that turns things in an unexpected direction (twist), and one that calls back to something earlier or gives a character a moment (callback or character). The fourth is your best other idea.",
-  fights: "Lean toward action: at least three of the four options should be fights or physical danger (fight, tense), still tied to threads.",
-  mystery: "Lean toward mystery: at least three of the four options should reveal or deepen a mystery (mystery, payoff).",
-  light: "Keep it light: at least three of the four options should be funny or warm (flavour funny or character) (funny, character), without undercutting the threads.",
-  character: "Lean toward character: at least three of the four options should give a player character a moment of their own (character, callback).",
+  fights: "Lean toward action: at least two of the three options should be fights or physical danger (fight, tense), still tied to threads.",
+  mystery: "Lean toward mystery: at least two of the three options should reveal or deepen a mystery (mystery, payoff).",
+  light: "Keep it light: at least two of the three options should be funny or warm (flavour funny or character) (funny, character), without undercutting the threads.",
+  character: "Lean toward character: at least two of the three options should give a player character a moment of their own (character, callback).",
 } as const;
 export type Mix = keyof typeof MIXES;
 const MIX_FLAVOURS: Record<Mix, Flavour[]> = { mix: [], fights: ["fight", "tense"], mystery: ["mystery", "payoff"], light: ["funny", "character"], character: ["character", "callback"] };
@@ -189,7 +189,7 @@ Each option is a scaffold:
   - "happens": what a PC feels, chosen from parts: pc, part (a body part, or "none" for all of them), sense, and cause (a thing or force in at most 5 words: "the river's cold grip", "the figurine's pull"; never a thought or a feeling). Code writes it ("Bram's chest aches: the river's cold grip").
 - hand: how the players get involved, chosen in parts; code writes the sentence. to is a PC or "table". Fill only the fields its kind uses, and leave the others "" (or "none"). Pick the kind:
   - "question": ask what they do. what is a short noun phrase for what they're facing ("the heckling patron"), or "".
-  - "choice": offer two clear choices: what and or are short verb phrases a player would say ("write a note", "wave him off"), and approach and or_approach say how each is done: talk, force, sneak, study, magic, item, move or wait. aim and or_aim say what each does to the NPC the choice is about: ${ACTS.join(", ")} (press: push them on what they know), or none. For other kinds, approach and or_approach are "wait", and aim and or_aim are "none".
+  - "choice": offer two clear choices: what and or are short verb phrases a player would say ("write a note", "wave him off"), and aim and or_aim say what each does to the NPC the choice is about: ${ACTS.join(", ")} (press: push them on what they know), or none. For other kinds, aim and or_aim are "none".
   - "check" or "contest": only for a PC doing what their player declared in this moment. Pick the ability and skill (or "none"); what is who or what they're up against ("the captain", "the current"), or "".
   - "attack": only for a PC who declared an attack. what is the target.
   - "notice": a perception or knowledge check (Perception, Insight, Investigation, Arcana, History…), for anyone or the table. what is a noun phrase for what it's about ("what's bobbing in the current", "the sigil on the crates").
@@ -199,7 +199,7 @@ Each option is a scaffold:
   Rolls are for player characters only; what NPCs notice or decide is the GM's call, never a roll.
 - on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. For a roll by the table, the effect says who it hits ("whoever fails…"), never "he" or "she". This is the only place a PC may act against their player's will. Otherwise target "none" and effect "".`;
 
-const SYSTEM = `You are Loom, a game master's assistant used live at the table. The players just did something unexpected. Offer 4 short, playable options that tie the moment back to threads already in the campaign, instead of inventing new material.
+const SYSTEM = `You are Loom, a game master's assistant used live at the table. The players just did something unexpected. Offer 3 short, playable options that tie the moment back to threads already in the campaign, instead of inventing new material.
 
 Rules:
 - Every option builds on one of the engine's MOVES (move), a different one for each option. Its main thread is thread; also_ties_to lists the move's other threads it genuinely uses. Only the move's cast may be named as actors: those "here" in npc beats, those who "can arrive or send word" in arrival or remote beats; a "support" character may have one line. Characters "resting" sit this move out. Anyone else is a walk-on.
@@ -213,9 +213,8 @@ Rules:
 
 ${SCAFFOLD_TEXT}
 - headline: plain words (names as words here, no braces), written after the option, as its summary in one glanceable line, under 12 words, present tense, the hook first ("The lookout bolts for the alarm bell"). Use only the characters, objects and place the setup and hand actually use, called the same thing (if the setup has a fishmonger, so does the headline). Its subject is the world or an NPC, never a player character or the party; an unnamed extra is "a merchant", "a guard", never "a walk-on". The GM reads only this before choosing. flavour: one of payoff, twist, callback, character, tense, funny, mystery, fight. MIX at the end says which kinds to offer.
-- label: 2-5 words. why: the move's "because", in your own words, under 15 words; don't repeat the thread title or use thread numbers.
+- why: the move's "because", in your own words, under 10 words; don't repeat the thread title or use thread numbers.
 - callback: if the option echoes or pays off one of the KEY MOMENTS listed, its id ("M12"); otherwise "none". Use one only when it genuinely fits.
-- pillar: the kind of play the option mostly offers: combat, social, exploration, mystery, comedy or drama.
 - Hand-offs mostly go to whoever the moment is about. HAND ONE OPTION TO, when given, names one PC to give one option to, if it fits. Never mention players.`;
 
 const nonEmpty = (xs: string[], fallback: string): [string, ...string[]] => (xs.length ? (xs as [string, ...string[]]) : [fallback]);
@@ -249,8 +248,6 @@ export function scaffoldParts(lists: SchemaLists) {
     to: z.enum(nonEmpty(["table", ...lists.handOff], "table")),
     what: z.string(),
     or: z.string(),
-    approach: z.enum(APPROACHES),
-    or_approach: z.enum(APPROACHES),
     aim: z.enum(["none", ...ACTS]),
     or_aim: z.enum(["none", ...ACTS]),
     ability: z.enum(["none", ...ABILITIES]),
@@ -271,7 +268,6 @@ function optionsSchema(lists: SchemaLists) {
         ...(lists.anchors?.length ? { anchor: z.enum(nonEmpty(lists.anchors, "none")), intent: z.string() } : {}),
         thread,
         also_ties_to: z.array(thread),
-        label: z.string(),
         // Who and what the sentences name, numbered {1}, {2}…, each with the part it plays.
         refs,
         // What physically happens because of what the players declared, before anything else.
@@ -288,7 +284,6 @@ function optionsSchema(lists: SchemaLists) {
         // Free text, checked in code: with no key moments the enum was just "none", and a model that
         // wrote anything else made the whole answer unparseable.
         callback: z.string(),
-        pillar: z.enum(PILLARS),
       }),
     ),
   });
@@ -356,6 +351,20 @@ export function renderOnFail(target: string, effect: string, tagger: Tagger) {
 const TABLE_TALK = /\b(?:spotlight|quiet (?:soul|one|player|lately|this session)|hasn'?t had (?:a|the|their) (?:moment|turn)|(?:their|the) player enjoys|player'?s? (?:preference|taste)s?)\b/i;
 
 // The model's hand-off parts become the sentence the rest of Loom reads (checks, rendering, the page).
+const APPROACH_OF_AIM: Record<string, Approach | undefined> = { persuade: "talk", deceive: "talk", threaten: "talk", press: "talk", give: "item", heal: "item", help: "item", steal: "sneak", harm: "force", free: "force", protect: "force", spare: "wait" };
+
+/** What kind of play an option offers (for the spotlight), worked out from its flavour and hand-off. */
+export function pillarOf(o: Pick<ScaffoldOption, "flavour" | "hand">): Pillar {
+  const f = o.flavour;
+  if (f === "fight" || o.hand?.kind === "attack") return "combat";
+  if (f === "funny") return "comedy";
+  if (f === "mystery") return "mystery";
+  const talk = ["persuade", "deceive", "threaten", "press"];
+  if (o.hand && (talk.includes(o.hand.aim ?? "") || talk.includes(o.hand.or_aim ?? "") || ["Persuasion", "Deception", "Intimidation", "Insight", "Performance"].includes(o.hand.skill ?? ""))) return "social";
+  if (o.hand?.kind === "notice" || o.hand?.kind === "save") return "exploration";
+  return "drama";
+}
+
 export function adoptHand(o: ScaffoldOption): ScaffoldOption {
   if (!o.hand) return o;
   // What the engine knows fills a gap rather than failing the option: a notice roll without a
@@ -363,6 +372,12 @@ export function adoptHand(o: ScaffoldOption): ScaffoldOption {
   // its skill as a check of that kind.
   const hand = { ...o.hand };
   if (hand.kind === "notice" && (!hand.skill || hand.skill === "none")) hand.skill = "Perception";
+  // How each side of a choice is done follows from what it does ("persuade" is talking), so the
+  // model no longer writes it.
+  if (hand.kind === "choice") {
+    hand.approach ??= APPROACH_OF_AIM[hand.aim ?? "none"];
+    hand.or_approach ??= APPROACH_OF_AIM[hand.or_aim ?? "none"];
+  }
   // References in the hand-off's phrases ("reach for {1}'s falling body", or "1's" without braces)
   // become the names they stand for, tagged like everywhere else.
   const refs = o.refs ?? [];
@@ -912,6 +927,11 @@ WHAT JUST HAPPENED AT THE TABLE
 ${moment}`;
 
   opts.onTrace?.("prompt", prompt);
+  // One name per option: the headline (the model no longer writes a separate label).
+  const named = (o: ScaffoldOption) => {
+    o.label = (o.headline ?? "").trim() || "an option";
+    return o;
+  };
   const idOf = (ref: string) => Number(ref.replace(/^T/, ""));
   const toOption = (o: ScaffoldOption): ImprovOption => ({
     // A headline that decides for the players falls back to the option's first beat (which the
@@ -960,18 +980,20 @@ ${moment}`;
       opts.onTrace?.("raw", raw);
       const parsed = OptionSchema.safeParse(raw);
       if (!parsed.success) {
-        rejected.push({ label: (raw as { label?: string })?.label ?? "an option", reason: "unusable answer (a value outside the allowed lists)" });
+        rejected.push({ label: (raw as { headline?: string })?.headline ?? "an option", reason: "unusable answer (a value outside the allowed lists)" });
         return;
       }
+      named(parsed.data as unknown as ScaffoldOption);
       // Each sentence remembers its place in the answer, so code can tell later which were dropped.
       const rawSetup = (parsed.data as { setup: { does?: string; kind?: string; src?: number }[] }).setup;
       rawSetup.forEach((b, i) => (b.src = i));
       const filled = fillSlots(applyPlans(adoptHand(parsed.data as unknown as ScaffoldOption), plans, droppedSentences), lists.tagger);
-      for (const d of filled.dropped) droppedSentences.push({ label: (parsed.data as { label: string }).label, reason: `sentence dropped: ${d}` });
-      if (filled.problem) return rejected.push({ label: (parsed.data as { label: string }).label, reason: filled.problem });
+      for (const d of filled.dropped) droppedSentences.push({ label: (parsed.data as unknown as ScaffoldOption).label, reason: `sentence dropped: ${d}` });
+      if (filled.problem) return rejected.push({ label: (parsed.data as unknown as ScaffoldOption).label, reason: filled.problem });
       const o = filled.option;
       normaliseHandOff(o, lists.check);
       fitToMove(o, moves, lists.check, droppedSentences);
+      o.pillar = pillarOf(o);
       // What a dropped sentence set up never happened: nothing later may refer back to it.
       if (!settleLost(o, rawSetup, droppedSentences)) return rejected.push({ label: o.label, reason: "nothing left once what dropped sentences set up was removed" });
       const reason = checkOption(o, lists.check);
@@ -1030,7 +1052,7 @@ ${moment}`;
 IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}. Every option must steer away from it: keep it off-screen, redirect the danger elsewhere (often onto the party or the villain's plans), or resolve it without depicting or threatening it.`;
     const res = await callLlm({ feature: "improv", campaignId, system: SYSTEM, prompt: steer, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
     calls.push(res);
-    const fresh = (res.data.options as unknown as ScaffoldOption[]).map(adoptHand).map((o) => fillSlots(applyPlans(o, plans, droppedSentences), lists.tagger)).filter((f) => {
+    const fresh = (res.data.options as unknown as ScaffoldOption[]).map(named).map(adoptHand).map((o) => fillSlots(applyPlans(o, plans, droppedSentences), lists.tagger)).filter((f) => {
       if (f.problem) rejected.push({ label: f.option.label, reason: f.problem });
       return !f.problem;
     }).map((f) => f.option).filter((o) => {

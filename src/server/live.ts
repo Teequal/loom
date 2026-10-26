@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db, schema } from "@/core/db/client";
 import { FIXTURE_NAME } from "@/core/seed";
 import { liveEntries, liveSessionNumber } from "@/core/live";
@@ -49,11 +49,39 @@ export async function liveState(campaignId: number) {
   const titleOf = new Map(
     (await db.select({ id: schema.threads.id, title: schema.threads.title }).from(schema.threads).where(eq(schema.threads.campaignId, campaignId))).map((t) => [t.id, t.title]),
   );
+  const session = await liveSessionNumber(campaignId);
+  const entries = (await liveEntries(campaignId)).map((e) => entryView(e, titleOf));
   return {
-    session: await liveSessionNumber(campaignId),
+    session,
     autoApprove: !!camp?.auto,
     empty: !thread && !entity,
     sample: camp?.name === FIXTURE_NAME,
-    entries: (await liveEntries(campaignId)).map((e) => entryView(e, titleOf)),
+    entries,
+    lastTime: entries.length || (!thread && !entity) ? null : await lastTime(campaignId, session),
   };
+}
+
+/**
+ * For a session that hasn't started yet: what happened last time (the start of its notes), the
+ * threads moving most, and the kept prep ideas, so the GM picks up where they left off.
+ */
+async function lastTime(campaignId: number, session: number) {
+  const sessions = await db.select({ number: schema.sessions.number, recap: schema.sessions.recap }).from(schema.sessions).where(eq(schema.sessions.campaignId, campaignId)).orderBy(desc(schema.sessions.number));
+  const last = sessions.find((x) => x.number < session && x.recap.trim());
+  const threads = await db
+    .select({ id: schema.threads.id, title: schema.threads.title, lastTouched: schema.threads.lastTouchedSessionId, status: schema.threads.status })
+    .from(schema.threads)
+    .where(eq(schema.threads.campaignId, campaignId));
+  const sessionIds = new Map((await db.select({ id: schema.sessions.id, number: schema.sessions.number }).from(schema.sessions).where(eq(schema.sessions.campaignId, campaignId))).map((x) => [x.id, x.number]));
+  const inPlay = threads
+    .filter((t) => t.status !== "resolved")
+    .sort((a, b) => (sessionIds.get(b.lastTouched ?? -1) ?? -1) - (sessionIds.get(a.lastTouched ?? -1) ?? -1))
+    .slice(0, 4)
+    .map((t) => ({ id: t.id, title: t.title }));
+  const [camp] = await db.select({ saved: schema.campaigns.savedIdeas }).from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
+  const prep = camp?.saved?.prep?.data as { collisions?: { title: string }[] } | undefined;
+  // The notes, without the wrap-up's own headings, cut at a sentence near 320 characters.
+  const text = (last?.recap ?? "").replace(/^Before the first session \(the hook\)\s*/i, "").replace(/\n+/g, " ").trim();
+  const cut = text.length > 320 ? `${text.slice(0, 320).replace(/[^.!?]*$/, "").trim() || text.slice(0, 317)}…` : text;
+  return last || inPlay.length ? { session: last?.number ?? null, notes: cut, threads: inPlay, prep: (prep?.collisions ?? []).slice(0, 3).map((c) => c.title) } : null;
 }

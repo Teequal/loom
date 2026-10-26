@@ -1,5 +1,6 @@
 "use client";
 
+import { usePrefs } from "../prefs";
 import { useCallback, useEffect, useState } from "react";
 import { Linked, LoomProvider, RefChips, useLoom } from "../loom-ui";
 import { Icon } from "../icons";
@@ -82,6 +83,7 @@ export function PrepBoard() {
 }
 
 function Board({ campaignId }: { campaignId: number }) {
+  const showCosts = usePrefs().costs;
   const [notes, setNotes] = useState("");
   const [session, setSession] = useState<number | "">("");
   const [history, setHistory] = useState<Batch[]>([]);
@@ -96,19 +98,23 @@ function Board({ campaignId }: { campaignId: number }) {
   const [live, setLive] = useState<Live | null>(null);
   const elapsed = useElapsed(busy === "reading" || busy === "ideas");
 
+  const [saved, setSaved] = useState<Saved>({});
   const refresh = useCallback(async (id: number) => {
-    const r = await post<{ nextSession: number; history: Batch[]; live: Live | null }>("/api/prep", { campaignId: id });
+    const r = await post<{ nextSession: number; history: Batch[]; live: Live | null; saved: Saved }>("/api/prep", { campaignId: id });
     setSession(r.nextSession);
     setLive(r.live);
     setHistory(r.history);
   }, []);
 
   useEffect(() => {
-    post<{ nextSession: number; history: Batch[]; live: Live | null }>("/api/prep", { campaignId })
+    post<{ nextSession: number; history: Batch[]; live: Live | null; saved: Saved }>("/api/prep", { campaignId })
       .then((r) => {
         setSession(r.nextSession);
         setLive(r.live);
         setHistory(r.history);
+        // The last prep and fresh ideas come back with the page.
+        setSaved(r.saved ?? {});
+        setIdeas((r.saved?.prep?.data as Ideas | undefined) ?? null);
       })
       .catch((e) => setError(e.message));
   }, [campaignId]);
@@ -153,9 +159,9 @@ function Board({ campaignId }: { campaignId: number }) {
       await refresh(campaignId);
     });
 
-  const undo = (batch: string) =>
+  const undo = (batch: string, confirm?: string) =>
     run("undo", async () => {
-      const r = await post<{ undone: number; blocked: string[]; notes: string[]; history: Batch[] }>("/api/undo", { campaignId, batch });
+      const r = await post<{ undone: number; blocked: string[]; notes: string[]; history: Batch[] }>("/api/undo", { campaignId, batch, confirm });
       setHistory(r.history);
       if (r.blocked.length) setError(`Not undone: ${r.blocked[0]}${r.blocked.length > 1 ? ` (and ${r.blocked.length - 1} more)` : ""}. Undo the later change first.`);
       else {
@@ -172,7 +178,11 @@ function Board({ campaignId }: { campaignId: number }) {
       await refresh(campaignId);
     });
 
-  const getIdeas = () => run("ideas", async () => setIdeas(await post<Ideas>("/api/suggest", { campaignId })));
+  const getIdeas = () =>
+    run("ideas", async () => {
+      setIdeas(await post<Ideas>("/api/suggest", { campaignId }));
+      setSaved((x) => ({ ...x, prep: { at: new Date().toISOString(), session: Number(session) || 0, data: null } }));
+    });
 
   const toggle = (set: Set<number>, n: number, on: boolean) => {
     const next = new Set(set);
@@ -294,9 +304,9 @@ function Board({ campaignId }: { campaignId: number }) {
               {w}
             </p>
           ))}
-          <button onClick={() => undo(applied.batch)} disabled={!!busy} className="btn-tertiary mt-3 text-sm">
+          <UndoButton changes={history.find((h) => h.batch === applied.batch)?.changes ?? 0} disabled={!!busy} onUndo={(c) => undo(applied.batch, c)} className="mt-3 text-sm">
             Undo all of this
-          </button>
+          </UndoButton>
         </section>
       )}
 
@@ -304,7 +314,7 @@ function Board({ campaignId }: { campaignId: number }) {
         <section className="rise">
           <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-[15px] font-semibold">Session {proposal.sessionNumber}: what changed</h2>
-            <span className="text-xs text-muted">{cost(proposal.llm)}</span>
+            {showCosts && <span className="text-xs text-muted">{cost(proposal.llm)}</span>}
           </div>
           {!items.length && <Note>Loom didn&apos;t find anything new in these notes.</Note>}
 
@@ -404,7 +414,7 @@ function Board({ campaignId }: { campaignId: number }) {
         </section>
       )}
 
-      <FreshIdeas campaignId={campaignId} />
+      <FreshIdeas key={`${campaignId}:${saved.fresh?.at ?? ""}`} campaignId={campaignId} initial={(saved.fresh?.data as Fresh | undefined) ?? null} at={saved.fresh?.at} />
 
       <section className="mt-12">
         <div className="mb-3 flex items-baseline justify-between gap-3">
@@ -414,6 +424,7 @@ function Board({ campaignId }: { campaignId: number }) {
           </button>
         </div>
         {!ideas && busy !== "ideas" && <p className="text-sm text-muted">Payoffs between threads already in play, something for each player, and ways back into quiet threads. About half a minute.</p>}
+        {ideas && saved.prep?.at && <p className="-mt-1 mb-3 text-xs text-muted">Kept from {savedWhen(saved.prep.at)}. They stay here until you ask for new ones.</p>}
         {ideas && (
           <div className="rise space-y-6">
             <IdeaList title="Collisions: threads that pay each other off">
@@ -440,7 +451,7 @@ function Board({ campaignId }: { campaignId: number }) {
                 ))}
               </IdeaList>
             )}
-            <p className="text-xs text-muted">{cost(ideas.llm)}</p>
+            {showCosts && <p className="text-xs text-muted">{cost(ideas.llm)}</p>}
           </div>
         )}
       </section>
@@ -457,9 +468,9 @@ function Board({ campaignId }: { campaignId: number }) {
                 {b.undone ? (
                   <span className="text-xs text-muted">undone</span>
                 ) : (
-                  <button onClick={() => undo(b.batch)} disabled={!!busy} className="btn-tertiary text-xs">
+                  <UndoButton changes={b.changes} disabled={!!busy} onUndo={(c) => undo(b.batch, c)} className="text-xs">
                     Undo
-                  </button>
+                  </UndoButton>
                 )}
               </li>
             ))}
@@ -552,6 +563,45 @@ function IdeaList({ title, children }: { title: string; children: React.ReactNod
   );
 }
 
+// Undo, with a typed confirmation when it would take back a lot at once (more than 10 changes).
+function UndoButton({ changes, disabled, onUndo, className = "", children }: { changes: number; disabled?: boolean; onUndo: (confirm?: string) => void; className?: string; children: React.ReactNode }) {
+  const [asking, setAsking] = useState(false);
+  const [typed, setTyped] = useState("");
+  if (changes <= 10) return <button type="button" onClick={() => onUndo()} disabled={disabled} className={`btn-tertiary ${className}`}>{children}</button>;
+  if (!asking)
+    return (
+      <button type="button" onClick={() => setAsking(true)} disabled={disabled} className={`btn-tertiary ${className}`}>
+        {children}
+      </button>
+    );
+  return (
+    <form
+      className={`flex flex-wrap items-center gap-2 text-[13px] ${className}`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (typed.trim().toLowerCase() === "delete") onUndo("delete");
+      }}
+    >
+      <span className="text-muted">This takes back {changes} changes. Type <b className="text-foreground">delete</b> to confirm:</span>
+      <input id={`undo-${changes}`} autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} className="w-24 rounded-md border border-line bg-surface px-2 py-0.5 text-[13px] outline-none focus:border-danger/60" aria-label="Type delete to confirm" />
+      <button type="submit" disabled={disabled || typed.trim().toLowerCase() !== "delete"} className="rounded-md bg-danger px-2.5 py-0.5 text-[13px] text-background disabled:opacity-40">
+        Undo {changes}
+      </button>
+      <button type="button" onClick={() => (setAsking(false), setTyped(""))} className="btn-tertiary text-xs">
+        Keep it
+      </button>
+    </form>
+  );
+}
+
+type Saved = { prep?: { at: string; session: number; data: unknown }; fresh?: { at: string; session: number; data: unknown } };
+// "today, 19:58" or "26 Oct, 19:58": when kept ideas were made.
+const savedWhen = (iso: string) => {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? `today, ${time}` : `${d.toLocaleDateString([], { day: "numeric", month: "short" })}, ${time}`;
+};
+
 interface Fresh {
   ideas: { kind: string; title: string; pitch: string; ties: T[]; thread: { title: string; kind: string; summary: string; entities: string[] } }[];
   llm: { model: string; seconds: number; costUsd: number };
@@ -559,8 +609,10 @@ interface Fresh {
 
 // The one place Loom invents: new themes, threads, characters and connections, each tied to
 // something already in play, each one tap from becoming a thread.
-function FreshIdeas({ campaignId }: { campaignId: number }) {
-  const [fresh, setFresh] = useState<Fresh | null>(null);
+function FreshIdeas({ campaignId, initial, at }: { campaignId: number; initial: Fresh | null; at?: string }) {
+  const showCosts = usePrefs().costs;
+  const [fresh, setFresh] = useState<Fresh | null>(initial);
+  const [when, setWhen] = useState(at);
   const [added, setAdded] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -578,6 +630,7 @@ function FreshIdeas({ campaignId }: { campaignId: number }) {
             setError("");
             try {
               setFresh(await post<Fresh>("/api/fresh", { campaignId }));
+              setWhen(new Date().toISOString());
               setAdded(new Set());
             } catch (e) {
               setError(e instanceof Error ? e.message : "Something went wrong.");
@@ -592,6 +645,7 @@ function FreshIdeas({ campaignId }: { campaignId: number }) {
       </div>
       {!fresh && !busy && <p className="text-sm text-muted">New themes, threads, characters and hidden connections that fit where the story is heading. Add the ones you like to the loom.</p>}
       {error && <p className="text-sm text-danger">{error}</p>}
+      {fresh && when && <p className="-mt-1 mb-3 text-xs text-muted">Kept from {savedWhen(when)}.</p>}
       {fresh && (
         <ul className="rise space-y-3">
           {fresh.ideas.map((idea, i) => (
@@ -626,7 +680,7 @@ function FreshIdeas({ campaignId }: { campaignId: number }) {
             </li>
           ))}
           <li className="text-xs text-muted">
-            {fresh.llm.model.replace(/^claude-/, "")} · {fresh.llm.seconds.toFixed(0)} s · ${fresh.llm.costUsd.toFixed(3)}
+            {showCosts && `${fresh.llm.model.replace(/^claude-/, "")} · ${fresh.llm.seconds.toFixed(0)} s · $${fresh.llm.costUsd.toFixed(3)}`}
           </li>
         </ul>
       )}

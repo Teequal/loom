@@ -1,0 +1,1 @@
+ALTER TABLE `campaigns` ADD `saved_ideas` text;

@@ -124,18 +124,39 @@ export async function undo(campaignId: number, batch: string) {
   return undoBatch(campaignId, batch);
 }
 
+// Engine words never reach the GM: "a walk-on barback" is just "a barback".
+export const plainWords = (t: string) => t.replace(/\b(an?\s+|the\s+)?walk-ons?\s+/gi, (_, a?: string) => a ?? "").replace(/\bwalk-on\b/gi, "someone");
+
+/** Keeps the latest prep or fresh ideas on the campaign, for the next visit to the Prep page. */
+export async function saveIdeas(campaignId: number, kind: "prep" | "fresh", data: unknown) {
+  const [c] = await db.select({ saved: schema.campaigns.savedIdeas }).from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
+  const session = await nextSessionNumber(campaignId);
+  await db.update(schema.campaigns).set({ savedIdeas: { ...(c?.saved ?? {}), [kind]: { at: new Date().toISOString(), session, data } } }).where(eq(schema.campaigns.id, campaignId));
+}
+
+export async function savedIdeas(campaignId: number) {
+  const [c] = await db.select({ saved: schema.campaigns.savedIdeas }).from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
+  return c?.saved ?? {};
+}
+
 export async function prepIdeas(campaignId: number) {
+  const result = await makePrepIdeas(campaignId);
+  await saveIdeas(campaignId, "prep", result);
+  return result;
+}
+
+async function makePrepIdeas(campaignId: number) {
   const { data, titleOf, moments, seats, llm } = await suggest(campaignId);
   const titles = (ids: number[]) => ids.filter((id) => titleOf.has(id)).map((id) => ({ id, title: titleOf.get(id)! }));
   const quiet = (pc: string) => seats.find((x) => x.pc.name === pc)?.quietFor ?? 0;
   return {
-    collisions: data.collisions.map((c) => ({ title: c.title, idea: c.idea, why: c.why, threads: titles(c.thread_ids) })),
-    perPlayer: data.per_player.map((p) => ({ pc: p.pc, idea: p.idea, quiet: quiet(p.pc) >= 2, threads: titles(p.thread_ids) })),
+    collisions: data.collisions.map((c) => ({ title: c.title, idea: plainWords(c.idea), why: plainWords(c.why), threads: titles(c.thread_ids) })),
+    perPlayer: data.per_player.map((p) => ({ pc: p.pc, idea: plainWords(p.idea), quiet: quiet(p.pc) >= 2, threads: titles(p.thread_ids) })),
     callbacks: data.callbacks.flatMap((c) => {
       const m = moments.find((x) => x.id === c.moment_id);
-      return m ? [{ moment: m.title, session: m.session ?? null, idea: c.idea, threads: titles(c.thread_ids) }] : [];
+      return m ? [{ moment: m.title, session: m.session ?? null, idea: plainWords(c.idea), threads: titles(c.thread_ids) }] : [];
     }),
-    quietThreads: data.neglected.flatMap((n) => (titleOf.has(n.thread_id) ? [{ title: titleOf.get(n.thread_id)!, idea: n.idea }] : [])),
+    quietThreads: data.neglected.flatMap((n) => (titleOf.has(n.thread_id) ? [{ title: titleOf.get(n.thread_id)!, idea: plainWords(n.idea) }] : [])),
     llm: { model: llm.model, seconds: llm.latencyMs / 1000, costUsd: llm.costUsd },
   };
 }

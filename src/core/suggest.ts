@@ -40,7 +40,9 @@ Rules:
 - Threads marked as GM secrets are unknown to players: use them to shape what happens, not as things characters learn for free.
 - Set up situations; never decide what player characters choose, say or feel.
 - Respect continuity from THE SCENE and the cards: dead characters stay dead (they can be remembered, found or avenged), and an NPC elsewhere has to travel, send word or be sought out. Use characters' abilities and the GM's mechanics where they fit. Never include anything on the safety lines.
-- Refer to threads by name in the text, never by number.`;
+- Refer to threads by name in the text, never by number.
+
+Pronouns: use the ones the records give. Where they give none, use the character's name or "they"; never guess from a name.`;
 
 function threadLine(t: ThreadContext, typeOf: Map<string, string>, latestSession: number) {
   const who = t.entities.map((n) => (typeOf.get(n) === "pc" ? `${n} (PC)` : typeOf.get(n) === "npc" ? `${n} (NPC)` : n));

@@ -213,7 +213,7 @@ export function Develop({
           {busy === "more" && <p className="animate-pulse text-xs text-muted">Another take… {elapsed} s</p>}
           {llm && (
             <p className="text-[11px] text-muted">
-              {llm.model.replace(/^claude-/, "")} · {llm.seconds.toFixed(1)} s · ${llm.costUsd.toFixed(4)}
+              {prefs.costs && `${llm.model.replace(/^claude-/, "")} · ${llm.seconds.toFixed(1)} s · $${llm.costUsd.toFixed(4)}`}
             </p>
           )}
         </div>
@@ -245,6 +245,7 @@ function SteerRow({ suggested, words: initial, onPick, onClose }: { suggested: S
             className={`rounded-full border px-3 py-1 text-[13px] transition-colors hover:border-thread/60 ${s.id === suggested ? "border-thread/70 ring-2 ring-thread/25" : "border-line bg-surface"}`}
           >
             {s.label}
+            {s.id === suggested && <span className="ml-1.5 text-[11px] text-thread">suggested</span>}
           </button>
         ))}
       </div>
@@ -284,6 +285,7 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [saying, setSaying] = useState<"" | "how" | "bring">("");
+  const [reworking, setReworking] = useState(false); // the rework controls, folded until asked for
   const [how, setHow] = useState("");
   const [preview, setPreview] = useState<Step[] | null>(null); // a swap streaming in
   const [using, setUsing] = useState<number | null>(null);
@@ -407,8 +409,20 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
         <>
           <RefChips refs={[...threadRefs(chain.threads), ...(chain.callback ? [{ kind: "moment" as const, id: chain.callback.id, name: `Callback: ${chain.callback.title}` }] : [])]} />
           {chain.why && showWhy && <p className="mt-1.5 text-[13px] italic text-muted">{chain.why}</p>}
-          {/* Refine in place: one version on screen, Back to the one before. */}
+          {/* Refine in place, folded behind one button: one version on screen, Back to the one before. */}
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px]">
+            <button type="button" disabled={!!busy} onClick={() => setReworking(!reworking)} aria-expanded={reworking} className="btn-tertiary px-1.5 text-[12px]">
+              <Icon name="pen" size={12} /> Rework
+            </button>
+            {chain.canGoBack && !busy && !reworking && (
+              <button type="button" onClick={back} className="btn-tertiary px-1.5 text-[12px]" title="The version before the last change">
+                <Icon name="undo" size={12} /> Back
+              </button>
+            )}
+            {busy && <span className="animate-pulse text-muted">Reworking… {elapsed} s</span>}
+          </div>
+          {reworking && (
+          <div className="rise mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px]">
             {REFINES.map((r) => (
               <button key={r.how} type="button" disabled={!!busy} onClick={() => refine(r.how)} className="rounded-full border border-line px-2.5 py-0.5 hover:border-thread/60 disabled:opacity-40">
                 {busy === r.how ? `${r.label}… ${elapsed} s` : r.label}
@@ -425,9 +439,9 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
                 <Icon name="undo" size={12} /> Back
               </button>
             )}
-            {busy && !REFINES.some((r) => r.how === busy) && !busy.startsWith("swap") && <span className="animate-pulse text-muted">Reworking… {elapsed} s</span>}
           </div>
-          {saying && (
+          )}
+          {reworking && saying && (
             <form
               className="rise mt-2 flex gap-2"
               onSubmit={(e) => {

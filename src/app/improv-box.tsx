@@ -7,10 +7,10 @@ import { Develop } from "./develop";
 import { Icon } from "./icons";
 import { type Encounter, FightPanel } from "./fight";
 import { ResultPrompt, SidePrompt } from "./results";
-import { Linked, LoomProvider, RefChips, useLoom } from "./loom-ui";
+import { Linked, LoomProvider, RefChips, RefLink, useLoom } from "./loom-ui";
 import { setPref, usePrefs } from "./prefs";
 import { type Overrides, SceneChips } from "./scene-chips";
-import { Header, Note, post, useCampaigns, useElapsed } from "./shell";
+import { Header, Note, post, stream, useCampaigns, useElapsed } from "./shell";
 
 // The table page: type what the players just did, get options tied back to threads (each shown
 // the moment it's written), use one or write your own, and Loom adds it to the loom straight
@@ -68,11 +68,13 @@ export interface Entry {
   at: string;
 }
 type Status = "idle" | "running" | "done" | "error";
+// A world Loom just invented: its opening to read aloud, and what it put in the loom.
+type Opening = { title: string; opening: string; made?: { entities: { id: number; name: string; type: string }[]; threads: { id: number; title: string }[] } };
 
 export const MODELS = [
-  { id: "haiku", label: "Quick", hint: "Haiku · ~3 s to the first option" },
-  { id: "sonnet", label: "Balanced", hint: "Sonnet · a middle ground" },
-  { id: "opus", label: "Best", hint: "Opus · slower, pulls in more that fits" },
+  { id: "haiku", label: "Quick", hint: "The first option in about 5 s, all three in about 7" },
+  { id: "sonnet", label: "Balanced", hint: "A middle ground: about 10 s" },
+  { id: "opus", label: "Best", hint: "Slower (about 13 s), pulls in more that fits" },
 ] as const;
 type Model = (typeof MODELS)[number]["id"];
 export const TONES = ["Grounded", "Restrained", "Balanced", "Dramatic", "Theatrical"];
@@ -156,8 +158,11 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const [entries, setEntries] = useState<Entry[]>([]);
   const [autoApprove, setAutoApprove] = useState(false);
   const [empty, setEmpty] = useState(false);
-  const [opening, setOpening] = useState<{ title: string; opening: string } | null>(null); // a hook just started
-  const [begun, setBegun] = useState<{ title: string; opening: string } | null>(null); // its opening, kept in view until the first moment
+  // A new campaign shows its ways in first; the box comes when the GM chooses to start at the table.
+  const [atTable, setAtTable] = useState(false);
+  const [lastTime, setLastTime] = useState<LastTime | null>(null); // where things stood, for a session not yet begun
+  const [opening, setOpening] = useState<Opening | null>(null); // a hook just started
+  const [begun, setBegun] = useState<Opening | null>(null); // its opening, kept in view until the first moment
   const [showOthers, setShowOthers] = useState(false);
   const [openCard, setOpenCard] = useState<number | null>(null);
   const [steered, setSteered] = useState(""); // the option read in full; the rest are headlines
@@ -182,11 +187,12 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   }, []);
 
   const reload = useCallback(async () => {
-    const r = await post<{ session: number; autoApprove: boolean; empty: boolean; sample: boolean; entries: Entry[] }>("/api/live", { campaignId });
+    const r = await post<{ session: number; autoApprove: boolean; empty: boolean; sample: boolean; entries: Entry[]; lastTime: LastTime | null }>("/api/live", { campaignId });
     setSession(r.session);
     setEntries(r.entries);
     setAutoApprove(r.autoApprove);
     setEmpty(r.empty);
+    setLastTime(r.lastTime ?? null);
     setSample(r.sample);
     return r.entries;
   }, [campaignId]);
@@ -218,12 +224,13 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   );
 
   useEffect(() => {
-    post<{ session: number; autoApprove: boolean; empty: boolean; sample: boolean; entries: Entry[] }>("/api/live", { campaignId })
+    post<{ session: number; autoApprove: boolean; empty: boolean; sample: boolean; entries: Entry[]; lastTime: LastTime | null }>("/api/live", { campaignId })
       .then((r) => {
         setSession(r.session);
         setEntries(r.entries);
         setAutoApprove(r.autoApprove);
         setEmpty(r.empty);
+        setLastTime(r.lastTime ?? null);
         setSample(r.sample);
         // After a reload, pick up where the table left off: the latest moment, with its options.
         const latest = r.entries[r.entries.length - 1];
@@ -249,7 +256,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           : e.summary.length
             ? `Added ${e.summary.length} to the loom${e.questions.length ? ` · ${e.questions.length} to answer` : ""}`
             : "Logged. Nothing new for the loom",
-      detail: e.summary[0]?.replace(/^~ progressed: /, "") ?? "",
+      detail: e.summary[0]?.replace(/^(?:~ progressed|Moved on): /, "") ?? "",
     }));
     queueMicrotask(() => {
       setToasts((t) => [...t, ...fresh].slice(-3));
@@ -412,6 +419,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           </div>
         )}
         <form
+          hidden={empty && !atTable && !begun && !asked}
           onSubmit={(e) => {
             e.preventDefault();
             ask();
@@ -458,9 +466,9 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                   onChange={(v) => setPref("mix", v)}
                 />
               </Field>
-              <Field label="Tone">
+              <Field label="Drama">
                 <Steps
-                  label="Tone"
+                  label="Drama"
                   steps={TONES}
                   value={tone}
                   onChange={(v) => setPref("tone", v)}
@@ -523,10 +531,16 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           onBegin={() => {
             setBegun(opening);
             setOpening(null);
+            setAtTable(true);
             focusBox("What do the players do?");
+          }}
+          onAtTable={() => {
+            setAtTable(true);
+            setTimeout(() => focusBox("What happens first?"), 0);
           }}
         />
       )}
+      {!asked && !empty && !opening && !begun && lastTime && <LastTimeCard last={lastTime} />}
       {!asked && begun && !opening && (
         <div className="rise mt-5">
           <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">{begun.title} · the opening</p>
@@ -577,8 +591,6 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                   key={`${card.label}-${i}`}
                   card={card}
                   n={i + 1}
-                  of={cards.length}
-                  onMove={state === "open" ? (d) => setOpenCard((i + d + cards.length) % cards.length) : undefined}
                   onFold={state === "open" ? () => setOpenCard(null) : undefined}
                   state={state}
                   canUse={!!current}
@@ -588,6 +600,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                   parent={async () => (state === "used" ? current!.id : await use({ kind: "option", label: card.label, text: card.text, awaiting: card.needs }))}
                   known={state === "used" ? current?.id : null}
                   saved={state === "used" ? current?.developments : undefined}
+                  result={state === "used" ? entries.find((e) => e.parentId === current?.id && e.choiceKind === "result") : undefined}
                 />
               );
             })}
@@ -646,7 +659,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           {error && <p className="mt-4 text-sm text-danger">{error}</p>}
           {done?.llm && (
             <p className="mt-5 text-xs text-muted">
-              {done.llm.model.replace(/^claude-/, "")} · {done.llm.seconds.toFixed(1)} s · ${done.llm.costUsd.toFixed(4)}
+              {prefs.costs && `${done.llm.model.replace(/^claude-/, "")} · ${done.llm.seconds.toFixed(1)} s · $${done.llm.costUsd.toFixed(4)}`}
               {done.llm.attempts > 1 ? ` · ${done.llm.attempts} attempts` : ""}
             </p>
           )}
@@ -725,6 +738,95 @@ function Toasts({ toasts, onOpen, onClose }: { toasts: { id: number; entryId: nu
 
 // ---------- first run ----------
 
+type LastTime = { session: number | null; notes: string; threads: { id: number; title: string }[]; prep: string[] };
+
+// Before the first moment of a session: where things stood, to pick up from.
+function LastTimeCard({ last }: { last: LastTime }) {
+  return (
+    <section className="rise mt-8 rounded-2xl border border-line bg-surface p-5">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-thread">{last.session ? `Last time · session ${last.session}` : "Where things stand"}</p>
+      {last.notes && (
+        <p className="story mt-2 leading-relaxed text-foreground/85">
+          <Linked text={last.notes} />
+        </p>
+      )}
+      {last.threads.length > 0 && (
+        <div className="mt-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Threads in play</p>
+          <RefChips refs={last.threads.map((t) => ({ kind: "thread" as const, id: t.id, name: t.title }))} />
+        </div>
+      )}
+      {last.prep.length > 0 && (
+        <p className="mt-3 text-[13px] text-muted">
+          Your prep ideas: <span className="text-foreground/85">{last.prep.join(" · ")}</span>{" "}
+          <Link href="/prep" className="underline decoration-line underline-offset-2 hover:text-foreground">
+            open them
+          </Link>
+        </p>
+      )}
+      <p className="mt-3 text-[13px] text-muted">When the players do something, type it in the box.</p>
+    </section>
+  );
+}
+
+// The hook's three stages, as they happen: what's done, what's going on, what's next.
+const HOOK_STAGES = [
+  { id: "writing", label: "Writing the world" },
+  { id: "reading", label: "Reading it into the loom" },
+  { id: "weaving", label: "Weaving the threads together" },
+];
+function HookStages({ stage, title }: { stage: string; title?: string }) {
+  const at = Math.max(0, HOOK_STAGES.findIndex((x) => x.id === stage));
+  return (
+    <ol className="mt-3 space-y-1.5 text-[13px]" aria-live="polite">
+      {HOOK_STAGES.map((x, i) => (
+        <li key={x.id} className={`flex items-center gap-2 ${i > at ? "text-muted/60" : i < at ? "text-muted" : "text-foreground"}`}>
+          <span className={`grid h-4 w-4 place-items-center rounded-full border ${i < at ? "border-thread bg-thread text-background" : i === at ? "border-thread" : "border-line"}`}>
+            {i < at ? <Icon name="check" size={9} /> : i === at ? <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-thread" /> : null}
+          </span>
+          {x.label}
+          {i === at && i > 0 && title ? <span className="text-muted">· {title}</span> : null}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+// What a hook put in the loom, grouped as a GM thinks of it, each one tappable.
+function Made({ made }: { made: NonNullable<Opening["made"]> }) {
+  const of = (types: string[]) => made.entities.filter((e) => types.includes(e.type));
+  const groups = [
+    { title: "Your players", items: of(["pc"]), sub: "Player character" },
+    { title: "Characters", items: of(["npc"]), sub: "Character" },
+    { title: "Places", items: of(["location"]), sub: "Place" },
+    { title: "Things and factions", items: of(["item", "faction", "other"]), sub: "" },
+  ].filter((g) => g.items.length);
+  return (
+    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      {groups.map((g) => (
+        <div key={g.title}>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">{g.title}</p>
+          <p className="mt-0.5 text-[14px] leading-relaxed">
+            {g.items.map((e, i) => (
+              <span key={e.id}>
+                {i > 0 && <span className="text-muted"> · </span>}
+                <RefLink r={{ kind: "entity", id: e.id, name: e.name, sub: g.sub || e.type }} />
+              </span>
+            ))}
+          </p>
+        </div>
+      ))}
+      {made.threads.length > 0 && (
+        <div className="sm:col-span-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Threads already tangling</p>
+          <RefChips refs={made.threads.map((t) => ({ kind: "thread" as const, id: t.id, name: t.title }))} />
+        </div>
+      )}
+      <p className="text-sm text-muted sm:col-span-2">Tap any of them to see more. When the players do something, type it in the box.</p>
+    </div>
+  );
+}
+
 // An empty campaign: three ways in, each one tap.
 function Welcome({
   name,
@@ -733,15 +835,18 @@ function Welcome({
   opening,
   onStarted,
   onBegin,
+  onAtTable,
 }: {
   name: string;
   trySample: () => Promise<void>;
   campaignId: number;
-  opening: { title: string; opening: string } | null;
-  onStarted: (o: { title: string; opening: string }) => Promise<void>;
+  opening: Opening | null;
+  onStarted: (o: Opening) => Promise<void>;
   onBegin: () => void;
+  onAtTable: () => void;
 }) {
   const [busy, setBusy] = useState<"" | "hook" | "sample">("");
+  const [stage, setStage] = useState<{ stage: string; title?: string }>({ stage: "writing" });
   const [party, setParty] = useState("");
   const [theme, setTheme] = useState("");
   const [error, setError] = useState("");
@@ -756,7 +861,7 @@ function Welcome({
         <blockquote className="story mt-3 border-l-2 border-thread pl-4 text-[18px] leading-relaxed">
           <Linked text={opening.opening} />
         </blockquote>
-        <p className="mt-3 text-sm text-muted">The world is in the loom: its characters, places and threads. When the players do something, type it in the box above.</p>
+        {opening.made && <Made made={opening.made} />}
         <button type="button" onClick={onBegin} className="btn-primary mt-4 text-sm">
           Begin <Icon name="arrow" size={12} />
         </button>
@@ -778,13 +883,13 @@ function Welcome({
           <input
             value={party}
             onChange={(e) => setParty(e.target.value)}
-            placeholder="Who's playing? (optional) e.g. Mira the rogue, Tobb the cleric"
+            placeholder="Who's playing? e.g. Mira the rogue"
             className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm outline-none focus:border-thread/60"
           />
           <input
             value={theme}
             onChange={(e) => setTheme(e.target.value)}
-            placeholder="Any flavour? (optional) e.g. haunted harbour"
+            placeholder="Any flavour? e.g. haunted harbour"
             className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm outline-none focus:border-thread/60"
           />
         </div>
@@ -795,8 +900,9 @@ function Welcome({
             setBusy("hook");
             setError("");
             try {
-              const r = await post<{ title: string; opening: string }>("/api/campaigns/hook", { campaignId, party, theme });
-              await onStarted({ title: r.title, opening: r.opening });
+              setStage({ stage: "writing" });
+              const r = await stream<Opening>("/api/campaigns/hook", { campaignId, party, theme }, (e) => e.type === "stage" && setStage({ stage: String(e.stage), title: e.title as string | undefined }));
+              await onStarted({ title: r.title, opening: r.opening, made: r.made });
             } catch (e) {
               setError(e instanceof Error ? e.message : "Something went wrong.");
             } finally {
@@ -807,7 +913,7 @@ function Welcome({
         >
           <Icon name="sparkle" /> {busy === "hook" ? `Inventing a world… ${elapsed} s` : party.trim() || theme.trim() ? "Invent the hook" : "Start from a random hook"}
         </button>
-        {busy === "hook" && <p className="mt-1.5 text-xs text-muted">Usually under a minute. It writes the world, then reads it into the loom.</p>}
+        {busy === "hook" && <HookStages stage={stage.stage} title={stage.title} />}
         {error && <p className="mt-1.5 text-xs text-danger">{error}</p>}
       </div>
 
@@ -830,7 +936,10 @@ function Welcome({
           </span>
           <div>
             <p className="font-medium">Or start at the table</p>
-            <p className="text-sm text-muted">Type the first thing that happens in the box above. Everything you use is remembered as you go.</p>
+            <p className="text-sm text-muted">Type the first thing that happens. Everything you use is remembered as you go.</p>
+            <button type="button" onClick={onAtTable} className="btn-secondary mt-2 text-sm">
+              Start typing <Icon name="arrow" size={12} />
+            </button>
           </div>
         </li>
       </ol>
@@ -1175,8 +1284,6 @@ function Headline({ card, n, onOpen }: { card: Card; n: number; onOpen: () => vo
 function OptionCard({
   card,
   n,
-  of,
-  onMove,
   onFold,
   state,
   canUse,
@@ -1185,12 +1292,11 @@ function OptionCard({
   parent,
   known,
   saved,
+  result,
 }: {
   card: Card;
   n: number;
-  of: number;
-  onMove?: (d: 1 | -1) => void; // to the next or previous option, while choosing
-  onFold?: () => void;
+  onFold?: () => void; // back to its headline, while choosing
   state: "open" | "used" | "other";
   canUse: boolean;
   onUse: () => void;
@@ -1198,43 +1304,24 @@ function OptionCard({
   parent: () => Promise<number | null>;
   known?: number | null; // the logged choice, once this card is used
   saved?: unknown[];
+  result?: Entry; // how its roll, fight or choice turned out, once recorded
 }) {
   const [copied, setCopied] = useState(false);
   const showWhy = usePrefs().why;
-  // Swipe sideways between options on a phone.
-  const touch = useRef<number | null>(null);
   return (
     <li
-      onTouchStart={(e) => (touch.current = e.touches[0].clientX)}
-      onTouchEnd={(e) => {
-        if (touch.current == null || !onMove) return;
-        const dx = e.changedTouches[0].clientX - touch.current;
-        if (Math.abs(dx) > 60) onMove(dx < 0 ? 1 : -1);
-        touch.current = null;
-      }}
       id={state === "used" ? "chosen" : undefined}
       className={`rise group scroll-mt-40 rounded-xl border bg-surface p-4 shadow-sm transition-opacity ${state === "used" ? "border-thread/60" : "border-line"} ${state === "other" ? "opacity-55 hover:opacity-100" : ""}`}
     >
-      <div className="mb-1.5 flex items-baseline justify-between gap-3">
-        <h2 className="min-w-0 text-[13px] font-semibold uppercase tracking-wide">
-          <span className="mr-2 text-muted">{state === "used" ? <Icon name="check" className="text-thread" /> : n}</span>
-          {card.label}
-          {card.flavour && <span className="ml-2 rounded-full bg-thread-soft px-2 py-0.5 text-[11px] font-normal normal-case tracking-normal text-thread">{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
+      <div className="mb-2 flex items-start justify-between gap-3">
+        {/* The headline stays the option's name; tapping it folds the card back while choosing. */}
+        <h2 className="min-w-0 flex-1">
+          <button type="button" onClick={onFold} disabled={!onFold} aria-expanded={!!onFold} className="flex w-full items-baseline gap-3 text-left disabled:cursor-default">
+            <span className="w-4 shrink-0 text-[13px] text-muted">{state === "used" ? <Icon name="check" className="text-thread" /> : n}</span>
+            <span className="story min-w-0 flex-1 font-medium leading-snug">{card.headline}</span>
+            {card.flavour && <span className="shrink-0 rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
+          </button>
         </h2>
-        {onMove && (
-          <span className="flex shrink-0 items-center gap-1 text-xs text-muted">
-            <button type="button" onClick={() => onMove(-1)} aria-label="Previous option" className="btn-tertiary px-1">
-              <Icon name="arrow" size={12} className="rotate-180" />
-            </button>
-            {n}/{of}
-            <button type="button" onClick={() => onMove(1)} aria-label="Next option" className="btn-tertiary px-1">
-              <Icon name="arrow" size={12} />
-            </button>
-            <button type="button" onClick={onFold} aria-label="Back to the headlines" className="btn-tertiary ml-1 px-1">
-              <Icon name="close" size={12} />
-            </button>
-          </span>
-        )}
         <button
           type="button"
           onClick={() => {
@@ -1258,15 +1345,24 @@ function OptionCard({
         </p>
       )}
       {card.why && showWhy && !card.surprise && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
+      {result && (
+        <p className="mt-3 flex flex-wrap items-baseline gap-2 text-[13px]">
+          <span className={`rounded-full px-2 py-0.5 text-[12px] font-medium ${/fail|lost|fled/i.test(result.choiceLabel) ? "bg-danger/10 text-danger" : "bg-thread-soft text-thread"}`}>{result.choiceLabel}</span>
+          {result.choice.replace(/^[^.]*\.\s*/, "").trim() && <span className="story text-muted">{result.choice.replace(/^[^.]*\.\s*/, "")}</span>}
+        </p>
+      )}
       <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+        {/* One action while choosing; what grows from it (Develop) comes once it's used. */}
         {state !== "used" ? (
-          <button type="button" onClick={onUse} disabled={!canUse} className="btn-secondary font-medium">
+          <button type="button" onClick={onUse} disabled={!canUse} className="btn-primary font-medium">
             <Icon name="check" /> Use this
           </button>
         ) : (
-          <span className="text-xs text-thread">Used. What happens next goes in the box above.</span>
+          <>
+            <span className="text-xs text-thread">Used. What happens next goes in the box above.</span>
+            <Develop live={live} parent={parent} known={known} saved={saved} />
+          </>
         )}
-        <Develop live={live} parent={parent} known={known} saved={saved} />
       </div>
     </li>
   );

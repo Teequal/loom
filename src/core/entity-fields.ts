@@ -190,5 +190,8 @@ export function traitText(key: string, value: unknown, detail = false): string {
     .join("; ");
 }
 
+/** A name as it reads mid-sentence: "having the humming crate", not "having The humming crate". */
+export const midName = (name: string) => name.replace(/^The\s/, "the ");
+
 /** Whether a trait has anything to show (0 is a value: a steady mood). */
 export const hasTrait = (v: unknown) => (Array.isArray(v) ? v.length > 0 : v != null && v !== "");

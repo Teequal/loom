@@ -214,6 +214,8 @@ export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
                 : c.select(Number(e.target.value))
             }
           >
+            {/* While the list loads, say so (rather than showing "+ New campaign…" as if chosen). */}
+            {c.campaignId == null && <option value="">{c.campaigns.length ? "Choose a campaign" : "Loading…"}</option>}
             {c.campaigns.map((x) => (
               <option key={x.id} value={x.id}>
                 {x.name}

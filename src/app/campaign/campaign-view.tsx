@@ -1,5 +1,6 @@
 "use client";
 
+import { usePrefs } from "../prefs";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Linked, LoomProvider, RefLink, useLoom } from "../loom-ui";
@@ -78,7 +79,11 @@ export function CampaignView() {
   );
 }
 
+// "session 3", or "the start" for the world Loom began from (session 0).
+const sessionShort = (n: number | null | undefined) => (n == null ? "" : n === 0 ? "the start" : `session ${n}`);
+
 function Loom({ campaignId }: { campaignId: number }) {
+  const showCosts = usePrefs().costs;
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>(() => {
@@ -129,7 +134,7 @@ function Loom({ campaignId }: { campaignId: number }) {
               Party at <RefLink r={{ kind: "entity", id: data.campaign.partyId, name: data.campaign.party }} /> ·{" "}
             </>
           ) : null}
-          {[`${open.length} open thread${open.length === 1 ? "" : "s"}`, `${data.cast.length} in the cast`, `${data.sessions.length} session${data.sessions.length === 1 ? "" : "s"}`, data.activity.totalUsd > 0 && `$${data.activity.totalUsd.toFixed(2)} spent`]
+          {[`${open.length} open thread${open.length === 1 ? "" : "s"}`, `${data.cast.length} in the cast`, `${data.sessions.length} session${data.sessions.length === 1 ? "" : "s"}`, showCosts && data.activity.totalUsd > 0 && `$${data.activity.totalUsd.toFixed(2)} spent`]
             .filter(Boolean)
             .join(" · ")}
         </p>
@@ -176,8 +181,8 @@ function Loom({ campaignId }: { campaignId: number }) {
             })}
           </ul>
         </Panel>
-        <Panel title="In play now" hint={latest ? `touched in session ${latest - 1} or ${latest}` : undefined}>
-          <RefList items={hot.slice(0, 7).map((t) => ({ r: { kind: "thread" as const, id: t.id, name: t.title, sub: `${t.kind} thread` }, meta: `s${t.lastTouched}` }))} empty="Nothing recent." />
+        <Panel title="In play now" hint={latest ? "moved in the last two sessions" : undefined}>
+          <RefList items={hot.slice(0, 7).map((t) => ({ r: { kind: "thread" as const, id: t.id, name: t.title, sub: `${t.kind} thread` }, meta: sessionShort(t.lastTouched) }))} empty="Nothing recent." />
         </Panel>
         <Panel title="Gone quiet" hint="untouched for 2+ sessions">
           <RefList items={quiet.slice(0, 7).map((t) => ({ r: { kind: "thread" as const, id: t.id, name: t.title, sub: `${t.kind} thread` }, meta: `since s${t.lastTouched}` }))} empty="Nothing has gone quiet." />
@@ -193,7 +198,7 @@ function Loom({ campaignId }: { campaignId: number }) {
               ))}
             </ul>
           ) : (
-            <p className="text-sm text-muted">None yet. They come from goals, dispositions and how characters stand toward each other.</p>
+            <p className="text-sm text-muted">None yet. They appear when characters want things that pull against each other, or care about someone they shouldn&apos;t. Tell Loom what a character wants and feels in their page (tap any name).</p>
           )}
         </Panel>
         <Panel title="Who matters">
@@ -311,7 +316,7 @@ function Direction({ campaignId, initial }: { campaignId: number; initial: strin
         rows={2}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="A few lines in your own words, e.g. “Build toward the palace: the party should learn the leaders' illness is Azarath's mind control before confronting him.”"
+        placeholder="A few lines in your own words, e.g. “Build toward the heist: the party should learn who hired the thieves before the festival ends.”"
         className="mt-1 block w-full resize-y bg-transparent text-[14.5px] leading-relaxed outline-none placeholder:text-muted/70"
       />
     </div>
@@ -342,7 +347,7 @@ function Settings({ campaignId, initial }: { campaignId: number; initial: Overvi
           await post("/api/campaign/save", { campaignId, autoApprove: !ask }).catch(() => {});
         }}
       >
-        Ask before recording risky changes
+        Check with me before big changes (deaths, captures, closing threads)
       </Switch>
       {initial.safety.length > 0 && <span>Safety lines: {initial.safety.join(", ")}</span>}
     </div>
@@ -377,7 +382,7 @@ function Threads({ threads }: { threads: Overview["threads"] }) {
       {!list.length && <Empty />}
       <ul>
         {list.map((t) => (
-          <IndexRow key={t.id} r={{ kind: "thread", id: t.id, name: t.title, sub: `${t.kind} thread`, status: t.status }} meta={t.firstSeen ? `s${t.firstSeen}${t.lastTouched && t.lastTouched !== t.firstSeen ? `–s${t.lastTouched}` : ""}` : ""}>
+          <IndexRow key={t.id} r={{ kind: "thread", id: t.id, name: t.title, sub: `${t.kind} thread`, status: t.status }} meta={t.firstSeen != null ? `${sessionShort(t.firstSeen)}${t.lastTouched && t.lastTouched !== t.firstSeen ? ` to ${t.lastTouched}` : ""}` : ""}>
             <Chip>{t.kind}</Chip>
             {t.status === "progressing" && <Chip tone="thread">in progress</Chip>}
             {t.secret && <Chip>🔒</Chip>}
@@ -425,7 +430,7 @@ function Moments({ campaignId, moments, reload }: { campaignId: number; moments:
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="font-medium">
-                      <RefLink r={{ kind: "moment", id: m.id, name: m.title, sub: "Suggested moment" }} /> <span className="text-xs font-normal text-muted">{m.session ? `s${m.session}` : ""}</span>
+                      <RefLink r={{ kind: "moment", id: m.id, name: m.title, sub: "Suggested moment" }} /> <span className="text-xs font-normal text-muted">{m.session != null ? sessionShort(m.session) : ""}</span>
                     </p>
                     <p className="mt-0.5 text-sm text-muted">
                       <Linked text={m.description} />
@@ -448,7 +453,7 @@ function Moments({ campaignId, moments, reload }: { campaignId: number; moments:
       {!key.length && !suggested.length && <Empty />}
       <ul>
         {key.map((m) => (
-          <IndexRow key={m.id} r={{ kind: "moment", id: m.id, name: m.title, sub: "Key moment" }} meta={m.session ? `s${m.session}` : ""}>
+          <IndexRow key={m.id} r={{ kind: "moment", id: m.id, name: m.title, sub: "Key moment" }} meta={m.session != null ? sessionShort(m.session) : ""}>
             <button type="button" onClick={() => set(m.id, "suggested")} className="ml-2 text-xs text-muted hover:text-foreground" aria-label={`Unstar ${m.title}`}>
               <Icon name="star" filled size={11} className="text-thread" /> unstar
             </button>

@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { startFromHook } from "@/core/hook";
-import { campaignId, jsonRoute } from "@/server/route";
+import { campaignId, streamRoute } from "@/server/route";
 
-export const POST = jsonRoute(
+// Streams its stages (writing the world, reading it in, weaving it into the loom), then what it made.
+export const POST = streamRoute(
   z.object({ campaignId, party: z.string().max(400).default(""), theme: z.string().max(200).default("") }),
-  ({ campaignId, ...input }) => startFromHook(campaignId, input),
+  ({ campaignId, ...input }, send) => startFromHook(campaignId, input, (stage, title) => send({ type: "stage", stage, title })),
   "Loom couldn't start from a hook this time. Try again.",
 );
