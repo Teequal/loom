@@ -232,93 +232,42 @@ select.quiet {
   }
 }
 
-/* ---------- The answer box ---------- */
-/* While Loom writes, the box draws in what it picked out (each from outside its edge), and a thread
-   fills along the bottom in the time this model usually takes. When the first option is ready the
-   box turns over and the options' words come in. */
-.gather {
-  perspective: 900px;
+/* ---------- The answer, being written ---------- */
+/* Each row starts as holes in an empty headline. The words Loom read drop into them; when the
+   option arrives they turn over, word by word, and the headline's words turn in from the other
+   side, like a split-flap board. */
+.flaps {
+  perspective: 600px;
 }
-.gather-face {
-  transform-origin: 50% 50%;
-  backface-visibility: hidden;
-}
-.gather-face.turning {
-  animation: turn-away 300ms cubic-bezier(0.5, 0, 0.75, 0) forwards;
-}
-@keyframes turn-away {
-  to {
-    transform: rotateX(88deg);
-    opacity: 0.2;
-  }
-}
-.pull-in {
+.hole {
   display: inline-block;
-  animation: pull-in 620ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  height: 0.62em;
+  margin-right: 0.32em;
+  vertical-align: -0.02em;
+  border-radius: 3px;
+  background: var(--line);
+  opacity: 0.75;
+  transition: width 320ms ease;
+  animation: hole-wait 1.4s ease-in-out infinite alternate;
 }
-@keyframes pull-in {
-  from {
-    transform: translate(var(--dx, 0), var(--dy, -28px)) scale(0.82);
-    opacity: 0;
-    filter: blur(3px);
-  }
-  60% {
-    opacity: 1;
-  }
+@keyframes hole-wait {
   to {
-    transform: none;
-    opacity: 1;
-    filter: none;
+    opacity: 0.35;
   }
 }
-.gather-line {
-  height: 2px;
-  background: var(--thread);
-  border-radius: 1px;
-  transform-origin: left;
-  animation: gather-line var(--expect, 4000ms) cubic-bezier(0.25, 0.6, 0.35, 1) forwards;
-  opacity: 0.7;
-}
-@keyframes gather-line {
-  from {
-    transform: scaleX(0);
-  }
-  to {
-    transform: scaleX(0.94);
-  }
-}
-.gather-line.late {
-  animation: gather-wait 1.4s ease-in-out infinite alternate;
-  transform: scaleX(0.94);
-}
-@keyframes gather-wait {
-  to {
-    opacity: 0.3;
-  }
-}
-.turn-in {
-  transform-origin: 50% 0;
-  animation: turn-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-@keyframes turn-in {
-  from {
-    transform: perspective(900px) rotateX(-70deg);
-    opacity: 0;
-  }
-  to {
-    transform: none;
-    opacity: 1;
-  }
-}
-.word-in {
+.flap {
   display: inline-block;
   white-space: pre;
-  animation: word-in 380ms ease-out both;
+  transform-origin: 50% 55%;
+  backface-visibility: hidden;
 }
-@keyframes word-in {
+.drop-in {
+  animation: drop-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes drop-in {
   from {
     opacity: 0;
-    transform: translateY(5px);
+    transform: translateY(-0.45em);
     filter: blur(2px);
   }
   to {
@@ -327,20 +276,40 @@ select.quiet {
     filter: none;
   }
 }
+.flap-out {
+  animation: flap-out 240ms cubic-bezier(0.5, 0, 0.75, 0) both;
+}
+@keyframes flap-out {
+  to {
+    opacity: 0;
+    transform: rotateX(90deg);
+  }
+}
+.flap-in {
+  animation: flap-in 260ms cubic-bezier(0.25, 1, 0.5, 1) both;
+}
+@keyframes flap-in {
+  from {
+    opacity: 0;
+    transform: rotateX(-90deg);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .read-step,
   .read-item,
   .read-dots i,
-  .pull-in,
-  .word-in,
-  .turn-in,
-  .gather-face.turning {
+  .hole,
+  .drop-in,
+  .flap-in {
     animation: none;
   }
-  .gather-line {
-    animation: none;
-    transform: scaleX(0.94);
+  .flap-out {
+    animation-duration: 1ms;
   }
   .unravel,
   .unravel > * {

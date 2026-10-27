@@ -1,7 +1,7 @@
 "use client";
 
 import { Reading } from "./reading";
-import { Gathering, NowStrip, Words, type NowLine, type Read } from "./answer-box";
+import { NowStrip, readWords, SlotRow, type NowLine, type Read } from "./answer-box";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Choice, Field, Steps, Switch, Tune } from "./controls";
@@ -130,8 +130,9 @@ const SAMPLE_MOMENTS = [
 ];
 
 // The moment a choice grew from: follow the parents up to the one Loom was asked about.
-// The last few beats of play for "What just happened": the latest two moments, each with what was
-// used, the steps that followed and how rolls went, then a moment just asked. Newest last.
+// The last few beats of play for "What just happened": the latest moments (six, for when it's
+// opened; folded it shows the last four lines), each with what was used, the steps that followed
+// and how rolls went, then a moment just asked. Newest last.
 function nowLines(entries: Entry[], asked: string): NowLine[] {
   const said = (e: Entry) => {
     if (e.choiceKind !== "result") return e.choiceLabel || e.choice;
@@ -146,13 +147,13 @@ function nowLines(entries: Entry[], asked: string): NowLine[] {
       follow(c.id);
     }
   };
-  for (const r of roots.slice(-2)) {
+  for (const r of roots.slice(-6)) {
     if (r.moment) lines.push({ kind: "moment", text: r.moment, id: r.id });
     if (r.choiceKind === "option" || r.choiceKind === "own") lines.push({ kind: r.moment ? "used" : "moment", text: said(r), id: r.id });
     follow(r.id);
   }
-  if (asked && !roots.slice(-2).some((r) => r.moment === asked)) lines.push({ kind: "moment", text: asked });
-  return lines.slice(-4);
+  if (asked && !roots.slice(-6).some((r) => r.moment === asked)) lines.push({ kind: "moment", text: asked });
+  return lines.slice(-14);
 }
 
 function rootOf(list: Entry[], id: number) {
@@ -189,7 +190,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const [atTable, setAtTable] = useState(false);
   const [read, setRead] = useState<Read | null>(null); // what Loom picked out, shown while it writes
   const askedAt = useRef(0); // when this ask began, to pace the answer box
-  const [turning, setTurning] = useState(false); // the answer box turning over as the first option arrives
+  const [landed, setLanded] = useState<Set<number>>(new Set()); // rows that have turned over into their option
   const [fresh, setFresh] = useState(0); // which ask was written on this page (its options animate in); 0: restored
   const [unravelling, setUnravelling] = useState(false); // the moment the unchosen options come apart
   const [lastTime, setLastTime] = useState<LastTime | null>(null); // where things stood, for a session not yet begun
@@ -315,7 +316,8 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const [focused, setFocused] = useState(false);
   useEffect(() => {
     const narrow = window.matchMedia("(max-width: 639px)");
-    const onScroll = () => setCompact(narrow.matches && window.scrollY > 160);
+    // Two thresholds, so the box shrinking (which moves the page) can't flip it straight back.
+    const onScroll = () => setCompact((was) => narrow.matches && (was ? window.scrollY > 80 : window.scrollY > 220));
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
@@ -348,6 +350,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
     setCards([]);
     setRead(null);
     askedAt.current = Date.now();
+    setLanded(new Set());
     setFresh((n) => n + 1);
     setDone(null);
     setError("");
@@ -369,7 +372,6 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
-      let got = 0;
       for (;;) {
         const { value, done: finished } = await reader.read();
         if (finished) break;
@@ -379,14 +381,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
         for (const line of lines.filter(Boolean)) {
           const event = JSON.parse(line);
           if (event.type === "reading") setRead(event.reading);
-          else if (event.type === "option") {
-            // The first one turns the box over; the rest follow into the list.
-            if (got++ === 0) {
-              setTurning(true);
-              setTimeout(() => setTurning(false), 320);
-            }
-            setCards((cs) => [...cs, event.option]);
-          }
+          else if (event.type === "option") setCards((cs) => [...cs, event.option]);
           else if (event.type === "done") setDone(event);
           else if (event.type === "error") throw new Error(event.message);
         }
@@ -424,7 +419,6 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
     }
   }
 
-  const pending = status === "running" ? Math.max(0, 3 - cards.length) : 0;
   const questions = entries.flatMap((e) => e.questions.map((q) => ({ ...q, entry: e })));
   const waiting = entries.filter((e) => e.awaiting && e.awaiting !== "choice").reverse();
   // Which side of a choice was taken: asked only while it's the latest thing used, and never pressed.
@@ -445,9 +439,10 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
 
       {/* The box stays in reach: it sticks to the top while you read options further down. Open
           questions sit right above it until they're answered. */}
+      {/* What just happened: the context for whatever comes next, updating as you choose and record.
+          It sits above the box in the page (not pinned), so scrolling stays steady. */}
+      <NowStrip lines={nowLines(entries, asked)} />
       <div className="sticky top-0 z-20 -mx-4 bg-background/95 px-4 pb-2 pt-2 backdrop-blur">
-        {/* What just happened: the context for whatever comes next, updating as you choose and record. */}
-        <NowStrip lines={nowLines(entries, asked)} compact={shrunk} />
         {questions.length > 0 && <QuestionTray questions={questions} reload={reload} campaignId={campaignId} autoApprove={autoApprove} setAutoApprove={setAutoApprove} />}
         {/* Then any roll or fight still waiting for how it turned out (newest first). */}
         {!questions.length && waiting.length > 0 && (
@@ -624,19 +619,30 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
         <section aria-live="polite" className="mt-6">
           {done?.safetyNote && <Note>{done.safetyNote}</Note>}
 
-          {/* While Loom writes: the answer box drawing in what it picked out, then turning over. */}
-          {status === "running" && (!cards.length || turning) ? (
-            <Gathering read={read} startedAt={askedAt.current} turning={turning} />
-          ) : (
-          <ol key={fresh} className={`space-y-3 ${fresh ? "turn-in" : ""}`}>
-            {cards.map((card, i) => {
+          <ol className="space-y-3">
+            {/* While Loom writes, each row is an empty answer the words it read drop into; when its
+                option arrives the row turns over into it. Restored moments show their options as they are. */}
+            {Array.from({ length: status === "running" ? Math.max(3, cards.length) : cards.length }, (_, i) => cards[i]).map((card, i) => {
+              if (fresh && !landed.has(i))
+                return (
+                  <SlotRow
+                    key={`slot-${fresh}-${i}`}
+                    n={i}
+                    words={readWords(read)}
+                    startedAt={askedAt.current}
+                    expectMs={read?.expectMs ?? 4000}
+                    headline={card?.headline}
+                    onLanded={() => setLanded((l) => new Set(l).add(i))}
+                  />
+                );
+              if (!card) return null;
               const state = !current?.choiceKind ? "open" : current.choiceKind === "option" && current.choice === card.text ? "used" : "other";
               // Once you've chosen, the rest fold away so the page follows the story, not the menu:
               // first they unravel into a thread, then they're gone.
               if (state === "other" && !showOthers) return unravelling ? <Headline key={`${card.label}-${i}`} card={card} n={i + 1} onOpen={() => {}} leaving={i} /> : null;
               // Headlines first: only the one you open (or the one you used) is shown in full.
               if (state === "open" && openCard !== i)
-                return <Headline key={`${card.label}-${i}`} card={card} n={i + 1} onOpen={() => setOpenCard(i)} animate={!!fresh} />;
+                return <Headline key={`${card.label}-${i}`} card={card} n={i + 1} onOpen={() => setOpenCard(i)} settled={!!fresh} />;
               return (
                 <OptionCard
                   key={`${card.label}-${i}`}
@@ -655,13 +661,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                 />
               );
             })}
-            {pending > 0 && cards.length > 0 && (
-              <li className="pt-1">
-                <Reading final={`Writing ${pending === 1 ? "one more" : `${pending} more`}`} />
-              </li>
-            )}
           </ol>
-          )}
           {current?.choiceKind && cards.some((c) => !(current.choiceKind === "option" && current.choice === c.text)) && (
             <button type="button" onClick={() => setShowOthers(!showOthers)} className="btn-tertiary mt-2 flex text-sm">
               {showOthers ? "Fold the other options" : `${cards.filter((c) => !(current.choiceKind === "option" && current.choice === c.text)).length} other options`}
@@ -1326,23 +1326,15 @@ function LoomStatus({ entry, compact = false }: { entry: Entry; compact?: boolea
 // ---------- the options ----------
 
 // An option as one line: its flavour and its hook. Tap to read it in full.
-// Headlines already shown with their words coming in, so folding a card back doesn't replay it.
-const arrived = new WeakSet<Card>();
-
-function Headline({ card, n, onOpen, leaving, animate = false }: { card: Card; n: number; onOpen: () => void; leaving?: number; animate?: boolean }) {
-  const words = animate && !arrived.has(card);
-  useEffect(() => {
-    arrived.add(card);
-  }, [card]);
+// `settled`: the row has just turned over into it, so it takes its place without moving.
+function Headline({ card, n, onOpen, leaving, settled = false }: { card: Card; n: number; onOpen: () => void; leaving?: number; settled?: boolean }) {
   return (
-    <li className={leaving != null ? "unravel rounded-xl" : words ? "" : "rise"} style={leaving != null ? ({ "--delay": `${leaving * 160}ms` } as React.CSSProperties) : undefined} aria-hidden={leaving != null || undefined}>
+    <li className={leaving != null ? "unravel rounded-xl" : settled ? "" : "rise"} style={leaving != null ? ({ "--delay": `${leaving * 160}ms` } as React.CSSProperties) : undefined} aria-hidden={leaving != null || undefined}>
       <button type="button" onClick={onOpen} className="group flex w-full items-baseline gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-left shadow-sm transition-colors hover:border-thread/60">
         <span className="w-4 shrink-0 text-[13px] text-muted">{n}</span>
-        <span className="story min-w-0 flex-1 leading-snug">
-          <Words text={card.headline} animate={words} />
-        </span>
+        <span className="story min-w-0 flex-1 leading-snug max-sm:min-h-[2.75em]">{card.headline}</span>
         {card.surprise && <span className="shrink-0 rounded-full border border-thread/50 px-2 py-0.5 text-[11px] text-thread" title={card.surprise}>Surprise</span>}
-        {card.flavour && <span className="shrink-0 rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
+        {card.flavour && <span className={`shrink-0 rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread ${settled ? "drop-in" : ""}`}>{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
       </button>
     </li>
   );
