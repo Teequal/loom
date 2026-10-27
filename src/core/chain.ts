@@ -1,3 +1,4 @@
+import { holdPlace, MOVES_THERE, placeContext, type PlaceContext } from "./place";
 import { applyPlans, beatPlansOn, planMoves, plansBlock, PLAN_TEXT, spentThisSession, type PlanBeat } from "./beat-plans";
 import { z } from "zod";
 import { APPROACH_SKILLS, FLAVOURS, adoptHand, handText, type Approach, checkOption, contextPrompt, fitToMove, liveRulesOf, settleLost, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
@@ -189,6 +190,9 @@ export class StepRunner {
   plans = new Map<string, PlanBeat[]>(); // the moves' beat plans, when they're on
   private usedPlans = new Set<string>(); // plan beats the chain has already written
   private lost = new Set<string>(); // things dropped sentences introduced: later steps can't refer to them
+  private away: string | null = null; // a place an earlier step pointed to, which the party isn't at
+  private moved = false; // the players chose to go somewhere: where "here" is, code no longer knows
+  private places: PlaceContext | null = null;
   constructor(
     private p: Prepared,
     private head: RawHead,
@@ -263,6 +267,14 @@ export class StepRunner {
       if (calm.length < o.setup.length) this.log.push({ label: this.label, reason: `step ${n + 1}: sentence dropped: nobody new arrives in a ${this.steer} chain` });
       if (calm.length) o.setup = calm;
       else return void this.end(`step ${n + 1}: only an arrival, in a ${this.steer} chain`);
+    }
+    // It happens where the party is, until the players choose to go (a join like "If they head for
+    // the camp:"): a place mentioned, in this step or an earlier one, doesn't take them there.
+    const join = this.when(raw);
+    if (join && MOVES_THERE.test(join)) this.moved = true;
+    if (!this.moved) {
+      this.places ??= placeContext(this.p.scene.situation);
+      this.away = holdPlace(o, this.places, (r) => this.log.push({ label: this.label, reason: `step ${n + 1}: sentence dropped: ${r}` }), this.away);
     }
     // What a dropped sentence set up (in this step or an earlier one) never happened.
     const keepLog = (x: { label: string; reason: string }) => this.log.push({ label: x.label, reason: `step ${n + 1}: ${x.reason}` });

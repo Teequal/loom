@@ -18,6 +18,7 @@ import { derivedLines } from "./world/derived";
 import { interplayLine, interplaysOf } from "./world/interplays";
 import type { NodeKey } from "./world/nodes";
 import { propertiesOf } from "./world/properties";
+import { holdPlace, placeContext } from "./place";
 import { BODY_PARTS, cascadeDropped, expand, fillSlots, pcOpensClause, refersTo, SENSATIONS, type Ref } from "./slots";
 import type { Overrides, RecordFix } from "./situation";
 export type { RecordFix };
@@ -197,6 +198,7 @@ Each option is a scaffold:
   - "rule": a rule from RULES IN PLAY; it can only go to someone it applies to right now (listed after "now"), or to "table" if it applies to everyone.
   - "death_save": a PC who is dying.
   Rolls are for player characters only; what NPCs notice or decide is the GM's call, never a roll.
+- Where: everything happens where the party is now. A beat may point elsewhere (someone mentions a place, a sound carries from it), but nobody and nothing there acts on the party unless they arrive (kind "arrival"). The party only goes somewhere if the players choose to: offer it as a choice or a question.
 - on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. For a roll by the table, the effect says who it hits ("whoever fails…"), never "he" or "she". This is the only place a PC may act against their player's will. Otherwise target "none" and effect "".`;
 
 const SYSTEM = `You are Loom, a game master's assistant used live at the table. The players just did something unexpected. Offer 3 short, playable options that tie the moment back to threads already in the campaign, instead of inventing new material.
@@ -911,6 +913,7 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   // got, so asking the same thing again gives the same answer.
   const surprise = { chance: SURPRISE_CHANCE[opts.surprises ?? "rare"], seed: `${campaignId}|${moment}|${scene.situation.view.g.log.length}|${opts.steer ?? ""}` };
   const moves = findMoves(scene.situation.view, threads, { callbacks, liveRules: liveRulesOf(scene), surprise });
+  const places = placeContext(scene.situation);
   {
     const s = scene.situation;
     const typeOf = new Map(s.entities.map((e) => [e.name, e.type]));
@@ -1017,6 +1020,8 @@ ${moment}`;
       const o = filled.option;
       normaliseHandOff(o, lists.check);
       fitToMove(o, moves, lists.check, droppedSentences);
+      // It happens where the party is: a place mentioned doesn't take them there (place.ts).
+      holdPlace(o, places, (r) => droppedSentences.push({ label: o.label, reason: `sentence dropped: ${r}` }));
       o.pillar = pillarOf(o);
       // What a dropped sentence set up never happened: nothing later may refer back to it.
       if (!settleLost(o, rawSetup, droppedSentences)) return rejected.push({ label: o.label, reason: "nothing left once what dropped sentences set up was removed" });

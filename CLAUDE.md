@@ -846,6 +846,13 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - **Inspector text:** history, ties, pulls, properties and values read as sentences ("Fear: 0 (was 1)", "Located at Old Town", "Fear over greed · tension", "Session 8"). Thread history says "New · / Moved on · / Resolved ·".
   - Tested on the sample campaign, desktop and phone (then reseeded). 363/363 checks; engine tests, lint and types clean.
 
+- [x] **No teleporting** (27 Oct; Jacob, on his phone in Duradan: "Tomas knows a smuggler camp in the next hollow… trade there. A wary smuggler with a crate offers…", then a Persuasion check against the smuggler, as if the party were at the camp).
+  - **The rule** (`src/core/place.ts`, `holdPlace`): an option happens where the party is. A sentence may point elsewhere: a known place the party isn't at or inside, a new place talked of ("a smuggler camp", "an old shrine" with knows / says / mentions…), a place at a distance ("in the next hollow", "across the river", "beyond the ridge"), or "there" closing a clause. After that, a sentence that brings in someone new acting on the party (a walk-on, or a world sentence opening "A wary smuggler…") is dropped unless they come to the party ("comes running up", "arrives"). So is one that carries on inside the place pointed to ("Inside the shrine…").
+  - The dropped-sentence cascade then removes what depended on it. A check, contest, attack or notice about something that never happened becomes a question (it used to stay a roll with an empty target), and its failure line goes.
+  - **Develop:** the place pointed to carries from step to step. A step whose join is the players going ("If they head for the camp:") is free to be there, and the rule stops for the rest of that chain.
+  - The prompt says it too ("Where:" in `SCAFFOLD_TEXT`). It's all in code, with no new answer field: the formats are near the API's size limit.
+  - 9 crafted checks (372/372). Live, 6 asks on Haiku (enriched copy and sample campaign): no teleports and no false drops. The rule didn't get to fire live, so Jacob's own case rests on the crafted check.
+
 ## Entity model build (docs/entity-model.md)
 
 - [x] Step 1: Schema with provenance (migration `drizzle/0001`):

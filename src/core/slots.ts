@@ -273,7 +273,8 @@ export function cascadeDropped(o: { setup: ScaffoldBeat[]; hand?: { kind: string
     const hit = refersTo(sides, lost) ?? (h.kind === "choice" ? [...lost].find((n) => new RegExp(`\\b${n}(?:s|es)?\\b`, "i").test(plain(sides))) : null);
     if (hit) {
       dropped(`the hand-off referred to "${hit}", set up by a sentence that was dropped`);
-      if (h.kind === "choice" || h.kind === "question" || h.kind === "notice") Object.assign(h, { kind: "question", what: "", or: "" });
+      // A roll against something that never happened isn't a roll any more: ask what they do.
+      if (["choice", "question", "notice", "check", "contest", "attack"].includes(h.kind)) Object.assign(h, { kind: "question", what: "", or: "" });
       else h.what = "";
     }
   }
