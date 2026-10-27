@@ -31,19 +31,63 @@ const HOLES = [
   [4, 6, 8, 3, 5, 7, 4],
   [7, 3, 6, 5, 8, 4],
 ];
-const STEP = 34; // ms between words as a row turns over
-const FLIP = 240; // ms for one word to turn
+// A steady random number from a few integers, so a letter's timing doesn't change between redraws.
+function rand(a: number, b: number, c: number) {
+  let h = Math.imul(a + 1, 73856093) ^ Math.imul(b + 1, 19349663) ^ Math.imul(c + 1, 83492791);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+const TEAR = 460; // ms for one letter to tear away
+const WEAVE = 360; // ms for one letter to be woven in
+const PER_LETTER = 13; // ms between letters of the headline as it's woven in
 
 /**
- * One row of the answer while Loom writes it. The row starts as holes; the words Loom read drop
- * into them, paced to fill the row by the time its option usually arrives. When the option comes,
- * the words turn over one by one and the headline's words turn in from the other side. Then
- * `onLanded`, and the page shows the ordinary headline row in its place.
+ * A word as letters. "type": they come in a clump of one to three at a time, at uneven gaps, over
+ * the blank bar they're filling. "tear": each one frays off on its own, stretched thin, drifting.
+ * "weave": they come in from alternating sides, over and under, like a weft pulled through.
+ */
+function Letters({ text, seed, mode, at = 0 }: { text: string; seed: number; mode: "type" | "tear" | "weave"; at?: number }) {
+  const chars = [...text];
+  let t = 0;
+  let clump = 0;
+  const typedAt = chars.map((_, i) => {
+    if (clump-- <= 0) {
+      t += 40 + rand(seed, i, 1) * 120;
+      clump = Math.floor(rand(seed, i, 2) * 3);
+    }
+    return t;
+  });
+  return (
+    <span className={`word ${mode === "type" ? "typing" : ""}`} style={mode === "type" ? ({ "--typed": `${t + 160}ms` } as React.CSSProperties) : undefined}>
+      {chars.map((c, i) => {
+        const style =
+          mode === "type"
+            ? { animationDelay: `${typedAt[i]}ms` }
+            : mode === "tear"
+              ? { animationDelay: `${at + rand(seed, i, 3) * 260}ms`, "--tx": `${(rand(seed, i, 4) - 0.5) * 26}px`, "--ty": `${(rand(seed, i, 5) - 0.5) * 18}px`, "--rot": `${(rand(seed, i, 6) - 0.5) * 50}deg` }
+              : { animationDelay: `${at + i * PER_LETTER + rand(seed, i, 7) * 40}ms`, "--from": i % 2 ? "-0.6em" : "0.6em" };
+        return (
+          <span key={i} className={`ltr ltr-${mode}`} style={style as React.CSSProperties}>
+            {c}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+/**
+ * One row of the answer while Loom writes it. The row starts as blank bars; the words Loom read come
+ * into them letter by letter, paced to fill the row by the time its option usually arrives. When the
+ * option comes, those letters tear away like frayed threads and the headline is woven in over them,
+ * letter by letter, with a thread drawn across beneath. Then `onLanded`, and the page shows the
+ * ordinary headline row in its place.
  */
 export function SlotRow({ n, words, startedAt, expectMs, headline, onLanded }: { n: number; words: string[]; startedAt: number; expectMs: number; headline?: string; onLanded: () => void }) {
   const holes = HOLES[n % HOLES.length];
   const [now, setNow] = useState(() => Date.now());
-  const [phase, setPhase] = useState<"fill" | "out" | "in">("fill");
+  const [phase, setPhase] = useState<"fill" | "tear" | "weave" | "done">("fill");
   const landed = useRef(onLanded);
   useEffect(() => {
     landed.current = onLanded;
@@ -59,44 +103,55 @@ export function SlotRow({ n, words, startedAt, expectMs, headline, onLanded }: {
     return () => clearInterval(t);
   }, [phase, headline]);
   const arrived = !!headline;
+  const tearFor = holes.length * 45 + 260 + TEAR; // the last letter gone
   useEffect(() => {
     if (!arrived) return;
-    const words = headline!.split(/\s+/).length;
-    const outAt = setTimeout(() => setPhase("out"), 0);
-    // The new words start turning in while the last of the old ones are still turning away.
-    const turnIn = Math.round(holes.length * STEP * 0.6 + FLIP * 0.5);
-    const inAt = setTimeout(() => setPhase("in"), turnIn);
-    const done = setTimeout(() => landed.current(), turnIn + words * STEP + FLIP + 120);
-    return () => {
-      clearTimeout(outAt);
-      clearTimeout(inAt);
-      clearTimeout(done);
-    };
+    const letters = headline!.length;
+    const tearAt = setTimeout(() => setPhase("tear"), 0);
+    // The weaving starts while the last of the old letters are still tearing away.
+    const weaveFrom = Math.round(tearFor * 0.45);
+    const weaveAt = setTimeout(() => setPhase("weave"), weaveFrom);
+    const gone = setTimeout(() => setPhase((p) => (p === "weave" ? "done" : p)), tearFor + 40);
+    const done = setTimeout(() => landed.current(), Math.max(tearFor, weaveFrom + letters * PER_LETTER + 40 + WEAVE) + 100);
+    return () => [tearAt, weaveAt, gone, done].forEach(clearTimeout);
     // The row turns once, when its headline first arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [arrived]);
+  const oldShown = phase === "fill" || phase === "tear" || phase === "weave";
+  const newShown = phase === "weave" || phase === "done";
   return (
-    <li aria-hidden={phase !== "in" || undefined}>
+    <li aria-hidden={!newShown || undefined}>
       <div className="flex w-full items-baseline gap-3 rounded-xl border border-line bg-surface px-4 py-3 shadow-sm">
         <span className="w-4 shrink-0 text-[13px] text-muted">{n + 1}</span>
-        <span className="flaps story min-w-0 flex-1 leading-snug max-sm:min-h-[2.75em]">
-          {phase === "in"
-            ? headline!.split(/\s+/).map((w, j) => (
-                <span key={`h${j}`} className="flap flap-in" style={{ animationDelay: `${j * STEP}ms` }}>
-                  {w}{" "}
-                </span>
-              ))
-            : holes.map((w, j) =>
+        {/* The read words and the headline share one place (a one-cell grid), so the headline can be
+            woven in while the old letters are still tearing away, without either moving. */}
+        <span className="story grid min-w-0 flex-1 leading-snug max-sm:min-h-[2.75em]">
+          {oldShown && (
+            <span className="col-start-1 row-start-1 text-muted">
+              {holes.map((w, j) =>
                 filled[j] ? (
-                  <span key={j} className={`flap ${phase === "out" ? "flap-out" : "drop-in"} text-muted`} style={phase === "out" ? { animationDelay: `${j * STEP}ms` } : undefined}>
-                    {filled[j]}{" "}
+                  <span key={j}>
+                    <Letters text={filled[j]!} seed={n * 31 + j} mode={phase === "fill" ? "type" : "tear"} at={j * 45} />{" "}
                   </span>
                 ) : (
                   // Once Loom has read the moment, each hole takes the size of the word that will fill it,
-                  // so nothing moves when the word drops in.
-                  <span key={j} className={`hole ${phase === "out" ? "flap-out" : ""}`} style={{ width: mine(j) ? `${mine(j)!.length * 0.9}ch` : `${w}ch`, ...(phase === "out" ? { animationDelay: `${j * STEP}ms` } : {}) }} />
+                  // so nothing moves when the word comes in.
+                  <span key={j} className={`hole ${phase !== "fill" ? "hole-gone" : ""}`} style={{ width: mine(j) ? `${mine(j)!.length * 0.9}ch` : `${w}ch` }} />
                 ),
               )}
+            </span>
+          )}
+          {newShown && (
+            <span className="weave-in col-start-1 row-start-1" style={{ "--woven": `${headline!.length * PER_LETTER + WEAVE}ms` } as React.CSSProperties}>
+              {headline!.split(/(\s+)/).map((w, j, all) =>
+                /^\s+$/.test(w) ? (
+                  w
+                ) : (
+                  <Letters key={j} text={w} seed={n * 97 + j} mode="weave" at={all.slice(0, j).join("").length * PER_LETTER} />
+                ),
+              )}
+            </span>
+          )}
         </span>
       </div>
     </li>

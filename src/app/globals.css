@@ -233,12 +233,9 @@ select.quiet {
 }
 
 /* ---------- The answer, being written ---------- */
-/* Each row starts as holes in an empty headline. The words Loom read drop into them; when the
-   option arrives they turn over, word by word, and the headline's words turn in from the other
-   side, like a split-flap board. */
-.flaps {
-  perspective: 600px;
-}
+/* Each row starts as blank bars. The words Loom read come into them letter by letter, a few at a
+   time at uneven gaps. When the option arrives those letters tear away like frayed threads, and the
+   headline is woven in over them: letters from alternating sides, with a thread drawn beneath. */
 .hole {
   display: inline-block;
   height: 0.62em;
@@ -255,20 +252,52 @@ select.quiet {
     opacity: 0.35;
   }
 }
-.flap {
+.hole-gone {
+  animation: hole-gone 380ms ease-in forwards;
+}
+@keyframes hole-gone {
+  to {
+    opacity: 0;
+    transform: scaleX(0.2);
+  }
+}
+.word {
   display: inline-block;
-  white-space: pre;
-  transform-origin: 50% 55%;
-  backface-visibility: hidden;
+  position: relative;
+  isolation: isolate;
+  white-space: nowrap;
 }
-.drop-in {
-  animation: drop-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+/* The blank bar a word is filling, fading as its letters land. */
+.word.typing::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 0.62em;
+  transform: translateY(-45%);
+  border-radius: 3px;
+  background: var(--line);
+  opacity: 0.6;
+  animation: bar-fade var(--typed, 500ms) ease-out forwards;
+  z-index: -1;
 }
-@keyframes drop-in {
+@keyframes bar-fade {
+  to {
+    opacity: 0;
+  }
+}
+.ltr {
+  display: inline-block;
+}
+.ltr-type {
+  animation: ltr-type 220ms ease-out both;
+}
+@keyframes ltr-type {
   from {
     opacity: 0;
-    transform: translateY(-0.45em);
-    filter: blur(2px);
+    transform: translateY(-0.18em);
+    filter: blur(1.5px);
   }
   to {
     opacity: 1;
@@ -276,26 +305,72 @@ select.quiet {
     filter: none;
   }
 }
-.flap-out {
-  animation: flap-out 240ms cubic-bezier(0.5, 0, 0.75, 0) both;
+/* Frayed: each letter pulls thin and drifts off, like a strand coming loose. */
+.ltr-tear {
+  transform-origin: 50% 60%;
+  animation: ltr-tear 460ms cubic-bezier(0.55, 0, 0.8, 0.4) both;
 }
-@keyframes flap-out {
-  to {
-    opacity: 0;
-    transform: rotateX(90deg);
-  }
-}
-.flap-in {
-  animation: flap-in 260ms cubic-bezier(0.25, 1, 0.5, 1) both;
-}
-@keyframes flap-in {
-  from {
-    opacity: 0;
-    transform: rotateX(-90deg);
-  }
-  to {
+@keyframes ltr-tear {
+  0% {
     opacity: 1;
     transform: none;
+  }
+  35% {
+    opacity: 0.8;
+    transform: scaleX(1.25) scaleY(0.55);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--tx, 0), var(--ty, 0)) rotate(var(--rot, 0)) scaleX(1.8) scaleY(0.08);
+    filter: blur(1.5px);
+  }
+}
+/* Woven: letters come in over and under, alternately from above and below, settling into the row. */
+.ltr-weave {
+  animation: ltr-weave 360ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
+}
+@keyframes ltr-weave {
+  0% {
+    opacity: 0;
+    transform: translateY(var(--from, 0.6em)) scaleY(0.25);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(calc(var(--from, 0.6em) * -0.12)) scaleY(1.05);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* The weft: a thread drawn across beneath the headline as it's woven, then gone. */
+.weave-in {
+  position: relative;
+}
+.weave-in::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -0.15em;
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--thread);
+  transform-origin: left;
+  animation: weft-draw var(--woven, 900ms) cubic-bezier(0.3, 0.6, 0.4, 1) forwards;
+}
+@keyframes weft-draw {
+  0% {
+    transform: scaleX(0);
+    opacity: 0.7;
+  }
+  75% {
+    transform: scaleX(1);
+    opacity: 0.6;
+  }
+  100% {
+    transform: scaleX(1);
+    opacity: 0;
   }
 }
 
@@ -304,11 +379,18 @@ select.quiet {
   .read-item,
   .read-dots i,
   .hole,
-  .drop-in,
-  .flap-in {
+  .ltr-type,
+  .ltr-weave,
+  .weave-in::after,
+  .word.typing::before {
     animation: none;
   }
-  .flap-out {
+  .word.typing::before,
+  .weave-in::after {
+    opacity: 0;
+  }
+  .ltr-tear,
+  .hole-gone {
     animation-duration: 1ms;
   }
   .unravel,
