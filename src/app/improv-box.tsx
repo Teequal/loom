@@ -190,6 +190,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const [atTable, setAtTable] = useState(false);
   const [read, setRead] = useState<Read | null>(null); // what Loom picked out, shown while it writes
   const askedAt = useRef(0); // when this ask began, to pace the answer box
+  const [readAt, setReadAt] = useState<number | null>(null); // when Loom's reading of the moment arrived
   const [landed, setLanded] = useState<Set<number>>(new Set()); // rows that have turned over into their option
   const [fresh, setFresh] = useState(0); // which ask was written on this page (its options animate in); 0: restored
   const [unravelling, setUnravelling] = useState(false); // the moment the unchosen options come apart
@@ -349,6 +350,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
     setPlaceholder("What did the players just do?");
     setCards([]);
     setRead(null);
+    setReadAt(null);
     askedAt.current = Date.now();
     setLanded(new Set());
     setFresh((n) => n + 1);
@@ -380,7 +382,10 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
         buffer = lines.pop() ?? "";
         for (const line of lines.filter(Boolean)) {
           const event = JSON.parse(line);
-          if (event.type === "reading") setRead(event.reading);
+          if (event.type === "reading") {
+            setRead(event.reading);
+            setReadAt(Date.now());
+          }
           else if (event.type === "option") setCards((cs) => [...cs, event.option]);
           else if (event.type === "done") setDone(event);
           else if (event.type === "error") throw new Error(event.message);
@@ -630,6 +635,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                     n={i}
                     words={readWords(read)}
                     startedAt={askedAt.current}
+                    knownAt={readAt}
                     expectMs={read?.expectMs ?? 4000}
                     headline={card?.headline}
                     onLanded={() => setLanded((l) => new Set(l).add(i))}

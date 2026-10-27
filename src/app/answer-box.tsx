@@ -70,7 +70,8 @@ function Letters({ text, seed, mode, at = 0, fast = false }: { text: string; see
               : undefined;
         return (
           <span key={i} className={`ltr ltr-${mode}`} style={style as React.CSSProperties | undefined}>
-            {c}
+            {/* A space inside a name ("Mother Ysolde") would collapse in its own box. */}
+            {c === " " ? "\u00a0" : c}
           </span>
         );
       })}
@@ -89,7 +90,7 @@ const overlaps = (a: DOMRect, b: DOMRect) => a.left < b.right - 1 && b.left < a.
  * every read word in its space has gone. Then `onLanded`, and the page shows the ordinary headline
  * row in its place.
  */
-export function SlotRow({ n, words, startedAt, expectMs, headline, onLanded }: { n: number; words: string[]; startedAt: number; expectMs: number; headline?: string; onLanded: () => void }) {
+export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, onLanded }: { n: number; words: string[]; startedAt: number; knownAt: number | null; expectMs: number; headline?: string; onLanded: () => void }) {
   const count = ROW_WORDS[n % ROW_WORDS.length];
   const [now, setNow] = useState(() => Date.now());
   const [plan, setPlan] = useState<{ gone: number[]; start: number[] } | null>(null);
@@ -100,10 +101,12 @@ export function SlotRow({ n, words, startedAt, expectMs, headline, onLanded }: {
   });
   // Row n's option usually comes a little over a second after the one before.
   const due = expectMs + n * 1100;
-  // Words come in no particular order, a few close together, and the row is full well before its
-  // option is due.
+  // Words come in no particular order, a few close together, over the time left before the option
+  // is usually due (at least about a second), counted from when Loom knew them, not from the ask:
+  // they arrive a moment after the ask, and timing from the ask would bring them all in at once.
   const order = Array.from({ length: count }, (_, j) => j).sort((a, b) => rand(n, a, 8) - rand(n, b, 8));
-  const at = (j: number) => startedAt + due * (0.06 + (0.34 * order.indexOf(j)) / (count - 1)) + rand(n, j, 9) * 220;
+  const span = knownAt == null ? 0 : Math.max(1000, startedAt + due * 0.6 - knownAt);
+  const at = (j: number) => (knownAt == null ? Infinity : knownAt + 120 + (span * order.indexOf(j)) / (count - 1) + rand(n, j, 9) * 200);
   const mine = Array.from({ length: words.length ? count : 0 }, (_, j) => words[(n * 3 + j) % words.length]);
   const arrived = !!headline;
   // Which read words had come in when the option arrived (the rest never show).
