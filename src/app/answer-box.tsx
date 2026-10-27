@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Icon } from "./icons";
 import { Linked } from "./loom-ui";
 
@@ -25,12 +25,9 @@ export function readWords(r: Read | null): string[] {
   return out;
 }
 
-// The holes in each empty row, as widths in characters: a headline's shape, before its words exist.
-const HOLES = [
-  [5, 8, 3, 7, 4, 6],
-  [4, 6, 8, 3, 5, 7, 4],
-  [7, 3, 6, 5, 8, 4],
-];
+// How many of the words Loom read each row shows while it waits.
+const ROW_WORDS = [6, 7, 6];
+
 // A steady random number from a few integers, so a letter's timing doesn't change between redraws.
 function rand(a: number, b: number, c: number) {
   let h = Math.imul(a + 1, 73856093) ^ Math.imul(b + 1, 19349663) ^ Math.imul(c + 1, 83492791);
@@ -39,35 +36,40 @@ function rand(a: number, b: number, c: number) {
 }
 
 const TEAR = 300; // ms for one letter to tear away
-const WEAVE = 300; // ms for one word to be drawn in
-const PER_WORD = 45; // ms between words of the headline as it's woven in
+const SPREAD = 140; // ms over which a word's letters start tearing
 
-/**
- * A word as letters. "type": they come in a clump of one to three at a time, at uneven gaps, over
- * the blank bar they're filling. "tear": each one frays off on its own, stretched thin, drifting.
- * "weave": the word is drawn in left to right, like a thread pulled through.
- */
-function Letters({ text, seed, mode, at = 0 }: { text: string; seed: number; mode: "type" | "tear" | "weave"; at?: number }) {
-  const chars = [...text];
+/** When each letter of a word lands: clumps of one to three, at uneven gaps (shorter when `fast`). */
+function typeTimes(text: string, seed: number, fast = false) {
   let t = 0;
   let clump = 0;
-  const typedAt = chars.map((_, i) => {
+  const at = [...text].map((_, i) => {
     if (clump-- <= 0) {
-      t += 25 + rand(seed, i, 1) * 70;
+      t += fast ? 14 + rand(seed, i, 1) * 34 : 25 + rand(seed, i, 1) * 70;
       clump = Math.floor(rand(seed, i, 2) * 3);
     }
     return t;
   });
-  if (mode === "weave") return <span className="word word-weave" style={{ animationDelay: `${at}ms` }}>{text}</span>;
+  return { at, total: t + 220 };
+}
+
+/**
+ * A word as letters, always laid out where it will stay. "wait": not there yet (invisible, but
+ * holding its place). "type": its letters land in clumps at uneven gaps. "tear": each letter frays
+ * off on its own, stretched thin, drifting.
+ */
+function Letters({ text, seed, mode, at = 0, fast = false }: { text: string; seed: number; mode: "wait" | "type" | "tear"; at?: number; fast?: boolean }) {
+  const typed = typeTimes(text, seed, fast).at;
   return (
-    <span className={`word ${mode === "type" ? "typing" : ""}`} style={mode === "type" ? ({ "--typed": `${t + 160}ms` } as React.CSSProperties) : undefined}>
-      {chars.map((c, i) => {
+    <span className="word">
+      {[...text].map((c, i) => {
         const style =
           mode === "type"
-            ? { animationDelay: `${typedAt[i]}ms` }
-            : { animationDelay: `${at + rand(seed, i, 3) * 140}ms`, "--tx": `${(rand(seed, i, 4) - 0.5) * 20}px`, "--ty": `${(rand(seed, i, 5) - 0.5) * 14}px`, "--rot": `${(rand(seed, i, 6) - 0.5) * 40}deg` };
+            ? { animationDelay: `${at + typed[i]}ms` }
+            : mode === "tear"
+              ? { animationDelay: `${at + rand(seed, i, 3) * SPREAD}ms`, "--tx": `${(rand(seed, i, 4) - 0.5) * 20}px`, "--ty": `${(rand(seed, i, 5) - 0.5) * 14}px`, "--rot": `${(rand(seed, i, 6) - 0.5) * 40}deg` }
+              : undefined;
         return (
-          <span key={i} className={`ltr ltr-${mode}`} style={style as React.CSSProperties}>
+          <span key={i} className={`ltr ltr-${mode}`} style={style as React.CSSProperties | undefined}>
             {c}
           </span>
         );
@@ -76,78 +78,88 @@ function Letters({ text, seed, mode, at = 0 }: { text: string; seed: number; mod
   );
 }
 
+// Whether two word boxes share any space (a pixel of give, so words that only touch don't count).
+const overlaps = (a: DOMRect, b: DOMRect) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
+
 /**
- * One row of the answer while Loom writes it. The row starts as blank bars; the words Loom read come
- * into them letter by letter, paced to fill the row by the time its option usually arrives. When the
- * option comes, those letters tear away like frayed threads and the headline is woven in over them,
- * letter by letter, with a thread drawn across beneath. Then `onLanded`, and the page shows the
- * ordinary headline row in its place.
+ * One row of the answer while Loom writes it. The words Loom read come in letter by letter, each
+ * already where it will sit, in no particular order, a few at a time. When the option arrives, they
+ * tear away like frayed threads, a few at a time, and the headline comes in the same way, faster:
+ * a headline word that shares no space with a read word starts at once; one that does waits until
+ * every read word in its space has gone. Then `onLanded`, and the page shows the ordinary headline
+ * row in its place.
  */
 export function SlotRow({ n, words, startedAt, expectMs, headline, onLanded }: { n: number; words: string[]; startedAt: number; expectMs: number; headline?: string; onLanded: () => void }) {
-  const holes = HOLES[n % HOLES.length];
+  const count = ROW_WORDS[n % ROW_WORDS.length];
   const [now, setNow] = useState(() => Date.now());
-  const [phase, setPhase] = useState<"fill" | "tear" | "weave" | "done">("fill");
+  const [plan, setPlan] = useState<{ gone: number[]; start: number[] } | null>(null);
+  const box = useRef<HTMLSpanElement>(null);
   const landed = useRef(onLanded);
   useEffect(() => {
     landed.current = onLanded;
   });
   // Row n's option usually comes a little over a second after the one before.
   const due = expectMs + n * 1100;
-  // Words come into the holes in no particular order, a few close together: each hole's turn is
-  // shuffled, and the row is full well before its option is due.
-  const order = holes.map((_, j) => j).sort((a, b) => rand(n, a, 8) - rand(n, b, 8));
-  const at = (j: number) => startedAt + due * (0.06 + (0.34 * order.indexOf(j)) / (holes.length - 1)) + rand(n, j, 9) * 220;
-  const mine = (j: number) => (words.length ? words[(n * 3 + j) % words.length] : null);
-  const filled = holes.map((_, j) => (now >= at(j) ? mine(j) : null));
+  // Words come in no particular order, a few close together, and the row is full well before its
+  // option is due.
+  const order = Array.from({ length: count }, (_, j) => j).sort((a, b) => rand(n, a, 8) - rand(n, b, 8));
+  const at = (j: number) => startedAt + due * (0.06 + (0.34 * order.indexOf(j)) / (count - 1)) + rand(n, j, 9) * 220;
+  const mine = Array.from({ length: words.length ? count : 0 }, (_, j) => words[(n * 3 + j) % words.length]);
+  const arrived = !!headline;
+  // Which read words had come in when the option arrived (the rest never show).
+  const [shownAtTurn, setShownAtTurn] = useState<boolean[] | null>(null);
   useEffect(() => {
-    if (phase !== "fill" || headline) return;
+    if (arrived) return;
     const t = setInterval(() => setNow(Date.now()), 90);
     return () => clearInterval(t);
-  }, [phase, headline]);
-  const arrived = !!headline;
-  const tearFor = holes.length * 25 + 140 + TEAR; // the last letter gone
-  useEffect(() => {
-    if (!arrived) return;
-    const words = headline!.split(/\s+/).length;
-    const tearAt = setTimeout(() => setPhase("tear"), 0);
-    // The weaving starts while the last of the old letters are still tearing away.
-    const weaveFrom = Math.round(tearFor * 0.4);
-    const weaveAt = setTimeout(() => setPhase("weave"), weaveFrom);
-    const gone = setTimeout(() => setPhase((p) => (p === "weave" ? "done" : p)), tearFor + 40);
-    const done = setTimeout(() => landed.current(), Math.max(tearFor, weaveFrom + words * PER_WORD + WEAVE) + 80);
-    return () => [tearAt, weaveAt, gone, done].forEach(clearTimeout);
+  }, [arrived]);
+  const outWords = headline ? headline.split(/\s+/) : [];
+  // When the option arrives: measure where every word sits, then plan. Read words tear away a few
+  // at a time; a headline word waits for the read words in its space to go.
+  useLayoutEffect(() => {
+    if (!arrived || !box.current) return;
+    const shown = mine.map((_, j) => Date.now() >= at(j));
+    setShownAtTurn(shown);
+    const rectsOf = (attr: string) => [...box.current!.querySelectorAll<HTMLElement>(`[${attr}]`)].map((el) => el.getBoundingClientRect());
+    const mRects = rectsOf("data-m");
+    const oRects = rectsOf("data-o");
+    const gone = mine.map((w, j) => (shown[j] ? rand(n, j, 11) * 320 + SPREAD + TEAR : 0));
+    const start = outWords.map((_, k) => {
+      const under = mRects.map((r, j) => (shown[j] && oRects[k] && overlaps(r, oRects[k]) ? gone[j] : -1)).filter((g) => g >= 0);
+      return under.length ? Math.max(...under) - 60 + rand(n, k, 12) * 70 : rand(n, k, 12) * 240;
+    });
+    setPlan({ gone, start });
+    const end = Math.max(0, ...gone, ...start.map((s, k) => s + typeTimes(outWords[k], n * 97 + k, true).total));
+    const done = setTimeout(() => landed.current(), end + 120);
+    return () => clearTimeout(done);
     // The row turns once, when its headline first arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [arrived]);
-  const oldShown = phase === "fill" || phase === "tear" || phase === "weave";
-  const newShown = phase === "weave" || phase === "done";
   return (
-    <li aria-hidden={!newShown || undefined}>
+    <li aria-hidden={!plan || undefined}>
       <div className="flex w-full items-baseline gap-3 rounded-xl border border-line bg-surface px-4 py-3 shadow-sm">
         <span className="w-4 shrink-0 text-[13px] text-muted">{n + 1}</span>
-        {/* The read words and the headline share one place (a one-cell grid), so the headline can be
-            woven in while the old letters are still tearing away, without either moving. */}
-        <span className="story grid min-w-0 flex-1 leading-snug max-sm:min-h-[2.75em]">
-          {oldShown && (
-            <span className="col-start-1 row-start-1 text-muted">
-              {holes.map((w, j) =>
-                filled[j] ? (
-                  <span key={j}>
-                    <Letters text={filled[j]!} seed={n * 31 + j} mode={phase === "fill" ? "type" : "tear"} at={j * 25} />{" "}
-                  </span>
-                ) : (
-                  // Once Loom has read the moment, each hole takes the size of the word that will fill it,
-                  // so nothing moves when the word comes in.
-                  <span key={j} className={`hole ${phase !== "fill" ? "hole-gone" : ""}`} style={{ width: mine(j) ? `${mine(j)!.length * 0.9}ch` : `${w}ch` }} />
-                ),
-              )}
-            </span>
-          )}
-          {newShown && (
-            <span className="weave-in col-start-1 row-start-1" style={{ "--woven": `${headline!.split(/\s+/).length * PER_WORD + WEAVE}ms` } as React.CSSProperties}>
-              {headline!.split(/(\s+)/).map((w, j) =>
-                /^\s+$/.test(w) ? w : <Letters key={j} text={w} seed={n * 97 + j} mode="weave" at={(j / 2) * PER_WORD} />,
-              )}
+        {/* The read words and the headline share one place (a one-cell grid), each word laid out
+            where it stays, so nothing moves as letters come and go. */}
+        <span ref={box} className="story grid min-w-0 flex-1 leading-snug max-sm:min-h-[2.75em]">
+          <span className="col-start-1 row-start-1 text-muted">
+            {mine.map((w, j) => {
+              const turned = shownAtTurn ?? null;
+              const mode = turned ? (turned[j] ? "tear" : "wait") : now >= at(j) ? "type" : "wait";
+              return (
+                <span key={j} data-m={j}>
+                  <Letters text={w} seed={n * 31 + j} mode={mode} at={turned && plan ? plan.gone[j] - SPREAD - TEAR : 0} />{" "}
+                </span>
+              );
+            })}
+          </span>
+          {arrived && (
+            <span className="col-start-1 row-start-1">
+              {outWords.map((w, k) => (
+                <span key={k} data-o={k}>
+                  <Letters text={w} seed={n * 97 + k} mode={plan ? "type" : "wait"} at={plan?.start[k] ?? 0} fast />{" "}
+                </span>
+              ))}
             </span>
           )}
         </span>

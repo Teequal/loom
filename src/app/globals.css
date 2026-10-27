@@ -233,62 +233,18 @@ select.quiet {
 }
 
 /* ---------- The answer, being written ---------- */
-/* Each row starts as blank bars. The words Loom read come into them letter by letter, a few at a
-   time at uneven gaps. When the option arrives those letters tear away like frayed threads, and the
-   headline is woven in over them: letters from alternating sides, with a thread drawn beneath. */
-.hole {
-  display: inline-block;
-  height: 0.62em;
-  margin-right: 0.32em;
-  vertical-align: -0.02em;
-  border-radius: 3px;
-  background: var(--line);
-  opacity: 0.75;
-  transition: width 320ms ease;
-  animation: hole-wait 1.4s ease-in-out infinite alternate;
-}
-@keyframes hole-wait {
-  to {
-    opacity: 0.35;
-  }
-}
-.hole-gone {
-  animation: hole-gone 380ms ease-in forwards;
-}
-@keyframes hole-gone {
-  to {
-    opacity: 0;
-    transform: scaleX(0.2);
-  }
-}
+/* Every word is laid out where it stays. The words Loom read come in letter by letter, a few at a
+   time at uneven gaps. When the option arrives they tear away like frayed threads, and the
+   headline's letters come in the same way, each word once the read words in its space are gone. */
 .word {
   display: inline-block;
-  position: relative;
-  isolation: isolate;
   white-space: nowrap;
-}
-/* The blank bar a word is filling, fading as its letters land. */
-.word.typing::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 0.62em;
-  transform: translateY(-45%);
-  border-radius: 3px;
-  background: var(--line);
-  opacity: 0.6;
-  animation: bar-fade var(--typed, 500ms) ease-out forwards;
-  z-index: -1;
-}
-@keyframes bar-fade {
-  to {
-    opacity: 0;
-  }
 }
 .ltr {
   display: inline-block;
+}
+.ltr-wait {
+  opacity: 0;
 }
 .ltr-type {
   animation: ltr-type 220ms ease-out both;
@@ -325,70 +281,15 @@ select.quiet {
     filter: blur(1.5px);
   }
 }
-/* Woven: each word is drawn in left to right, like a thread pulled through, sharpening as it comes. */
-.word-weave {
-  animation: word-weave 300ms cubic-bezier(0.25, 0.7, 0.3, 1) both;
-}
-@keyframes word-weave {
-  from {
-    clip-path: inset(-0.3em 100% -0.3em 0);
-    opacity: 0.35;
-    filter: blur(1px);
-  }
-  to {
-    clip-path: inset(-0.3em 0 -0.3em 0);
-    opacity: 1;
-    filter: none;
-  }
-}
-/* The weft: a thread drawn across beneath the headline as it's woven, then gone. */
-.weave-in {
-  position: relative;
-}
-.weave-in::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -0.15em;
-  height: 1.5px;
-  border-radius: 1px;
-  background: var(--thread);
-  transform-origin: left;
-  animation: weft-draw var(--woven, 700ms) linear forwards;
-}
-@keyframes weft-draw {
-  0% {
-    transform: scaleX(0);
-    opacity: 0.7;
-  }
-  75% {
-    transform: scaleX(1);
-    opacity: 0.6;
-  }
-  100% {
-    transform: scaleX(1);
-    opacity: 0;
-  }
-}
 
 @media (prefers-reduced-motion: reduce) {
   .read-step,
   .read-item,
   .read-dots i,
-  .hole,
-  .ltr-type,
-  .word-weave,
-  .weave-in::after,
-  .word.typing::before {
+  .ltr-type {
     animation: none;
   }
-  .word.typing::before,
-  .weave-in::after {
-    opacity: 0;
-  }
-  .ltr-tear,
-  .hole-gone {
+  .ltr-tear {
     animation-duration: 1ms;
   }
   .unravel,
