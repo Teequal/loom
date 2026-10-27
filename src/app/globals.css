@@ -254,12 +254,16 @@ select.quiet {
 /* Every word is laid out where it stays. The words Loom read come in letter by letter, a few at a
    time at uneven gaps. When the option arrives they tear away like frayed threads, and the
    headline's letters come in the same way, each word once the read words in its space are gone. */
+/* Words and letters sit at the top of their line wherever they are (a row being written, a
+   finished headline, a row going up in smoke), so swapping one for another moves nothing. */
 .word {
   display: inline-block;
   white-space: nowrap;
+  vertical-align: top;
 }
 .ltr {
   display: inline-block;
+  vertical-align: top;
 }
 .ltr-wait {
   opacity: 0;
@@ -317,3 +321,4 @@ select.quiet {
     animation-delay: 0ms;
   }
 }
+/* css rev 1793088120 */

@@ -57,7 +57,7 @@ function typeTimes(text: string, seed: number, fast = false) {
  * holding its place). "type": its letters land in clumps at uneven gaps. "tear": each letter frays
  * off on its own, stretched thin, drifting.
  */
-function Letters({ text, seed, mode, at = 0, fast = false }: { text: string; seed: number; mode: "wait" | "type" | "tear"; at?: number; fast?: boolean }) {
+function Letters({ text, seed, mode, at = 0, fast = false }: { text: string; seed: number; mode: "wait" | "type" | "tear" | "smoke"; at?: number; fast?: boolean }) {
   const typed = typeTimes(text, seed, fast).at;
   return (
     <span className="word">
@@ -67,7 +67,9 @@ function Letters({ text, seed, mode, at = 0, fast = false }: { text: string; see
             ? { animationDelay: `${at + typed[i]}ms` }
             : mode === "tear"
               ? { animationDelay: `${at + rand(seed, i, 3) * SPREAD}ms`, "--tx": `${(rand(seed, i, 4) - 0.5) * 20}px`, "--ty": `${(rand(seed, i, 5) - 0.5) * 14}px`, "--rot": `${(rand(seed, i, 6) - 0.5) * 40}deg` }
-              : undefined;
+              : mode === "smoke"
+                ? smokeStyle(seed, i, at)
+                : undefined;
         return (
           <span key={i} className={`ltr ltr-${mode}`} style={style as React.CSSProperties | undefined}>
             {/* A space inside a name ("Mother Ysolde") would collapse in its own box. */}
@@ -90,7 +92,7 @@ const overlaps = (a: DOMRect, b: DOMRect) => a.left < b.right - 1 && b.left < a.
  * every read word in its space has gone. Then `onLanded`, and the page shows the ordinary headline
  * row in its place.
  */
-export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, tag, onLanded }: { n: number; words: string[]; startedAt: number; knownAt: number | null; expectMs: number; headline?: string; tag?: string; onLanded: () => void }) {
+export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, tag, dropped = false, onLanded }: { n: number; words: string[]; startedAt: number; knownAt: number | null; expectMs: number; headline?: string; tag?: string; dropped?: boolean; onLanded: () => void }) {
   const count = ROW_WORDS[n % ROW_WORDS.length];
   const [now, setNow] = useState(() => Date.now());
   const [plan, setPlan] = useState<{ gone: number[]; start: number[] } | null>(null);
@@ -139,16 +141,17 @@ export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, tag,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [arrived]);
   return (
-    <li aria-hidden={!plan || undefined}>
-      <div className="flex w-full items-baseline gap-3 rounded-xl border border-line bg-surface px-4 py-3 shadow-sm">
-        <span className="w-4 shrink-0 text-[13px] text-muted">{n + 1}</span>
+    // Its option never came (the checks dropped it): the row goes up in smoke, the card and each
+    // word Loom read on their own timing, then closes.
+    <li aria-hidden={!plan || undefined} className={dropped ? "smoke rounded-xl" : undefined}>
+      <div className={`flex w-full items-start gap-3 rounded-xl px-4 py-3 ${dropped ? "smoke-pane" : "border border-line bg-surface shadow-sm"}`}>
         {/* The read words and the headline share one place (a one-cell grid), each word laid out
             where it stays, so nothing moves as letters come and go. */}
         <span ref={box} className="story grid min-w-0 flex-1 leading-snug max-sm:min-h-[2.75em]">
           <span className="col-start-1 row-start-1 text-muted">
             {mine.map((w, j) => {
               const turned = shownAtTurn ?? null;
-              const mode = turned ? (turned[j] ? "tear" : "wait") : now >= at(j) ? "type" : "wait";
+              const mode = turned ? (turned[j] ? "tear" : "wait") : now >= at(j) ? (dropped ? "smoke" : "type") : "wait";
               return (
                 <span key={j} data-m={j}>
                   <Letters text={w} seed={n * 31 + j} mode={mode} at={turned && plan ? plan.gone[j] - SPREAD - TEAR : 0} />{" "}
@@ -167,10 +170,21 @@ export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, tag,
           )}
         </span>
         {/* The tag's place is kept from the start, so it fades in without moving any words. */}
-        <span className="flex min-w-[5rem] shrink-0 justify-end">{tag && plan && <span className="drop-in rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{tag}</span>}</span>
+        <span className="mt-0.5 flex min-w-[5rem] shrink-0 justify-end">{tag && plan && <span className="drop-in rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{tag}</span>}</span>
       </div>
     </li>
   );
+}
+
+// One letter going up in smoke: its own moment, how long, and which way it drifts.
+function smokeStyle(seed: number, i: number, at: number) {
+  return {
+    animationDelay: `${at + rand(seed, i, 21) * 420}ms`,
+    animationDuration: `${700 + rand(seed, i, 22) * 500}ms`,
+    "--sx": `${(rand(seed, i, 23) - 0.5) * 18}px`,
+    "--sy": `${-10 - rand(seed, i, 24) * 22}px`,
+    "--sr": `${(rand(seed, i, 25) - 0.5) * 30}deg`,
+  };
 }
 
 /**
@@ -189,15 +203,7 @@ export function Smoke({ text, seed, at = 0 }: { text: string; seed: number; at?:
               <span
                 key={i}
                 className="ltr ltr-smoke"
-                style={
-                  {
-                    animationDelay: `${at + rand(seed + j, i, 21) * 420}ms`,
-                    animationDuration: `${700 + rand(seed + j, i, 22) * 500}ms`,
-                    "--sx": `${(rand(seed + j, i, 23) - 0.5) * 18}px`,
-                    "--sy": `${-10 - rand(seed + j, i, 24) * 22}px`,
-                    "--sr": `${(rand(seed + j, i, 25) - 0.5) * 30}deg`,
-                  } as React.CSSProperties
-                }
+                style={smokeStyle(seed + j, i, at) as React.CSSProperties}
               >
                 {c}
               </span>
@@ -205,6 +211,30 @@ export function Smoke({ text, seed, at = 0 }: { text: string; seed: number; at?:
           </span>
         ),
       )}
+    </>
+  );
+}
+
+/**
+ * Text set as the answer rows set it while they're written: each word its own box, each letter its
+ * own box. A finished headline uses this too, so swapping it in for the row being written doesn't
+ * move a single letter (letters in their own boxes lose the font's kerning, so plain text would
+ * sit a little to the left).
+ */
+export function Still({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/\s+/).map((w, k) => (
+        <span key={k}>
+          <span className="word">
+            {[...w].map((c, i) => (
+              <span key={i} className="ltr">
+                {c === " " ? "\u00a0" : c}
+              </span>
+            ))}
+          </span>{" "}
+        </span>
+      ))}
     </>
   );
 }

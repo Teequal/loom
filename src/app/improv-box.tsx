@@ -1,7 +1,7 @@
 "use client";
 
 import { Reading } from "./reading";
-import { NowStrip, readWords, SlotRow, Smoke, type NowLine, type Read } from "./answer-box";
+import { NowStrip, readWords, SlotRow, Smoke, Still, type NowLine, type Read } from "./answer-box";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Choice, Field, Steps, Switch, Tune } from "./controls";
@@ -192,6 +192,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const askedAt = useRef(0); // when this ask began, to pace the answer box
   const [readAt, setReadAt] = useState<number | null>(null); // when Loom's reading of the moment arrived
   const [landed, setLanded] = useState<Set<number>>(new Set()); // rows that have turned over into their option
+  const [vanishing, setVanishing] = useState<number[]>([]); // rows whose option never came, going up in smoke
   const [fresh, setFresh] = useState(0); // which ask was written on this page (its options animate in); 0: restored
   const [unravelling, setUnravelling] = useState(false); // the moment the unchosen options come apart
   const [lastTime, setLastTime] = useState<LastTime | null>(null); // where things stood, for a session not yet begun
@@ -374,6 +375,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let got = 0;
       for (;;) {
         const { value, done: finished } = await reader.read();
         if (finished) break;
@@ -386,10 +388,18 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
             setRead(event.reading);
             setReadAt(Date.now());
           }
-          else if (event.type === "option") setCards((cs) => [...cs, event.option]);
+          else if (event.type === "option") {
+            got++;
+            setCards((cs) => [...cs, event.option]);
+          }
           else if (event.type === "done") setDone(event);
           else if (event.type === "error") throw new Error(event.message);
         }
+      }
+      // A row whose option never came (the checks dropped it) goes up in smoke rather than vanishing.
+      if (got < 3) {
+        setVanishing(Array.from({ length: 3 - got }, (_, k) => got + k));
+        setTimeout(() => setVanishing([]), 2000);
       }
       setStatus("done");
       await reload();
@@ -627,7 +637,9 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           <ol className="space-y-3">
             {/* While Loom writes, each row is an empty answer the words it read drop into; when its
                 option arrives the row turns over into it. Restored moments show their options as they are. */}
-            {Array.from({ length: status === "running" ? Math.max(3, cards.length) : cards.length }, (_, i) => cards[i]).map((card, i) => {
+            {Array.from({ length: status === "running" || vanishing.length ? Math.max(3, cards.length) : cards.length }, (_, i) => cards[i]).map((card, i) => {
+              if (!card && vanishing.includes(i))
+                return <SlotRow key={`slot-${fresh}-${i}`} n={i} words={readWords(read)} startedAt={askedAt.current} knownAt={readAt} expectMs={read?.expectMs ?? 4000} dropped onLanded={() => {}} />;
               if (fresh && !landed.has(i))
                 return (
                   <SlotRow
@@ -1341,14 +1353,11 @@ function Headline({ card, n, onOpen, leaving, settled = false }: { card: Card; n
     const at = leaving * 160;
     return (
       <li className="smoke rounded-xl" style={{ "--delay": `${at}ms` } as React.CSSProperties} aria-hidden>
-        <div className="smoke-pane flex w-full items-baseline gap-3 rounded-xl px-4 py-3">
-          <span className="w-4 shrink-0 text-[13px] text-muted">
-            <Smoke text={String(n)} seed={n * 7} at={at} />
-          </span>
+        <div className="smoke-pane flex w-full items-start gap-3 rounded-xl px-4 py-3">
           <span className="story min-w-0 flex-1 leading-snug max-sm:min-h-[2.75em]">
             <Smoke text={card.headline} seed={n * 53} at={at} />
           </span>
-          <span className="flex min-w-[5rem] shrink-0 justify-end">
+          <span className="mt-0.5 flex min-w-[5rem] shrink-0 justify-end">
             {card.flavour && (
               <span className="ltr-smoke rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread" style={{ animationDelay: `${at + 120}ms`, "--sy": "-18px", "--sx": "6px" } as React.CSSProperties}>
                 {FLAVOUR_LABEL[card.flavour] ?? card.flavour}
@@ -1361,11 +1370,12 @@ function Headline({ card, n, onOpen, leaving, settled = false }: { card: Card; n
   }
   return (
     <li className={settled ? "" : "rise"}>
-      <button type="button" onClick={onOpen} className="group flex w-full items-baseline gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-left shadow-sm transition-colors hover:border-thread/60">
-        <span className="w-4 shrink-0 text-[13px] text-muted">{n}</span>
-        <span className="story min-w-0 flex-1 leading-snug max-sm:min-h-[2.75em]">{card.headline}</span>
+      <button type="button" onClick={onOpen} className="group flex w-full items-start gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-left shadow-sm transition-colors hover:border-thread/60">
+        <span className="story min-w-0 flex-1 leading-snug max-sm:min-h-[2.75em]">
+          <Still text={card.headline} />
+        </span>
         {/* Tags sit in a place of their own, the same width as while the row was being written. */}
-        <span className="flex min-w-[5rem] shrink-0 justify-end gap-1.5">
+        <span className="mt-0.5 flex min-w-[5rem] shrink-0 justify-end gap-1.5">
           {card.surprise && <span className="rounded-full border border-thread/50 px-2 py-0.5 text-[11px] text-thread" title={card.surprise}>Surprise</span>}
           {card.flavour && <span className="rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
         </span>
@@ -1410,7 +1420,7 @@ function OptionCard({
         {/* The headline stays the option's name; tapping it folds the card back while choosing. */}
         <h2 className="min-w-0 flex-1">
           <button type="button" onClick={onFold} disabled={!onFold} aria-expanded={!!onFold} className="flex w-full items-baseline gap-3 text-left disabled:cursor-default">
-            <span className="w-4 shrink-0 text-[13px] text-muted">{state === "used" ? <Icon name="check" className="text-thread" /> : n}</span>
+            {state === "used" && <Icon name="check" className="shrink-0 text-thread" />}
             <span className="story min-w-0 flex-1 font-medium leading-snug">{card.headline}</span>
             {card.flavour && <span className="shrink-0 rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
           </button>
