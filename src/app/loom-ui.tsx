@@ -586,8 +586,8 @@ function historyGroups(history: HistoryLineView[]): HistoryGroup[] {
 function HistoryItem({ h, session }: { h: HistoryLineView; session?: number | null }) {
   return (
     <li className="text-[13px]">
-      {session != null && <span className="text-xs text-muted">{session === 0 ? "the start" : `session ${session}`} · </span>}
-      <Linked text={h.text} />
+      {session != null && <span className="text-xs text-muted">{session === 0 ? "The start" : `Session ${session}`} · </span>}
+      <Linked text={cap(h.text)} />
       {h.note && <span className="text-xs text-muted"> · {h.note}</span>}
     </li>
   );
@@ -598,6 +598,10 @@ const ago = (session: number, latest: number) => {
   const d = latest - session;
   return d <= 0 ? "this session" : d === 1 ? "last session" : `${d} sessions ago`;
 };
+
+// A line that starts the row reads as a sentence: "Fear: 0 (was 1)", "Located at Old Town".
+const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+const CHANGE_WORDS: Record<string, string> = { new: "New ·", progressed: "Moved on ·", resolved: "Resolved ·", edited: "Edited ·" };
 
 const Lock = () => (
   <span title="GM only" className="ml-1 text-[11px]">
@@ -625,7 +629,7 @@ function Glance({ items }: { items: { icon: IconName; label: React.ReactNode; to
       {items.map((x, i) => (
         <span key={i} className={`inline-flex items-center gap-1.5 rounded-full border border-line bg-background px-2.5 py-0.5 text-[12.5px] ${x.tone ?? "text-foreground/85"}`}>
           <Icon name={x.icon} size={12} className="text-thread" />
-          {x.label}
+          {typeof x.label === "string" ? cap(x.label) : x.label}
         </span>
       ))}
     </div>
@@ -685,7 +689,7 @@ function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
             {/* Ties read as sentences: "holds the Knight figurine", "Varek hunts". */}
             {t.out ? (
               <>
-                <span className="text-muted">{t.type}</span> <RefLink r={t.other} mid />
+                <span className="text-muted">{cap(t.type)}</span> <RefLink r={t.other} mid />
               </>
             ) : (
               <>
@@ -697,8 +701,8 @@ function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
             {/* The tie's story, condensed: what it was, and how long ago it changed. */}
             {(t.was.length > 0 || t.since != null) && (
               <span className="block text-xs text-muted">
-                {t.was.map((w: any) => `was ${w.type}${w.until != null ? ` until ${ago(w.until, n.latestSession)}` : ""}`).join(" · ")}
-                {!t.was.length && t.since != null ? (t.since === 0 ? "from the start" : `since session ${t.since}`) : ""}
+                {cap(t.was.map((w: any) => `was ${w.type}${w.until != null ? ` until ${ago(w.until, n.latestSession)}` : ""}`).join(" · "))}
+                {!t.was.length && t.since != null ? (t.since === 0 ? "From the start" : `Since session ${t.since}`) : ""}
               </span>
             )}
           </li>
@@ -752,7 +756,7 @@ function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
             {g.head ? (
               <>
                 <p className="text-[12px] text-muted">
-                  {g.session != null ? (g.session === 0 ? "the start · " : `session ${g.session} · `) : ""}
+                  {g.session != null ? (g.session === 0 ? "The start · " : `Session ${g.session} · `) : ""}
                   {g.head}
                 </p>
                 <ul className="mt-0.5 space-y-0.5 border-l border-line pl-2.5">
@@ -827,10 +831,10 @@ function ThreadView({ n }: { n: Node }) {
           <li key={i} className="text-[13px]">
             {h.session != null ? (
               <RefLink r={{ kind: "session", id: h.session, name: `Session ${h.session}`, sub: "Session" }}>
-                <span className="text-xs">s{h.session}</span>
+                <span className="text-xs">{h.session === 0 ? "The start" : `Session ${h.session}`}</span>
               </RefLink>
             ) : null}{" "}
-            <span className="text-xs text-muted">{h.change}</span> <Linked text={h.note} />
+            <span className="text-xs text-muted">{CHANGE_WORDS[h.change] ?? cap(h.change)}</span> <Linked text={h.note} />
           </li>
         )}
       />
@@ -895,15 +899,15 @@ function Properties({ items }: { items?: { name: string; band: string; because: 
       initial={5}
       render={(p: NonNullable<typeof items>[number]) => (
         <li key={p.name} className="text-[13.5px]">
-          <span className="font-medium">{p.name}</span> <span className="rounded-full bg-thread-soft px-1.5 py-px text-[11.5px] text-thread">{p.band}</span>
+          <span className="font-medium">{cap(p.name)}</span> <span className="rounded-full bg-thread-soft px-1.5 py-px text-[11.5px] text-thread">{p.band}</span>
           {p.because.length > 0 && <span className="text-muted">: <Linked text={p.because.join("; ")} /></span>}
           <details className="mt-0.5 text-xs text-muted">
             <summary className="cursor-pointer select-none">
-              how it&apos;s worked out{p.known < p.of ? ` · ${p.known} of ${p.of} known` : ""}{p.situational ? " · changes with the scene" : ""}
+              How it&apos;s worked out{p.known < p.of ? ` · ${p.known} of ${p.of} known` : ""}{p.situational ? " · changes with the scene" : ""}
             </summary>
             <ul className="mt-1 space-y-0.5 pl-3">
               {p.terms.map((t, i) => (
-                <li key={i}>{t.known ? `${t.value > 0 ? "+" : ""}${t.value} · ${t.label}` : `not known: ${t.label}`}</li>
+                <li key={i}>{t.known ? `${t.value > 0 ? "+" : ""}${t.value} · ${t.label}` : `Not known: ${t.label}`}</li>
               ))}
             </ul>
           </details>
@@ -933,7 +937,7 @@ function Interplays({
         {off.map((o, i) => (
           <button key={i} type="button" className="underline decoration-dotted hover:text-foreground" onClick={() => edit?.({ action: "interplay", id: o.id, state: "auto", ...(o.other ? { other: o.other.id } : {}) })}>
             {o.id}
-            {o.other ? ` (${o.other.name})` : ""} · put back
+            {o.other ? ` (${o.other.name})` : ""} · Put back
           </button>
         ))}
       </p>
@@ -945,26 +949,26 @@ function Interplays({
       initial={4}
       render={(i: NonNullable<typeof items>[number], k) => (
         <li key={k} className="text-[13.5px]">
-          <span className="font-medium">{i.name}</span>
-          <span className="ml-1 text-[11.5px] text-muted">{i.kind}{i.by === "dm" ? " · ✎ yours" : ""}</span>
+          <span className="font-medium">{cap(i.name)}</span>
+          <span className="ml-1.5 text-[11.5px] text-muted">· {i.kind}{i.by === "dm" ? " · ✎ yours" : ""}</span>
           {i.secret && <Lock />}
           <span className="block text-muted">
-            <Linked text={i.handle} />
+            <Linked text={cap(i.handle)} />
           </span>
-          <span className="block text-xs text-muted">{i.because.join(" · ")}</span>
+          <span className="block text-xs text-muted">{cap(i.because.join(" · "))}</span>
           {edit && i.id && (
             <span className="mt-0.5 flex gap-2 text-xs text-muted">
               {i.by === "dm" ? (
                 <button type="button" className="hover:text-foreground" onClick={() => edit({ action: "interplay", id: i.id, state: "auto", ...(i.other ? { other: i.other.id } : {}) })}>
-                  let Loom work it out
+                  Let Loom work it out
                 </button>
               ) : (
                 <>
                   <button type="button" className="hover:text-foreground" onClick={() => edit({ action: "interplay", id: i.id, state: "on", ...(i.other ? { other: i.other.id } : {}) })}>
-                    keep it
+                    Keep it
                   </button>
                   <button type="button" className="hover:text-foreground" onClick={() => edit({ action: "interplay", id: i.id, state: "off", ...(i.other ? { other: i.other.id } : {}) })}>
-                    switch it off
+                    Switch it off
                   </button>
                 </>
               )}
@@ -998,7 +1002,7 @@ function Dial({ row, onSet }: { row: { label: string; value: number | boolean | 
     return (
       <div className="flex items-center justify-between gap-2 py-0.5">
         <Switch checked={row.value === true} onChange={(v) => onSet(v)} hint={row.means}>
-          {row.label}
+          {cap(row.label)}
         </Switch>
         {src && <span title={src.says} className="text-xs text-muted">{src.mark}</span>}
       </div>
@@ -1007,7 +1011,7 @@ function Dial({ row, onSet }: { row: { label: string; value: number | boolean | 
   const at = typeof row.value === "number" ? row.value - row.min : -1;
   return (
     <div className="flex flex-wrap items-center gap-x-3 py-0.5" title={row.means}>
-      <span className="w-24 shrink-0 text-[13px]">{row.label}</span>
+      <span className="w-24 shrink-0 text-[13px]">{cap(row.label)}</span>
       <Steps label={row.label} steps={steps} value={at} onChange={(i) => onSet(row.min + i)} />
       <span className="ml-auto flex items-center gap-1.5 text-xs text-muted">
         {at < 0 && <span>not set</span>}

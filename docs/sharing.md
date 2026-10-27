@@ -2,20 +2,21 @@
 
 Loom runs on this Mac and is reached through a Cloudflare quick tunnel: a public `https://….trycloudflare.com` address, invite-only. No accounts or hosting bill. The Mac has to be on and awake (the share script keeps it awake while it runs).
 
-## Start and stop
-
-```bash
-npm run build
-```
+## Start, update and stop
 
 ```bash
 npm run share
 ```
 
-- `build` is only needed after code changes.
-- `share` starts the production server on port 3100 with invites on, the tunnel, and `caffeinate`. It prints the public address and writes it to `data/public-url.txt`.
-- Ctrl+C stops all three. Your dev server on port 3000 is separate and stays as it is, with no invite needed at home.
-- **The address changes every time `share` starts.** Invite codes don't, so run `invite list` for the new links and resend them.
+```bash
+npm run share:update
+```
+
+- `share` builds the shared copy if there isn't one (into `.next-share`, separate from the dev server's), then starts the production server on port 3100 with invites on, the tunnel, and `caffeinate`. It prints the public address and writes it to `data/public-url.txt`.
+- `share:update` after code changes: rebuilds the shared copy and restarts its server. **The address stays the same**, since the tunnel keeps running. Testers see a few seconds of errors at most.
+- Ctrl+C on `share` stops everything. The dev server on port 3000 is separate, with no invite needed at home.
+- **The address changes only when `share` itself starts again.** Invite codes never change, so run `invite list` for the new links and resend them.
+- Right after a start, this Mac may say the address doesn't exist for a minute (its DNS remembers an early miss). Other devices are fine.
 
 ## Invites
 

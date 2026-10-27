@@ -190,32 +190,35 @@ select.quiet {
    is drawn back into the loom. */
 .unravel {
   overflow: hidden;
-  animation: unravel 720ms cubic-bezier(0.6, 0, 0.4, 1) forwards;
+  animation: unravel 1500ms cubic-bezier(0.45, 0, 0.25, 1) forwards;
+  animation-delay: var(--delay, 0ms);
 }
 .unravel > * {
-  animation: fray 260ms ease-in forwards;
+  animation: fray 700ms ease-in-out forwards;
+  animation-delay: var(--delay, 0ms);
 }
 @keyframes fray {
   to {
     opacity: 0;
-    filter: blur(1.5px);
-    letter-spacing: 0.06em;
+    filter: blur(2px);
+    letter-spacing: 0.04em;
   }
 }
 @keyframes unravel {
   0% {
     max-height: 8rem;
   }
-  40% {
+  45% {
     max-height: 8rem;
   }
-  70% {
+  75% {
     max-height: 2px;
     padding-top: 0;
     padding-bottom: 0;
     border-color: transparent;
     background: var(--thread);
     box-shadow: none;
+    opacity: 0.6;
   }
   100% {
     max-height: 0;
@@ -225,14 +228,119 @@ select.quiet {
     background: var(--thread);
     box-shadow: none;
     transform: scaleX(0);
+    opacity: 0;
+  }
+}
+
+/* ---------- The answer box ---------- */
+/* While Loom writes, the box draws in what it picked out (each from outside its edge), and a thread
+   fills along the bottom in the time this model usually takes. When the first option is ready the
+   box turns over and the options' words come in. */
+.gather {
+  perspective: 900px;
+}
+.gather-face {
+  transform-origin: 50% 50%;
+  backface-visibility: hidden;
+}
+.gather-face.turning {
+  animation: turn-away 300ms cubic-bezier(0.5, 0, 0.75, 0) forwards;
+}
+@keyframes turn-away {
+  to {
+    transform: rotateX(88deg);
+    opacity: 0.2;
+  }
+}
+.pull-in {
+  display: inline-block;
+  animation: pull-in 620ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes pull-in {
+  from {
+    transform: translate(var(--dx, 0), var(--dy, -28px)) scale(0.82);
+    opacity: 0;
+    filter: blur(3px);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+    filter: none;
+  }
+}
+.gather-line {
+  height: 2px;
+  background: var(--thread);
+  border-radius: 1px;
+  transform-origin: left;
+  animation: gather-line var(--expect, 4000ms) cubic-bezier(0.25, 0.6, 0.35, 1) forwards;
+  opacity: 0.7;
+}
+@keyframes gather-line {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(0.94);
+  }
+}
+.gather-line.late {
+  animation: gather-wait 1.4s ease-in-out infinite alternate;
+  transform: scaleX(0.94);
+}
+@keyframes gather-wait {
+  to {
+    opacity: 0.3;
+  }
+}
+.turn-in {
+  transform-origin: 50% 0;
+  animation: turn-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes turn-in {
+  from {
+    transform: perspective(900px) rotateX(-70deg);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.word-in {
+  display: inline-block;
+  white-space: pre;
+  animation: word-in 380ms ease-out both;
+}
+@keyframes word-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .read-step,
   .read-item,
-  .read-dots i {
+  .read-dots i,
+  .pull-in,
+  .word-in,
+  .turn-in,
+  .gather-face.turning {
     animation: none;
+  }
+  .gather-line {
+    animation: none;
+    transform: scaleX(0.94);
   }
   .unravel,
   .unravel > * {

@@ -8,6 +8,8 @@
     "build": "next build",
     "start": "next start",
     "share": "bash scripts/share.sh",
+    "share:build": "LOOM_DIST=.next-share next build",
+    "share:update": "npm run share:build && pkill -f 'next start -p 3100' || true",
     "lint": "eslint",
     "loom": "tsx --env-file-if-exists=.env scripts/loom.ts",
     "db:generate": "drizzle-kit generate",

@@ -1,4 +1,7 @@
+import { and, desc, eq, like } from "drizzle-orm";
 import { z } from "zod";
+import { db, schema } from "@/core/db/client";
+import { resolveModel } from "@/core/llm";
 import { improv, type ImprovOption } from "@/core/improv";
 import { SURPRISES } from "@/core/moves";
 import { beginSession, logAsk } from "@/core/live";
@@ -37,6 +40,23 @@ function card(o: ImprovOption, titleOf: Map<number, string>) {
   };
 }
 
+// How long the first option usually takes on this model, from its recent improv calls, so the page
+// can pace what it shows while Loom writes.
+async function expectedFirstMs(model?: string) {
+  const id = resolveModel(model ?? "haiku");
+  const rows = await db
+    .select({ ms: schema.llmCalls.latencyMs })
+    .from(schema.llmCalls)
+    .where(and(eq(schema.llmCalls.feature, "improv"), eq(schema.llmCalls.ok, true), like(schema.llmCalls.model, `${id}%`)))
+    .orderBy(desc(schema.llmCalls.id))
+    .limit(15);
+  if (rows.length < 3) return { haiku: 3500, sonnet: 5000, opus: 6500 }[model ?? "haiku"] ?? 4000;
+  const sorted = rows.map((r) => r.ms).sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  // The other two options take about 1.2 s each after the first.
+  return Math.round(Math.min(12000, Math.max(1500, median * 0.5, median - 2400)));
+}
+
 // Streams newline-delimited JSON: one {type:"option"} line per option as soon as it's written and
 // checked, then {type:"done"} with notes and the call's cost, or {type:"error"}.
 export async function POST(request: Request) {
@@ -48,6 +68,7 @@ export async function POST(request: Request) {
   if (!who) return NEEDS_INVITE();
   if (!(await mayTouch(who, parsed.data))) return NOT_YOURS();
   await beginSession(campaignId);
+  const expectMs = await expectedFirstMs(model);
   const titleOf = new Map((await loadThreadContexts(campaignId)).map((t) => [t.id, t.title]));
 
   const encoder = new TextEncoder();
@@ -64,7 +85,7 @@ export async function POST(request: Request) {
         }
       };
       try {
-        const result = await asWho(who, () => improv(campaignId, moment, "ranked", model, { tone, mix, steer, overrides, surprises, onReading: (r) => send({ type: "reading", reading: r }), onOption: (o) => send({ type: "option", option: card(o, titleOf) }) }));
+        const result = await asWho(who, () => improv(campaignId, moment, "ranked", model, { tone, mix, steer, overrides, surprises, onReading: (r) => send({ type: "reading", reading: { ...r, expectMs } }), onOption: (o) => send({ type: "option", option: card(o, titleOf) }) }));
         // Every moment asked about goes in the session log; using an option is a separate step.
         const entry = await logAsk(
           campaignId,
