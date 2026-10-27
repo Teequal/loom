@@ -1,6 +1,7 @@
 "use client";
 
 import { Reading } from "./reading";
+import { keyWords, Smoke, WriteIn } from "./answer-box";
 import { useEffect, useRef, useState } from "react";
 import { type Encounter, FightPanel } from "./fight";
 import { Icon } from "./icons";
@@ -52,7 +53,7 @@ interface ChainDev {
   chains: Chain[];
 }
 // A chain while it streams in: its steps so far, and the chain once it's complete.
-type Slot = { steps: Step[]; chain?: Chain };
+type Slot = { steps: Step[]; chain?: Chain; dropped?: boolean };
 type Llm = { model: string; seconds: number; costUsd: number };
 
 // Develop runs on Sonnet whatever the table's tier, and on Opus when the table is on Best: on chains,
@@ -105,11 +106,10 @@ export function Develop({
     setPicking(false);
     setSteer(how.steer);
     setWords(how.words);
-    if (!more) {
-      setSlots([]);
-      setLlm(null);
-    }
+    if (!more) setLlm(null);
     const offset = more ? slots.length : 0;
+    // The take's place is there at once: a step-shaped space Loom's words type into while it writes.
+    setSlots((cur) => [...(more ? cur : []), { steps: [] }]);
     try {
       const id = entryId ?? (await parent());
       if (!id) throw new Error("Couldn't log that choice first.");
@@ -135,7 +135,13 @@ export function Develop({
             const slot: Slot = { ...(next[at] ?? { steps: [] }) };
             if (e.type === "step") slot.steps = Object.assign([...slot.steps], { [Number(e.n)]: e.step as Step });
             if (e.type === "chain") Object.assign(slot, { chain: e.chain as Chain, steps: (e.chain as Chain).steps });
-            if (e.type === "drop") return next.filter((_, i) => i !== at);
+            // A take shown and then withdrawn goes up in smoke, then its place closes.
+            if (e.type === "drop") {
+              const gone = { ...slot, dropped: true };
+              next[at] = gone;
+              setTimeout(() => setSlots((c) => c.filter((x) => x !== gone)), 2000);
+              return next;
+            }
             next[at] = slot;
             return next;
           });
@@ -147,8 +153,9 @@ export function Develop({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong.");
     } finally {
-      // Anything that never completed (a step shown, then the answer went wrong) goes.
-      setSlots((cur) => cur.filter((s) => s.chain));
+      // Anything that never completed (a step shown, then the answer went wrong) goes up in smoke.
+      setSlots((cur) => cur.map((s) => (s.chain || s.dropped ? s : { ...s, dropped: true })));
+      setTimeout(() => setSlots((cur) => cur.filter((s) => s.chain)), 2000);
       setBusy("");
     }
   };
@@ -161,6 +168,9 @@ export function Develop({
     );
 
   const chains = slots;
+  // What Loom draws in while it writes a take: the way you chose to take it, and the choice's words.
+  const developing = live.entries.find((e) => e.id === (entryId ?? known));
+  const pending = [...keyWords(words.trim() || STEERS.find((x) => x.id === steer)?.label || "", 2), ...keyWords(developing?.choice ?? "", 6)];
   return (
     <div className={`rise mt-1 w-full basis-full ${depth > 0 ? "border-l-2 border-thread/30 py-1 pl-3" : "rounded-xl border border-line bg-background p-3"}`}>
       {picking ? (
@@ -192,16 +202,10 @@ export function Develop({
 
       {!picking && (
         <div className="mt-2 space-y-4">
-          {busy === "new" && !chains.length && (
-            <Reading
-              className="py-2"
-              steps={[{ label: "Leaning", items: [words.trim() || STEERS.find((x) => x.id === steer)?.label || "Loom's pick"] }, { label: "Following", items: ["what the players can do next"] }]}
-              final={`Writing where it goes · ${elapsed} s`}
-            />
-          )}
           {chains.map((slot, i) => (
             <ChainCard
-              key={`${devId}-${i}-${slot.chain?.move ?? "x"}`}
+              key={`take-${i}`}
+              pending={pending}
               slot={slot}
               index={i}
               devId={devId}
@@ -217,7 +221,6 @@ export function Develop({
               <Icon name="plus" size={12} /> Another take
             </button>
           )}
-          {busy === "more" && <Reading final={`Another take · ${elapsed} s`} />}
           {llm && (
             <p className="text-[11px] text-muted">
               {prefs.costs && `${llm.model.replace(/^claude-/, "")} · ${llm.seconds.toFixed(1)} s · $${llm.costUsd.toFixed(4)}`}
@@ -286,7 +289,7 @@ const REFINES = [
 
 // One chain: numbered steps joined by a line, each ending on the players' turn. Refine it in place;
 // use a step to log it (earlier steps are used first, so the tree stays in order).
-function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange }: { slot: Slot; index: number; devId: number | null; entryId: number | null; live: Live; depth: number; writing: boolean; onChange: (c: Chain) => void }) {
+function ChainCard({ slot, pending, index, devId, entryId, live, depth, writing, onChange }: { slot: Slot; pending: string[]; index: number; devId: number | null; entryId: number | null; live: Live; depth: number; writing: boolean; onChange: (c: Chain) => void }) {
   const showWhy = usePrefs().why;
   const chain = slot.chain;
   const [busy, setBusy] = useState("");
@@ -298,6 +301,24 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
   const [using, setUsing] = useState<number | null>(null);
   const elapsed = useElapsed(!!busy);
   const steps = preview ?? slot.steps;
+  // The wording each step last finished writing in. A step whose text differs (just streamed, or
+  // reworked) is written in over what was there; one that matches is shown as it is.
+  const [settled, setSettled] = useState<string[]>(() => (slot.chain ? slot.steps.map((x) => x.text) : []));
+  const settle = (i: number, text: string) =>
+    setSettled((cur) => {
+      const next = [...cur];
+      next[i] = text;
+      return next;
+    });
+  // Withdrawn: it goes up in smoke, then its place closes.
+  const card = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = card.current;
+    if (!slot.dropped || !el) return;
+    el.style.maxHeight = `${el.offsetHeight}px`;
+    const t = setTimeout(() => el.classList.add("closing"), 1300);
+    return () => clearTimeout(t);
+  }, [slot.dropped]);
 
   // The logged entry for each step already used: step i's entry is a child of step i-1's.
   const usedEntries: (Entry | undefined)[] = [];
@@ -313,7 +334,11 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
     setBusy(fromStep != null ? `swap${fromStep}` : h);
     setError("");
     setSaying("");
-    if (fromStep != null) setPreview(steps.slice(0, fromStep));
+    if (fromStep != null) {
+      setPreview(steps.slice(0, fromStep));
+      // The new steps from here are written in fresh, not over the old wording.
+      setSettled((cur) => cur.slice(0, fromStep));
+    }
     try {
       const done = await stream<{ chain: Chain }>(
         "/api/develop/refine",
@@ -357,7 +382,7 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
   };
 
   return (
-    <article>
+    <article ref={card} className={slot.dropped ? "closable" : undefined} aria-hidden={slot.dropped || undefined}>
       {chain && (
         <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2">
           <h3 className="text-[13px] font-semibold uppercase tracking-wide">{chain.label}</h3>
@@ -365,17 +390,35 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
           {chain.surprise && <span className="rounded-full border border-thread/50 px-2 py-0.5 text-[11px] text-thread" title={chain.surprise}>Surprise</span>}
         </div>
       )}
-      <ol className={`relative ml-2.5 border-l border-thread/40 ${busy && !preview ? "opacity-50" : ""}`}>
-        {steps.map((s, i) => {
+      <ol className={`relative ml-2.5 border-l border-thread/40 ${slot.dropped ? "smoke-fade" : ""}`}>
+        {/* Before its first step, step 1 is already there with no text: the take's place, with
+            Loom's words typing in. It's the same element the step's text then writes into. */}
+        {(steps.length || slot.dropped ? steps : [{ text: "" } as Step]).map((s, i) => {
           const used = usedEntries[i];
+          const written = settled[i] === s.text;
+          const waiting = !s.text;
           return (
-            <li key={`${i}-${s.text.slice(0, 20)}`} className="rise relative pb-3 pl-5 last:pb-1">
+            <li key={`step-${i}`} className="relative pb-3 pl-5 last:pb-1">
               <span className={`absolute -left-[9px] top-0.5 grid h-[18px] w-[18px] place-items-center rounded-full text-[10px] font-semibold ${used ? "bg-thread text-background" : "border border-thread/50 bg-background text-thread"}`}>
                 {used ? <Icon name="check" size={10} /> : i + 1}
               </span>
-              {s.when && <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">{s.when.replace(/:$/, "")}</p>}
-              <p className="story text-[16px] leading-relaxed">
-                <Linked text={s.text} />
+              <p className={`text-[11px] font-semibold uppercase tracking-wide text-muted ${s.when ? "drop-in" : "hidden"}`}>{s.when?.replace(/:$/, "")}</p>
+              <p className="story steady text-[16px] leading-relaxed">
+                {slot.dropped ? (
+                  <Smoke text={s.text} seed={index * 97 + i * 11} at={i * 90} />
+                ) : written && !waiting ? (
+                  <Linked text={s.text} />
+                ) : (
+                  <WriteIn
+                    // The first writing continues from the placeholder; a rework starts afresh over the old words.
+                    key={settled[i] ? `re-${s.text}` : "first"}
+                    from={settled[i] ? settled[i].split(/\s+/) : i === 0 ? (index === 0 ? pending : pending.slice(2)) : []}
+                    fromShown={!!settled[i]}
+                    text={waiting ? undefined : s.text}
+                    seed={index * 97 + i * 11 + 1}
+                    onDone={() => settle(i, s.text)}
+                  />
+                )}
               </p>
               {!writing && !busy && chain && (
                 <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
@@ -404,11 +447,6 @@ function ChainCard({ slot, index, devId, entryId, live, depth, writing, onChange
             </li>
           );
         })}
-        {(writing || busy.startsWith("swap")) && (
-          <li className="relative pb-1 pl-5">
-            <Reading final={busy ? `Rewriting · ${elapsed} s` : "The next step"} />
-          </li>
-        )}
       </ol>
 
       {chain && (

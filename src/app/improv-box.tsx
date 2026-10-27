@@ -193,6 +193,37 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   const [readAt, setReadAt] = useState<number | null>(null); // when Loom's reading of the moment arrived
   const [landed, setLanded] = useState<Set<number>>(new Set()); // rows that have turned over into their option
   const [vanishing, setVanishing] = useState<number[]>([]); // rows whose option never came, going up in smoke
+  // When each answer row came on screen: the first at once, the others about when their options
+  // usually start arriving (or when their option does, if sooner).
+  const rowOpenAt = useRef<(number | null)[]>([null, null, null]);
+  const rowTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const [, setRowsShown] = useState(0); // re-render as rows come on screen
+  const openRow = (i: number) => {
+    if (rowOpenAt.current[i] != null) return;
+    rowOpenAt.current[i] = Date.now();
+    setRowsShown((x) => x + 1);
+  };
+  // The answer just replaced, folding away in place while the new rows come in (a copy of its
+  // last look, so nothing jumps).
+  const answerRef = useRef<HTMLElement>(null);
+  const outgoingRef = useRef<HTMLDivElement>(null);
+  const foldAway = () => {
+    const old = answerRef.current;
+    const holder = outgoingRef.current;
+    if (!old || !holder || !old.textContent?.trim()) return;
+    const ghost = old.cloneNode(true) as HTMLElement;
+    ghost.removeAttribute("aria-live");
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.classList.add("answer-out");
+    ghost.style.maxHeight = `${old.offsetHeight}px`;
+    holder.replaceChildren(ghost);
+    // Lay it out at its full height first (reading a size forces that), then let it fold.
+    void ghost.offsetHeight;
+    ghost.classList.add("going");
+    setTimeout(() => {
+      if (holder.firstChild === ghost) holder.replaceChildren();
+    }, 700);
+  };
   const [fresh, setFresh] = useState(0); // which ask was written on this page (its options animate in); 0: restored
   const [unravelling, setUnravelling] = useState(false); // the moment the unchosen options come apart
   const [lastTime, setLastTime] = useState<LastTime | null>(null); // where things stood, for a session not yet begun
@@ -346,6 +377,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       setMoment("");
       setOverrides({});
     }
+    foldAway();
     setOpenCard(null);
     setSteered(again?.steer ?? "");
     setPlaceholder("What did the players just do?");
@@ -353,6 +385,8 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
     setRead(null);
     setReadAt(null);
     askedAt.current = Date.now();
+    rowTimers.current.forEach(clearTimeout);
+    rowOpenAt.current = [askedAt.current, null, null];
     setLanded(new Set());
     setFresh((n) => n + 1);
     setDone(null);
@@ -387,8 +421,13 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           if (event.type === "reading") {
             setRead(event.reading);
             setReadAt(Date.now());
+            // Rows 2 and 3 come on screen about when their options usually start arriving, with
+            // time to fill before they do (each option comes ~1.1 s after the one before).
+            const expect = (event.reading as Read).expectMs ?? 4000;
+            rowTimers.current = [1, 2].map((i) => setTimeout(() => openRow(i), Math.max(400, expect + i * 1100 - 1800 - (Date.now() - askedAt.current))));
           }
           else if (event.type === "option") {
+            openRow(got);
             got++;
             setCards((cs) => [...cs, event.option]);
           }
@@ -397,8 +436,11 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
         }
       }
       // A row whose option never came (the checks dropped it) goes up in smoke rather than vanishing.
-      if (got < 3) {
-        setVanishing(Array.from({ length: 3 - got }, (_, k) => got + k));
+      rowTimers.current.forEach(clearTimeout);
+      // Only rows already on screen go up in smoke; one that never came on screen just doesn't.
+      const empty = Array.from({ length: Math.max(0, 3 - got) }, (_, k) => got + k).filter((i) => rowOpenAt.current[i] != null);
+      if (empty.length) {
+        setVanishing(empty);
         setTimeout(() => setVanishing([]), 2000);
       }
       setStatus("done");
@@ -630,30 +672,37 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
         </div>
       )}
 
+      {/* The answer just replaced folds away here while the new one comes in below it. */}
+      <div ref={outgoingRef} />
       {asked && (
-        <section aria-live="polite" className="mt-6">
+        <section ref={answerRef} aria-live="polite" className="mt-6">
           {done?.safetyNote && <Note>{done.safetyNote}</Note>}
 
           <ol className="space-y-3">
             {/* While Loom writes, each row is an empty answer the words it read drop into; when its
                 option arrives the row turns over into it. Restored moments show their options as they are. */}
             {Array.from({ length: status === "running" || vanishing.length ? Math.max(3, cards.length) : cards.length }, (_, i) => cards[i]).map((card, i) => {
+              // A row's words are timed from when it came on screen (and Loom knew them).
+              const rowKnown = readAt == null ? null : Math.max(readAt, rowOpenAt.current[i] ?? readAt);
               if (!card && vanishing.includes(i))
-                return <SlotRow key={`slot-${fresh}-${i}`} n={i} words={readWords(read)} startedAt={askedAt.current} knownAt={readAt} expectMs={read?.expectMs ?? 4000} dropped onLanded={() => {}} />;
-              if (fresh && !landed.has(i))
+                return <SlotRow key={`slot-${fresh}-${i}`} n={i} words={readWords(read)} startedAt={askedAt.current} knownAt={rowKnown} expectMs={read?.expectMs ?? 4000} dropped onLanded={() => {}} />;
+              if (fresh && !landed.has(i)) {
+                if (!card && status === "running" && rowOpenAt.current[i] == null) return null;
                 return (
                   <SlotRow
                     key={`slot-${fresh}-${i}`}
                     n={i}
+                    entering={i > 0}
                     words={readWords(read)}
                     startedAt={askedAt.current}
-                    knownAt={readAt}
+                    knownAt={rowKnown}
                     expectMs={read?.expectMs ?? 4000}
                     headline={card?.headline}
                     tag={card?.flavour ? (FLAVOUR_LABEL[card.flavour] ?? card.flavour) : undefined}
                     onLanded={() => setLanded((l) => new Set(l).add(i))}
                   />
                 );
+              }
               if (!card) return null;
               const state = !current?.choiceKind ? "open" : current.choiceKind === "option" && current.choice === card.text ? "used" : "other";
               // Once you've chosen, the rest fold away so the page follows the story, not the menu:

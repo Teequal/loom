@@ -250,6 +250,74 @@ select.quiet {
   animation: rise 320ms ease-out both;
 }
 
+/* Answer rows 2 and 3 come on screen later than the first: in from just below. */
+.row-in {
+  animation: row-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* The answer just replaced (a still copy of it) folds up and fades in place while the new one
+   comes in beneath, so the page doesn't jump. */
+.answer-out {
+  overflow: hidden;
+  pointer-events: none;
+  transform-origin: top;
+  transition:
+    max-height 520ms cubic-bezier(0.4, 0, 0.2, 1),
+    margin-top 520ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 380ms ease,
+    transform 520ms cubic-bezier(0.4, 0, 0.2, 1),
+    filter 380ms ease;
+}
+.answer-out * {
+  animation: none !important;
+}
+.answer-out.going {
+  max-height: 0 !important;
+  margin-top: 0;
+  opacity: 0;
+  transform: translateY(-12px) scale(0.985);
+  filter: blur(1.5px);
+}
+
+/* Text that's written in letter by letter and then shown as ordinary text (a Develop step): kerning
+   and ligatures off, so letters in their own boxes and the finished text sit the same. */
+.steady {
+  font-kerning: none;
+  font-variant-ligatures: none;
+}
+/* A Develop take withdrawn: its letters go up in smoke (Smoke), its line and step marks fade, and
+   then its place closes. */
+.smoke-fade {
+  border-color: transparent;
+  transition: border-color 900ms ease;
+}
+.smoke-fade > li > span:first-child,
+.smoke-fade > li > p:first-of-type {
+  opacity: 0;
+  transition: opacity 700ms ease;
+}
+.closable {
+  overflow: hidden;
+  transition:
+    max-height 480ms cubic-bezier(0.45, 0, 0.25, 1),
+    margin-top 480ms cubic-bezier(0.45, 0, 0.25, 1),
+    opacity 300ms ease;
+}
+.closable.closing {
+  max-height: 0 !important;
+  margin-top: 0 !important;
+  opacity: 0;
+}
+
 /* ---------- The answer, being written ---------- */
 /* Every word is laid out where it stays. The words Loom read come in letter by letter, a few at a
    time at uneven gaps. When the option arrives they tear away like frayed threads, and the
@@ -314,6 +382,7 @@ select.quiet {
   .ltr-tear {
     animation-duration: 1ms;
   }
+  .row-in,
   .smoke,
   .smoke-pane::before,
   .ltr-smoke {
@@ -321,4 +390,4 @@ select.quiet {
     animation-delay: 0ms;
   }
 }
-/* css rev 1793088120 */
+/* css rev 1793088961 */

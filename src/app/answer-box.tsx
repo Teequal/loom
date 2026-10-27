@@ -57,7 +57,7 @@ function typeTimes(text: string, seed: number, fast = false) {
  * holding its place). "type": its letters land in clumps at uneven gaps. "tear": each letter frays
  * off on its own, stretched thin, drifting.
  */
-function Letters({ text, seed, mode, at = 0, fast = false }: { text: string; seed: number; mode: "wait" | "type" | "tear" | "smoke"; at?: number; fast?: boolean }) {
+function Letters({ text, seed, mode, at = 0, fast = false }: { text: string; seed: number; mode: "wait" | "type" | "tear" | "smoke" | "still"; at?: number; fast?: boolean }) {
   const typed = typeTimes(text, seed, fast).at;
   return (
     <span className="word">
@@ -71,7 +71,7 @@ function Letters({ text, seed, mode, at = 0, fast = false }: { text: string; see
                 ? smokeStyle(seed, i, at)
                 : undefined;
         return (
-          <span key={i} className={`ltr ltr-${mode}`} style={style as React.CSSProperties | undefined}>
+          <span key={i} className={mode === "still" ? "ltr" : `ltr ltr-${mode}`} style={style as React.CSSProperties | undefined}>
             {/* A space inside a name ("Mother Ysolde") would collapse in its own box. */}
             {c === " " ? "\u00a0" : c}
           </span>
@@ -92,7 +92,7 @@ const overlaps = (a: DOMRect, b: DOMRect) => a.left < b.right - 1 && b.left < a.
  * every read word in its space has gone. Then `onLanded`, and the page shows the ordinary headline
  * row in its place.
  */
-export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, tag, dropped = false, onLanded }: { n: number; words: string[]; startedAt: number; knownAt: number | null; expectMs: number; headline?: string; tag?: string; dropped?: boolean; onLanded: () => void }) {
+export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, tag, dropped = false, entering = false, onLanded }: { n: number; words: string[]; startedAt: number; knownAt: number | null; expectMs: number; headline?: string; tag?: string; dropped?: boolean; entering?: boolean; onLanded: () => void }) {
   const count = ROW_WORDS[n % ROW_WORDS.length];
   const [now, setNow] = useState(() => Date.now());
   const [plan, setPlan] = useState<{ gone: number[]; start: number[] } | null>(null);
@@ -143,7 +143,7 @@ export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, tag,
   return (
     // Its option never came (the checks dropped it): the row goes up in smoke, the card and each
     // word Loom read on their own timing, then closes.
-    <li aria-hidden={!plan || undefined} className={dropped ? "smoke rounded-xl" : undefined}>
+    <li aria-hidden={!plan || undefined} className={dropped ? "smoke rounded-xl" : entering ? "row-in" : undefined}>
       <div className={`flex w-full items-start gap-3 rounded-xl px-4 py-3 ${dropped ? "smoke-pane" : "border border-line bg-surface shadow-sm"}`}>
         {/* The read words and the headline share one place (a one-cell grid), each word laid out
             where it stays, so nothing moves as letters come and go. */}
@@ -212,6 +212,89 @@ export function Smoke({ text, seed, at = 0 }: { text: string; seed: number; at?:
         ),
       )}
     </>
+  );
+}
+
+/** The words of a text worth drawing in while Loom writes from it: no filler, no repeats. */
+export function keyWords(text: string, limit = 7): string[] {
+  const out: string[] = [];
+  for (const w of text.split(/\s+/)) {
+    const t = w.replace(/[?!.,:;"“”()]+$/g, "").replace(/^["“”(]+/, "");
+    if (t.length > 2 && !FILLER.has(t.toLowerCase()) && !out.includes(t)) out.push(t);
+  }
+  return out.slice(0, limit);
+}
+
+/**
+ * Text being written in, the way answer rows are, for anything longer (a Develop step).
+ * - `from`: words that hold the space first. While `text` hasn't come, they type in letter by
+ *   letter, a few at a time, over `fill` ms (or show at once with `fromShown`: the old wording of a
+ *   step being reworked).
+ * - `text`: when it comes, `from` tears away a few words at a time, and `text` types in: a word that
+ *   shares no space with one of `from` at once, one that does once those have gone. Then `onDone`.
+ * Letters sit in their own boxes; `.steady` text (kerning off) sits the same, so the parent can
+ * swap in its ordinary rendering afterwards without anything moving.
+ */
+export function WriteIn({ from = [], fromShown = false, text, seed, fill = 2200, onDone, className = "" }: { from?: string[]; fromShown?: boolean; text?: string; seed: number; fill?: number; onDone?: () => void; className?: string }) {
+  const [mountedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(mountedAt);
+  const [plan, setPlan] = useState<{ gone: number[]; start: number[]; shown: boolean[] } | null>(null);
+  const box = useRef<HTMLSpanElement>(null);
+  const done = useRef(onDone);
+  useEffect(() => {
+    done.current = onDone;
+  });
+  const order = from.map((_, j) => j).sort((a, b) => rand(seed, a, 8) - rand(seed, b, 8));
+  const at = (j: number) => (fromShown ? -Infinity : mountedAt + 150 + (fill * order.indexOf(j)) / Math.max(1, from.length - 1) + rand(seed, j, 9) * 200);
+  const arrived = text != null;
+  useEffect(() => {
+    if (arrived || fromShown || !from.length) return;
+    const t = setInterval(() => setNow(Date.now()), 90);
+    return () => clearInterval(t);
+  }, [arrived, fromShown, from.length]);
+  const outWords = text ? text.split(/\s+/).filter(Boolean) : [];
+  useLayoutEffect(() => {
+    if (!arrived || !box.current) return;
+    const shown = from.map((_, j) => Date.now() >= at(j));
+    const rectsOf = (attr: string) => [...box.current!.querySelectorAll<HTMLElement>(`[${attr}]`)].map((el) => el.getBoundingClientRect());
+    const mRects = rectsOf("data-m");
+    const oRects = rectsOf("data-o");
+    const gone = from.map((_, j) => (shown[j] ? rand(seed, j, 11) * 280 + SPREAD + TEAR : 0));
+    const start = outWords.map((_, k) => {
+      const under = mRects.map((r, j) => (shown[j] && oRects[k] && overlaps(r, oRects[k]) ? gone[j] : -1)).filter((g) => g >= 0);
+      return under.length ? Math.max(...under) - 60 + rand(seed, k, 12) * 70 : rand(seed, k, 12) * 260;
+    });
+    setPlan({ gone, start, shown });
+    const end = Math.max(0, ...gone, ...start.map((st, k) => st + typeTimes(outWords[k], seed * 7 + k, true).total));
+    const t = setTimeout(() => done.current?.(), end + 80);
+    return () => clearTimeout(t);
+    // Written in once, when its text first arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arrived]);
+  return (
+    <span ref={box} className={`steady grid ${className}`}>
+      {from.length > 0 && (
+        <span className="col-start-1 row-start-1 text-muted">
+          {from.map((w, j) => {
+            const mode = plan ? (plan.shown[j] ? "tear" : "wait") : fromShown || now >= at(j) ? (fromShown ? "still" : "type") : "wait";
+            return (
+              <span key={j} data-m={j}>
+                <Letters text={w} seed={seed * 31 + j} mode={mode} at={plan ? plan.gone[j] - SPREAD - TEAR : 0} />{" "}
+              </span>
+            );
+          })}
+        </span>
+      )}
+      {arrived && (
+        <span className="col-start-1 row-start-1">
+          {outWords.map((w, k) => (
+            <span key={k} data-o={k}>
+              <Letters text={w} seed={seed * 7 + k} mode={plan ? "type" : "wait"} at={plan?.start[k] ?? 0} fast />{" "}
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
   );
 }
 
