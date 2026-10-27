@@ -186,50 +186,68 @@ select.quiet {
   }
 }
 
-/* An option not chosen comes apart: its words fray, it narrows to a single thread, and the thread
-   is drawn back into the loom. */
-.unravel {
-  overflow: hidden;
-  animation: unravel 1500ms cubic-bezier(0.45, 0, 0.25, 1) forwards;
-  animation-delay: var(--delay, 0ms);
+/* An option not chosen goes up in smoke. The card (its background, border and shadow, drawn by
+   ::before so the text isn't caught up in it) rises, swells and blurs away; each letter drifts up
+   and spreads on its own timing; then the row closes. */
+.smoke {
+  max-height: 10rem;
+  animation: smoke-close 480ms cubic-bezier(0.45, 0, 0.25, 1) forwards;
+  animation-delay: calc(var(--delay, 0ms) + 1350ms);
 }
-.unravel > * {
-  animation: fray 700ms ease-in-out forwards;
-  animation-delay: var(--delay, 0ms);
-}
-@keyframes fray {
+@keyframes smoke-close {
   to {
-    opacity: 0;
-    filter: blur(2px);
-    letter-spacing: 0.04em;
-  }
-}
-@keyframes unravel {
-  0% {
-    max-height: 8rem;
-  }
-  45% {
-    max-height: 8rem;
-  }
-  75% {
-    max-height: 2px;
-    padding-top: 0;
-    padding-bottom: 0;
-    border-color: transparent;
-    background: var(--thread);
-    box-shadow: none;
-    opacity: 0.6;
-  }
-  100% {
     max-height: 0;
     margin-top: 0;
-    padding: 0;
-    border-color: transparent;
-    background: var(--thread);
-    box-shadow: none;
-    transform: scaleX(0);
-    opacity: 0;
   }
+}
+.smoke-pane {
+  position: relative;
+  isolation: isolate;
+}
+.smoke-pane::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.05);
+  animation: pane-smoke 1100ms cubic-bezier(0.3, 0, 0.6, 1) forwards;
+  animation-delay: calc(var(--delay, 0ms) + 80ms);
+}
+@keyframes pane-smoke {
+  40% {
+    opacity: 0.7;
+    filter: blur(2px);
+  }
+  100% {
+    opacity: 0;
+    filter: blur(10px);
+    transform: translateY(-12px) scale(1.04, 1.12);
+  }
+}
+.ltr-smoke {
+  display: inline-block;
+  animation: ltr-smoke 900ms cubic-bezier(0.2, 0.5, 0.45, 1) both;
+}
+@keyframes ltr-smoke {
+  0% {
+    opacity: 1;
+  }
+  30% {
+    opacity: 0.75;
+    filter: blur(1px);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--sx, 0), var(--sy, -16px)) rotate(var(--sr, 0)) scale(1.35);
+    filter: blur(4px);
+  }
+}
+/* A tag settling in beside a headline that's just arrived. */
+.drop-in {
+  animation: rise 320ms ease-out both;
 }
 
 /* ---------- The answer, being written ---------- */
@@ -292,8 +310,10 @@ select.quiet {
   .ltr-tear {
     animation-duration: 1ms;
   }
-  .unravel,
-  .unravel > * {
+  .smoke,
+  .smoke-pane::before,
+  .ltr-smoke {
     animation-duration: 1ms;
+    animation-delay: 0ms;
   }
 }

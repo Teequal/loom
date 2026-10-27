@@ -1,7 +1,7 @@
 "use client";
 
 import { Reading } from "./reading";
-import { NowStrip, readWords, SlotRow, type NowLine, type Read } from "./answer-box";
+import { NowStrip, readWords, SlotRow, Smoke, type NowLine, type Read } from "./answer-box";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Choice, Field, Steps, Switch, Tune } from "./controls";
@@ -412,7 +412,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       setShowOthers(false);
       // The options not chosen unravel for a moment before they fold away (globals.css .unravel).
       setUnravelling(true);
-      setTimeout(() => setUnravelling(false), 1900);
+      setTimeout(() => setUnravelling(false), 2600);
       await reload();
       focusBox("What happened next?");
       // Keep the chosen card in view once the others fold away.
@@ -638,6 +638,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                     knownAt={readAt}
                     expectMs={read?.expectMs ?? 4000}
                     headline={card?.headline}
+                    tag={card?.flavour ? (FLAVOUR_LABEL[card.flavour] ?? card.flavour) : undefined}
                     onLanded={() => setLanded((l) => new Set(l).add(i))}
                   />
                 );
@@ -1334,13 +1335,40 @@ function LoomStatus({ entry, compact = false }: { entry: Entry; compact?: boolea
 // An option as one line: its flavour and its hook. Tap to read it in full.
 // `settled`: the row has just turned over into it, so it takes its place without moving.
 function Headline({ card, n, onOpen, leaving, settled = false }: { card: Card; n: number; onOpen: () => void; leaving?: number; settled?: boolean }) {
+  // Not chosen: it goes up in smoke. The card itself and every letter on it drift up, spread and
+  // fade, each on its own timing, and then the row closes.
+  if (leaving != null) {
+    const at = leaving * 160;
+    return (
+      <li className="smoke rounded-xl" style={{ "--delay": `${at}ms` } as React.CSSProperties} aria-hidden>
+        <div className="smoke-pane flex w-full items-baseline gap-3 rounded-xl px-4 py-3">
+          <span className="w-4 shrink-0 text-[13px] text-muted">
+            <Smoke text={String(n)} seed={n * 7} at={at} />
+          </span>
+          <span className="story min-w-0 flex-1 leading-snug max-sm:min-h-[2.75em]">
+            <Smoke text={card.headline} seed={n * 53} at={at} />
+          </span>
+          <span className="flex min-w-[5rem] shrink-0 justify-end">
+            {card.flavour && (
+              <span className="ltr-smoke rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread" style={{ animationDelay: `${at + 120}ms`, "--sy": "-18px", "--sx": "6px" } as React.CSSProperties}>
+                {FLAVOUR_LABEL[card.flavour] ?? card.flavour}
+              </span>
+            )}
+          </span>
+        </div>
+      </li>
+    );
+  }
   return (
-    <li className={leaving != null ? "unravel rounded-xl" : settled ? "" : "rise"} style={leaving != null ? ({ "--delay": `${leaving * 160}ms` } as React.CSSProperties) : undefined} aria-hidden={leaving != null || undefined}>
+    <li className={settled ? "" : "rise"}>
       <button type="button" onClick={onOpen} className="group flex w-full items-baseline gap-3 rounded-xl border border-line bg-surface px-4 py-3 text-left shadow-sm transition-colors hover:border-thread/60">
         <span className="w-4 shrink-0 text-[13px] text-muted">{n}</span>
         <span className="story min-w-0 flex-1 leading-snug max-sm:min-h-[2.75em]">{card.headline}</span>
-        {card.surprise && <span className="shrink-0 rounded-full border border-thread/50 px-2 py-0.5 text-[11px] text-thread" title={card.surprise}>Surprise</span>}
-        {card.flavour && <span className={`shrink-0 rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread ${settled ? "drop-in" : ""}`}>{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
+        {/* Tags sit in a place of their own, the same width as while the row was being written. */}
+        <span className="flex min-w-[5rem] shrink-0 justify-end gap-1.5">
+          {card.surprise && <span className="rounded-full border border-thread/50 px-2 py-0.5 text-[11px] text-thread" title={card.surprise}>Surprise</span>}
+          {card.flavour && <span className="rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
+        </span>
       </button>
     </li>
   );

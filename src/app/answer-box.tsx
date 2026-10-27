@@ -90,7 +90,7 @@ const overlaps = (a: DOMRect, b: DOMRect) => a.left < b.right - 1 && b.left < a.
  * every read word in its space has gone. Then `onLanded`, and the page shows the ordinary headline
  * row in its place.
  */
-export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, onLanded }: { n: number; words: string[]; startedAt: number; knownAt: number | null; expectMs: number; headline?: string; onLanded: () => void }) {
+export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, tag, onLanded }: { n: number; words: string[]; startedAt: number; knownAt: number | null; expectMs: number; headline?: string; tag?: string; onLanded: () => void }) {
   const count = ROW_WORDS[n % ROW_WORDS.length];
   const [now, setNow] = useState(() => Date.now());
   const [plan, setPlan] = useState<{ gone: number[]; start: number[] } | null>(null);
@@ -166,8 +166,46 @@ export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, onLa
             </span>
           )}
         </span>
+        {/* The tag's place is kept from the start, so it fades in without moving any words. */}
+        <span className="flex min-w-[5rem] shrink-0 justify-end">{tag && plan && <span className="drop-in rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{tag}</span>}</span>
       </div>
     </li>
+  );
+}
+
+/**
+ * Text going up in smoke: each letter (and each word-sized piece) rises, spreads, blurs and fades
+ * on its own, at its own moment. `at` delays the whole of it.
+ */
+export function Smoke({ text, seed, at = 0 }: { text: string; seed: number; at?: number }) {
+  return (
+    <>
+      {text.split(/(\s+)/).map((w, j) =>
+        /^\s+$/.test(w) ? (
+          w
+        ) : (
+          <span key={j} className="word">
+            {[...w].map((c, i) => (
+              <span
+                key={i}
+                className="ltr ltr-smoke"
+                style={
+                  {
+                    animationDelay: `${at + rand(seed + j, i, 21) * 420}ms`,
+                    animationDuration: `${700 + rand(seed + j, i, 22) * 500}ms`,
+                    "--sx": `${(rand(seed + j, i, 23) - 0.5) * 18}px`,
+                    "--sy": `${-10 - rand(seed + j, i, 24) * 22}px`,
+                    "--sr": `${(rand(seed + j, i, 25) - 0.5) * 30}deg`,
+                  } as React.CSSProperties
+                }
+              >
+                {c}
+              </span>
+            ))}
+          </span>
+        ),
+      )}
+    </>
   );
 }
 
