@@ -308,7 +308,7 @@ select.quiet {
 /* Frayed: each letter pulls thin and drifts off, like a strand coming loose. */
 .ltr-tear {
   transform-origin: 50% 60%;
-  animation: ltr-tear 460ms cubic-bezier(0.55, 0, 0.8, 0.4) both;
+  animation: ltr-tear 300ms cubic-bezier(0.55, 0, 0.8, 0.4) both;
 }
 @keyframes ltr-tear {
   0% {
@@ -325,22 +325,20 @@ select.quiet {
     filter: blur(1.5px);
   }
 }
-/* Woven: letters come in over and under, alternately from above and below, settling into the row. */
-.ltr-weave {
-  animation: ltr-weave 360ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
+/* Woven: each word is drawn in left to right, like a thread pulled through, sharpening as it comes. */
+.word-weave {
+  animation: word-weave 300ms cubic-bezier(0.25, 0.7, 0.3, 1) both;
 }
-@keyframes ltr-weave {
-  0% {
-    opacity: 0;
-    transform: translateY(var(--from, 0.6em)) scaleY(0.25);
+@keyframes word-weave {
+  from {
+    clip-path: inset(-0.3em 100% -0.3em 0);
+    opacity: 0.35;
+    filter: blur(1px);
   }
-  60% {
+  to {
+    clip-path: inset(-0.3em 0 -0.3em 0);
     opacity: 1;
-    transform: translateY(calc(var(--from, 0.6em) * -0.12)) scaleY(1.05);
-  }
-  100% {
-    opacity: 1;
-    transform: none;
+    filter: none;
   }
 }
 /* The weft: a thread drawn across beneath the headline as it's woven, then gone. */
@@ -357,7 +355,7 @@ select.quiet {
   border-radius: 1px;
   background: var(--thread);
   transform-origin: left;
-  animation: weft-draw var(--woven, 900ms) cubic-bezier(0.3, 0.6, 0.4, 1) forwards;
+  animation: weft-draw var(--woven, 700ms) linear forwards;
 }
 @keyframes weft-draw {
   0% {
@@ -380,7 +378,7 @@ select.quiet {
   .read-dots i,
   .hole,
   .ltr-type,
-  .ltr-weave,
+  .word-weave,
   .weave-in::after,
   .word.typing::before {
     animation: none;

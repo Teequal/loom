@@ -38,14 +38,14 @@ function rand(a: number, b: number, c: number) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
-const TEAR = 460; // ms for one letter to tear away
-const WEAVE = 360; // ms for one letter to be woven in
-const PER_LETTER = 13; // ms between letters of the headline as it's woven in
+const TEAR = 300; // ms for one letter to tear away
+const WEAVE = 300; // ms for one word to be drawn in
+const PER_WORD = 45; // ms between words of the headline as it's woven in
 
 /**
  * A word as letters. "type": they come in a clump of one to three at a time, at uneven gaps, over
  * the blank bar they're filling. "tear": each one frays off on its own, stretched thin, drifting.
- * "weave": they come in from alternating sides, over and under, like a weft pulled through.
+ * "weave": the word is drawn in left to right, like a thread pulled through.
  */
 function Letters({ text, seed, mode, at = 0 }: { text: string; seed: number; mode: "type" | "tear" | "weave"; at?: number }) {
   const chars = [...text];
@@ -53,20 +53,19 @@ function Letters({ text, seed, mode, at = 0 }: { text: string; seed: number; mod
   let clump = 0;
   const typedAt = chars.map((_, i) => {
     if (clump-- <= 0) {
-      t += 40 + rand(seed, i, 1) * 120;
+      t += 25 + rand(seed, i, 1) * 70;
       clump = Math.floor(rand(seed, i, 2) * 3);
     }
     return t;
   });
+  if (mode === "weave") return <span className="word word-weave" style={{ animationDelay: `${at}ms` }}>{text}</span>;
   return (
     <span className={`word ${mode === "type" ? "typing" : ""}`} style={mode === "type" ? ({ "--typed": `${t + 160}ms` } as React.CSSProperties) : undefined}>
       {chars.map((c, i) => {
         const style =
           mode === "type"
             ? { animationDelay: `${typedAt[i]}ms` }
-            : mode === "tear"
-              ? { animationDelay: `${at + rand(seed, i, 3) * 260}ms`, "--tx": `${(rand(seed, i, 4) - 0.5) * 26}px`, "--ty": `${(rand(seed, i, 5) - 0.5) * 18}px`, "--rot": `${(rand(seed, i, 6) - 0.5) * 50}deg` }
-              : { animationDelay: `${at + i * PER_LETTER + rand(seed, i, 7) * 40}ms`, "--from": i % 2 ? "-0.6em" : "0.6em" };
+            : { animationDelay: `${at + rand(seed, i, 3) * 140}ms`, "--tx": `${(rand(seed, i, 4) - 0.5) * 20}px`, "--ty": `${(rand(seed, i, 5) - 0.5) * 14}px`, "--rot": `${(rand(seed, i, 6) - 0.5) * 40}deg` };
         return (
           <span key={i} className={`ltr ltr-${mode}`} style={style as React.CSSProperties}>
             {c}
@@ -94,7 +93,10 @@ export function SlotRow({ n, words, startedAt, expectMs, headline, onLanded }: {
   });
   // Row n's option usually comes a little over a second after the one before.
   const due = expectMs + n * 1100;
-  const at = (j: number) => startedAt + due * (0.1 + (0.78 * j) / (holes.length - 1));
+  // Words come into the holes in no particular order, a few close together: each hole's turn is
+  // shuffled, and the row is full well before its option is due.
+  const order = holes.map((_, j) => j).sort((a, b) => rand(n, a, 8) - rand(n, b, 8));
+  const at = (j: number) => startedAt + due * (0.06 + (0.34 * order.indexOf(j)) / (holes.length - 1)) + rand(n, j, 9) * 220;
   const mine = (j: number) => (words.length ? words[(n * 3 + j) % words.length] : null);
   const filled = holes.map((_, j) => (now >= at(j) ? mine(j) : null));
   useEffect(() => {
@@ -103,16 +105,16 @@ export function SlotRow({ n, words, startedAt, expectMs, headline, onLanded }: {
     return () => clearInterval(t);
   }, [phase, headline]);
   const arrived = !!headline;
-  const tearFor = holes.length * 45 + 260 + TEAR; // the last letter gone
+  const tearFor = holes.length * 25 + 140 + TEAR; // the last letter gone
   useEffect(() => {
     if (!arrived) return;
-    const letters = headline!.length;
+    const words = headline!.split(/\s+/).length;
     const tearAt = setTimeout(() => setPhase("tear"), 0);
     // The weaving starts while the last of the old letters are still tearing away.
-    const weaveFrom = Math.round(tearFor * 0.45);
+    const weaveFrom = Math.round(tearFor * 0.4);
     const weaveAt = setTimeout(() => setPhase("weave"), weaveFrom);
     const gone = setTimeout(() => setPhase((p) => (p === "weave" ? "done" : p)), tearFor + 40);
-    const done = setTimeout(() => landed.current(), Math.max(tearFor, weaveFrom + letters * PER_LETTER + 40 + WEAVE) + 100);
+    const done = setTimeout(() => landed.current(), Math.max(tearFor, weaveFrom + words * PER_WORD + WEAVE) + 80);
     return () => [tearAt, weaveAt, gone, done].forEach(clearTimeout);
     // The row turns once, when its headline first arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -131,7 +133,7 @@ export function SlotRow({ n, words, startedAt, expectMs, headline, onLanded }: {
               {holes.map((w, j) =>
                 filled[j] ? (
                   <span key={j}>
-                    <Letters text={filled[j]!} seed={n * 31 + j} mode={phase === "fill" ? "type" : "tear"} at={j * 45} />{" "}
+                    <Letters text={filled[j]!} seed={n * 31 + j} mode={phase === "fill" ? "type" : "tear"} at={j * 25} />{" "}
                   </span>
                 ) : (
                   // Once Loom has read the moment, each hole takes the size of the word that will fill it,
@@ -142,13 +144,9 @@ export function SlotRow({ n, words, startedAt, expectMs, headline, onLanded }: {
             </span>
           )}
           {newShown && (
-            <span className="weave-in col-start-1 row-start-1" style={{ "--woven": `${headline!.length * PER_LETTER + WEAVE}ms` } as React.CSSProperties}>
-              {headline!.split(/(\s+)/).map((w, j, all) =>
-                /^\s+$/.test(w) ? (
-                  w
-                ) : (
-                  <Letters key={j} text={w} seed={n * 97 + j} mode="weave" at={all.slice(0, j).join("").length * PER_LETTER} />
-                ),
+            <span className="weave-in col-start-1 row-start-1" style={{ "--woven": `${headline!.split(/\s+/).length * PER_WORD + WEAVE}ms` } as React.CSSProperties}>
+              {headline!.split(/(\s+)/).map((w, j) =>
+                /^\s+$/.test(w) ? w : <Letters key={j} text={w} seed={n * 97 + j} mode="weave" at={(j / 2) * PER_WORD} />,
               )}
             </span>
           )}
