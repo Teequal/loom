@@ -81,6 +81,26 @@ function Letters({ text, seed, mode, at = 0, fast = false }: { text: string; see
   );
 }
 
+/**
+ * When each word of a text starts coming in: shuffled into pieces of two to four, each piece a
+ * little after the last, over a time that grows with the text's length (a headline ~0.4 s, a long
+ * Develop step up to ~1.8 s), so it arrives in pieces rather than all at once.
+ */
+function pieceTimes(count: number, seed: number) {
+  const total = Math.min(1800, Math.max(380, count * 38));
+  const order = Array.from({ length: count }, (_, k) => k).sort((a, b) => rand(seed, a, 30) - rand(seed, b, 30));
+  const pieces: number[][] = [];
+  for (let i = 0, p = 0; i < count; p++) {
+    const size = 2 + Math.floor(rand(seed, p, 31) * 3);
+    pieces.push(order.slice(i, i + size));
+    i += size;
+  }
+  const gap = total / Math.max(1, pieces.length);
+  const at = new Array<number>(count).fill(0);
+  pieces.forEach((piece, q) => piece.forEach((k, m) => (at[k] = q * gap + rand(seed, q, 32) * gap * 0.6 + m * 30)));
+  return at;
+}
+
 // Whether two word boxes share any space (a pixel of give, so words that only touch don't count).
 const overlaps = (a: DOMRect, b: DOMRect) => a.left < b.right - 1 && b.left < a.right - 1 && a.top < b.bottom - 1 && b.top < a.bottom - 1;
 
@@ -129,9 +149,11 @@ export function SlotRow({ n, words, startedAt, knownAt, expectMs, headline, tag,
     const mRects = rectsOf("data-m");
     const oRects = rectsOf("data-o");
     const gone = mine.map((w, j) => (shown[j] ? rand(n, j, 11) * 320 + SPREAD + TEAR : 0));
+    const pieces = pieceTimes(outWords.length, n * 41 + 3);
     const start = outWords.map((_, k) => {
       const under = mRects.map((r, j) => (shown[j] && oRects[k] && overlaps(r, oRects[k]) ? gone[j] : -1)).filter((g) => g >= 0);
-      return under.length ? Math.max(...under) - 60 + rand(n, k, 12) * 70 : rand(n, k, 12) * 240;
+      // In its piece's turn, and never before the read words in its space have gone.
+      return Math.max(pieces[k], under.length ? Math.max(...under) - 60 : 0);
     });
     setPlan({ gone, start });
     const end = Math.max(0, ...gone, ...start.map((s, k) => s + typeTimes(outWords[k], n * 97 + k, true).total));
@@ -260,9 +282,11 @@ export function WriteIn({ from = [], fromShown = false, text, seed, fill = 2200,
     const mRects = rectsOf("data-m");
     const oRects = rectsOf("data-o");
     const gone = from.map((_, j) => (shown[j] ? rand(seed, j, 11) * 280 + SPREAD + TEAR : 0));
+    const pieces = pieceTimes(outWords.length, seed * 41 + 3);
     const start = outWords.map((_, k) => {
       const under = mRects.map((r, j) => (shown[j] && oRects[k] && overlaps(r, oRects[k]) ? gone[j] : -1)).filter((g) => g >= 0);
-      return under.length ? Math.max(...under) - 60 + rand(seed, k, 12) * 70 : rand(seed, k, 12) * 260;
+      // In its piece's turn, and never before the words in its space have gone.
+      return Math.max(pieces[k], under.length ? Math.max(...under) - 60 : 0);
     });
     setPlan({ gone, start, shown });
     const end = Math.max(0, ...gone, ...start.map((st, k) => st + typeTimes(outWords[k], seed * 7 + k, true).total));
@@ -325,37 +349,35 @@ export function Still({ text }: { text: string }) {
 export type NowLine = { kind: "moment" | "used" | "then" | "result"; text: string; id?: number };
 
 /**
- * "What just happened": the last few beats of play, above the box, so the context is in view as
- * you choose, develop and record. The newest is last; older ones fade. Tap to read it all.
+ * "What just happened", right above the box, in reading order: the last thing used or decided,
+ * then the box where you write what happened next. Folded, it's that one line; "earlier" opens the
+ * beats before it (oldest first, the newest still last, nearest the box), each in full.
  */
 export function NowStrip({ lines }: { lines: NowLine[] }) {
   const [open, setOpen] = useState(false);
   if (!lines.length) return null;
-  const shown = open ? lines : lines.slice(-4);
+  const shown = open ? lines : lines.slice(-1);
   return (
-    <div className="mb-2 px-1" aria-label="What just happened">
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="mb-1 flex w-full items-center gap-1.5 text-left text-[10.5px] font-semibold uppercase tracking-wide text-muted hover:text-foreground">
-        What just happened
-        <Icon name="arrow" size={11} className={`transition-transform ${open ? "-rotate-90" : "rotate-90"}`} />
-        <span className="sr-only">{open ? "Show less" : "Show it all"}</span>
-      </button>
+    <div className="mb-1.5 px-1" aria-label="What just happened">
       <ol className="space-y-0.5 border-l-2 border-thread/50 pl-3">
         {shown.map((l, i) => {
-          const age = shown.length - 1 - i; // 0 is the newest
+          const newest = i === shown.length - 1;
           return (
-            <li
-              key={`${l.kind}-${l.id ?? "asked"}-${i}`}
-              className={`story gap-1.5 text-[14px] leading-snug ${!open && age > 1 ? "hidden sm:flex" : "flex"} ${age === 0 ? "text-foreground" : age === 1 ? "text-foreground/75" : "text-muted"}`}
-            >
+            <li key={`${l.kind}-${l.id ?? "asked"}-${i}`} className={`story flex items-baseline gap-1.5 text-[14px] leading-snug ${newest ? "text-foreground" : "text-muted"}`}>
               {l.kind !== "moment" && (
-                <span className="mt-[0.35em] shrink-0 text-thread">
+                <span className="shrink-0 self-center text-thread">
                   <Icon name={l.kind === "result" ? "diamond" : l.kind === "then" ? "branch" : "check"} size={11} />
                 </span>
               )}
-              {/* Folded, each line is one line (two on a wider screen); open, it's all there. */}
-              <span onClick={() => !open && setOpen(true)} className={`min-w-0 ${open ? "" : "block truncate sm:line-clamp-2 sm:whitespace-normal"} ${l.kind === "moment" ? "italic" : ""}`}>
+              <span className={`min-w-0 flex-1 ${open ? "" : "block truncate"} ${l.kind === "moment" ? "italic" : ""}`}>
                 <Linked text={l.text} />
               </span>
+              {newest && lines.length > 1 && (
+                <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex shrink-0 items-center gap-0.5 self-center font-sans text-[11px] text-muted hover:text-foreground">
+                  {open ? "less" : "earlier"}
+                  <Icon name="arrow" size={10} className={`transition-transform ${open ? "rotate-90" : "-rotate-90"}`} />
+                </button>
+              )}
             </li>
           );
         })}

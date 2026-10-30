@@ -217,7 +217,7 @@ export function Develop({
             />
           ))}
           {!busy && chains.length > 0 && devId && (
-            <button type="button" onClick={() => write({ steer, words }, true)} className="btn-tertiary text-xs">
+            <button type="button" onClick={() => write({ steer, words }, true)} className="drop-in btn-tertiary text-xs" style={{ animationDelay: "1.4s" }}>
               <Icon name="plus" size={12} /> Another take
             </button>
           )}
@@ -310,6 +310,11 @@ function ChainCard({ slot, pending, index, devId, entryId, live, depth, writing,
       next[i] = text;
       return next;
     });
+  // The take is finished once it's complete and every step has been written in (a step being
+  // reworked still counts: its old wording is there until the new is written over it).
+  const ready = !!chain && !writing && !slot.dropped && steps.length > 0 && steps.every((_, i) => !!settled[i]);
+  // Each step's element, to bring one to the middle of the screen once it's used.
+  const stepEls = useRef<(HTMLLIElement | null)[]>([]);
   // Withdrawn: it goes up in smoke, then its place closes.
   const card = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -376,6 +381,8 @@ function ChainCard({ slot, pending, index, devId, entryId, live, depth, writing,
       }
       await live.reload();
       live.focusBox("What happened next?");
+      // The step just used comes to the middle of the screen and stays there.
+      requestAnimationFrame(() => live.center(stepEls.current[k]));
     } finally {
       setUsing(null);
     }
@@ -398,7 +405,13 @@ function ChainCard({ slot, pending, index, devId, entryId, live, depth, writing,
           const written = settled[i] === s.text;
           const waiting = !s.text;
           return (
-            <li key={`step-${i}`} className="relative pb-3 pl-5 last:pb-1">
+            <li
+              key={`step-${i}`}
+              ref={(el) => {
+                stepEls.current[i] = el;
+              }}
+              className="relative rounded-lg pb-3 pl-5 last:pb-1"
+            >
               <span className={`absolute -left-[9px] top-0.5 grid h-[18px] w-[18px] place-items-center rounded-full text-[10px] font-semibold ${used ? "bg-thread text-background" : "border border-thread/50 bg-background text-thread"}`}>
                 {used ? <Icon name="check" size={10} /> : i + 1}
               </span>
@@ -420,14 +433,16 @@ function ChainCard({ slot, pending, index, devId, entryId, live, depth, writing,
                   />
                 )}
               </p>
-              {!writing && !busy && chain && (
-                <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
+              {/* The step's buttons keep their place from the start, so they fade in when the take
+                  is finished without moving anything. */}
+              {!slot.dropped && (
+                <div aria-hidden={!ready || !!busy || undefined} className={`mt-1 flex flex-wrap items-center gap-3 text-xs transition-opacity duration-300 ${ready && !busy ? "opacity-100" : "pointer-events-none opacity-0"}`}>
                   {used ? (
                     <span className="text-thread">
                       <Icon name="check" size={12} /> Used{used.status === "extracting" ? " · adding to the loom…" : ""}
                     </span>
                   ) : (
-                    <button type="button" disabled={using != null || entryId == null} onClick={() => logStep(i)} className="btn-secondary text-xs font-medium">
+                    <button type="button" disabled={!ready || using != null || entryId == null} onClick={() => logStep(i)} className="btn-secondary text-xs font-medium">
                       {using === i ? "Logging…" : i > 0 && !usedEntries[i - 1] ? `Use steps 1–${i + 1}` : "Use this step"}
                     </button>
                   )}
@@ -449,6 +464,10 @@ function ChainCard({ slot, pending, index, devId, entryId, live, depth, writing,
         })}
       </ol>
 
+      {/* What sits under a take (its threads, why, Rework) opens smoothly once every step is
+          written, and stays open while a rework rewrites them. */}
+      <div className={`reveal ${ready ? "shown" : ""}`}>
+        <div>
       {chain && (
         <>
           <RefChips refs={[...threadRefs(chain.threads), ...(chain.callback ? [{ kind: "moment" as const, id: chain.callback.id, name: `Callback: ${chain.callback.title}` }] : [])]} />
@@ -509,6 +528,8 @@ function ChainCard({ slot, pending, index, devId, entryId, live, depth, writing,
           {error && <p className="mt-1.5 text-xs text-danger">{error}</p>}
         </>
       )}
+        </div>
+      </div>
     </article>
   );
 }

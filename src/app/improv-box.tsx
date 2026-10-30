@@ -1,6 +1,7 @@
 "use client";
 
 import { Reading } from "./reading";
+import { useCenterLock } from "./center-lock";
 import { NowStrip, readWords, SlotRow, Smoke, Still, type NowLine, type Read } from "./answer-box";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -116,6 +117,7 @@ export interface Live {
   tone: number;
   focusBox: (placeholder?: string) => void;
   reopen: (entryId: number) => void;
+  center: (el: HTMLElement | null | undefined) => void; // bring what was just picked to the middle and hold it there
 }
 
 // "Can she…?", "Does that provoke…?", "How does … work": likely a rules question, not a moment.
@@ -356,12 +358,27 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   }, []);
   // Focus alone doesn't keep it open (it stays focused after asking); typing does.
   const shrunk = compact && !moment && !(focused && window.scrollY < 160);
+  // Pinned and scrolled past its place, the box floats above the page (a glass layer fades in
+  // behind it); back at the top it's part of the page again. Nothing changes size either way.
+  const pinMark = useRef<HTMLDivElement>(null);
+  const pinned = useRef<HTMLDivElement>(null);
+  // What you pick comes to the middle of the screen below the pinned box, and stays (center-lock.ts).
+  const below = useCallback(() => pinned.current?.getBoundingClientRect().bottom ?? 0, []);
+  const { center, release } = useCenterLock(below);
+  const [floating, setFloating] = useState(false);
+  useEffect(() => {
+    const mark = pinMark.current;
+    if (!mark) return;
+    const watch = new IntersectionObserver(([e]) => setFloating(!e.isIntersecting && e.boundingClientRect.top < 0));
+    watch.observe(mark);
+    return () => watch.disconnect();
+  }, []);
 
   const focusBox = useCallback((p?: string) => {
     if (p) setPlaceholder(p);
     box.current?.focus({ preventScroll: true });
   }, []);
-  const live: Live = { campaignId, entries, reload, model, tone, focusBox, reopen };
+  const live: Live = { campaignId, entries, reload, model, tone, focusBox, reopen, center };
 
   async function ask(again?: { steer: string }) {
     // A steer re-weaves the same moment (with the same corrections); otherwise it's whatever is in the box.
@@ -377,6 +394,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       setMoment("");
       setOverrides({});
     }
+    release();
     foldAway();
     setOpenCard(null);
     setSteered(again?.steer ?? "");
@@ -467,8 +485,8 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       setTimeout(() => setUnravelling(false), 2600);
       await reload();
       focusBox("What happened next?");
-      // Keep the chosen card in view once the others fold away.
-      requestAnimationFrame(() => document.getElementById("chosen")?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+      // The chosen card comes to the middle and stays there while the others go up in smoke.
+      requestAnimationFrame(() => center(document.getElementById("chosen")));
       return current.id;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Couldn't log that.");
@@ -496,11 +514,13 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
 
       {/* The box stays in reach: it sticks to the top while you read options further down. Open
           questions sit right above it until they're answered. */}
-      {/* What just happened: the context for whatever comes next, updating as you choose and record.
-          It sits above the box in the page (not pinned), so scrolling stays steady. */}
-      <NowStrip lines={nowLines(entries, asked)} />
-      <div className="sticky top-0 z-20 -mx-4 bg-background/95 px-4 pb-2 pt-2 backdrop-blur">
-        {questions.length > 0 && <QuestionTray questions={questions} reload={reload} campaignId={campaignId} autoApprove={autoApprove} setAutoApprove={setAutoApprove} />}
+      {/* Where the pinned area starts: once it's scrolled past, the area floats (glass). */}
+      <div ref={pinMark} aria-hidden className="h-px" />
+      <div ref={pinned} className={`pinned sticky top-0 z-20 -mx-4 px-4 pb-2 pt-2 ${floating ? "floating" : ""}`}>
+        {/* What just happened, in reading order: the last thing used or decided, then the box where
+            you write what happened next. One line, so the pinned area never changes height on its own. */}
+        <NowStrip lines={nowLines(entries, asked)} />
+        {questions.length > 0 &&<QuestionTray questions={questions} reload={reload} campaignId={campaignId} autoApprove={autoApprove} setAutoApprove={setAutoApprove} />}
         {/* Then any roll or fight still waiting for how it turned out (newest first). */}
         {!questions.length && waiting.length > 0 && (
           <div className="mb-2">
@@ -710,7 +730,19 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
               if (state === "other" && !showOthers) return unravelling ? <Headline key={`${card.label}-${i}`} card={card} n={i + 1} onOpen={() => {}} leaving={i} /> : null;
               // Headlines first: only the one you open (or the one you used) is shown in full.
               if (state === "open" && openCard !== i)
-                return <Headline key={`${card.label}-${i}`} card={card} n={i + 1} onOpen={() => setOpenCard(i)} settled={!!fresh} />;
+                return (
+                  <Headline
+                    key={`${card.label}-${i}`}
+                    card={card}
+                    n={i + 1}
+                    settled={!!fresh}
+                    onOpen={() => {
+                      setOpenCard(i);
+                      // Once it's open, it comes to the middle of the screen and stays there.
+                      requestAnimationFrame(() => requestAnimationFrame(() => center(document.querySelector<HTMLElement>(`[data-card="${i + 1}"]`))));
+                    }}
+                  />
+                );
               return (
                 <OptionCard
                   key={`${card.label}-${i}`}
@@ -1463,6 +1495,7 @@ function OptionCard({
   return (
     <li
       id={state === "used" ? "chosen" : undefined}
+      data-card={n}
       className={`rise group scroll-mt-40 rounded-xl border bg-surface p-4 shadow-sm transition-opacity ${state === "used" ? "border-thread/60" : "border-line"} ${state === "other" ? "opacity-55 hover:opacity-100" : ""}`}
     >
       <div className="mb-2 flex items-start justify-between gap-3">

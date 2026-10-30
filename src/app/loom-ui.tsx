@@ -169,7 +169,7 @@ function RulesPanel({ campaignId, initial, onClose }: { campaignId: number; init
     return () => window.removeEventListener("keydown", esc);
   }, [onClose]);
   return createPortal(
-    <aside aria-label="Rules" className="rise fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-2xl border border-line bg-surface shadow-2xl sm:inset-y-3 sm:left-auto sm:right-3 sm:max-h-none sm:w-[420px] sm:rounded-2xl">
+    <aside aria-label="Rules" className="glass-panel rise fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-3xl sm:inset-y-3 sm:left-auto sm:right-3 sm:max-h-none sm:w-[420px] sm:rounded-3xl">
       <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
         <p className="text-sm font-medium">Rules</p>
         <button type="button" onClick={onClose} className="btn-tertiary" aria-label="Close rules">
@@ -471,7 +471,7 @@ function Inspector({ trail, setTrail }: { trail: Ref[]; setTrail: (t: Ref[]) => 
     <aside
       aria-label="Loom inspector"
       style={drag ? { transform: `translateY(${drag}px)` } : undefined}
-      className={`fixed inset-x-0 bottom-0 z-40 flex max-h-[78vh] flex-col rounded-t-2xl border border-line bg-surface shadow-2xl sm:inset-y-3 sm:left-auto sm:right-3 sm:max-h-none sm:w-[400px] sm:rounded-2xl ${drag ? "" : "transition-transform"}`}
+      className={`glass-panel fixed inset-x-0 bottom-0 z-40 flex max-h-[78vh] flex-col rounded-t-3xl sm:inset-y-3 sm:left-auto sm:right-3 sm:max-h-none sm:w-[400px] sm:rounded-3xl ${drag ? "" : "transition-transform"}`}
     >
       <div {...touch} aria-hidden className="flex justify-center pt-2 sm:hidden">
         <span className="h-1 w-9 rounded-full bg-line" />
