@@ -23,6 +23,7 @@ interface Item {
 }
 interface Proposal {
   sessionNumber: number;
+  questions: { question: string; about: string }[];
   items: Item[];
   llm: { model: string; seconds: number; costUsd: number };
 }
@@ -89,6 +90,7 @@ function Board({ campaignId }: { campaignId: number }) {
   const [session, setSession] = useState<number | "">("");
   const [history, setHistory] = useState<Batch[]>([]);
   const [proposal, setProposal] = useState<Proposal | null>(null);
+  const [answers, setAnswers] = useState<Record<number, string>>({});
   const [skip, setSkip] = useState<Set<number>>(new Set());
   const [yes, setYes] = useState<Set<number>>(new Set());
   const [applied, setApplied] = useState<Applied | null>(null);
@@ -99,6 +101,7 @@ function Board({ campaignId }: { campaignId: number }) {
   const [live, setLive] = useState<Live | null>(null);
   const elapsed = useElapsed(busy === "reading" || busy === "ideas");
 
+  const [notesVersion, setNotesVersion] = useState(0);
   const [saved, setSaved] = useState<Saved>({});
   const refresh = useCallback(async (id: number) => {
     const r = await post<{ nextSession: number; history: Batch[]; live: Live | null; saved: Saved }>("/api/prep", { campaignId: id });
@@ -137,6 +140,7 @@ function Board({ campaignId }: { campaignId: number }) {
     run("reading", async () => {
       const p = await post<Proposal>("/api/recap/propose", { campaignId, recap: notes, sessionNumber: session || undefined });
       setProposal(p);
+      setAnswers({});
       setApplied(null);
       setSkip(new Set());
       setYes(new Set());
@@ -148,7 +152,8 @@ function Board({ campaignId }: { campaignId: number }) {
       // Anything risky the GM didn't say yes to is skipped.
       const must = proposal.items.filter((i) => i.tier === "must");
       const skipped = [...skip, ...must.filter((i) => !yes.has(i.n)).map((i) => i.n)];
-      const r = await post<Applied>("/api/recap/apply", { campaignId, sessionNumber: proposal.sessionNumber, skip: skipped, confirmed: [...yes] }).catch(async (e) => {
+      const answered = proposal.questions.flatMap((q, i) => (answers[i]?.trim() ? [{ question: q.question, answer: answers[i] }] : []));
+      const r = await post<Applied>("/api/recap/apply", { campaignId, sessionNumber: proposal.sessionNumber, skip: skipped, confirmed: [...yes], answers: answered }).catch(async (e) => {
         // A failed save may have written part of it; the review closes so it can't be saved twice.
         setProposal(null);
         await refresh(campaignId);
@@ -157,6 +162,7 @@ function Board({ campaignId }: { campaignId: number }) {
       setApplied(r);
       setProposal(null);
       setNotes("");
+      setNotesVersion((v) => v + 1);
       await refresh(campaignId);
     });
 
@@ -323,6 +329,25 @@ function Board({ campaignId }: { campaignId: number }) {
           </div>
           {!items.length && <Note>Loom didn&apos;t find anything new in these notes.</Note>}
 
+          {proposal.questions.length > 0 && (
+            <Block title="A few questions" hint="What the notes leave unclear. Answers are kept as your secret notes; skip any you like.">
+              {proposal.questions.map((q, i) => (
+                <li key={i} className="rounded-lg border border-line p-3">
+                  <label className="block">
+                    <span className="text-[15px]"><Linked text={q.question} /></span>
+                    <input
+                      value={answers[i] ?? ""}
+                      onChange={(e) => setAnswers({ ...answers, [i]: e.target.value })}
+                      maxLength={500}
+                      placeholder="Your answer"
+                      className="mt-1.5 w-full border-b border-line bg-transparent py-1 text-[15px] outline-none focus:border-thread/60"
+                    />
+                  </label>
+                </li>
+              ))}
+            </Block>
+          )}
+
           {byTier("must").length > 0 && (
             <Block title="Needs your yes" hint="Risky changes: over your own entries, deaths and captures, secrets, items changing hands, or quotes Loom couldn't find.">
               {byTier("must").map((i) => (
@@ -419,6 +444,8 @@ function Board({ campaignId }: { campaignId: number }) {
         </section>
       )}
 
+      <GmNotes key={`notes:${campaignId}:${notesVersion}`} campaignId={campaignId} />
+
       <FreshIdeas key={`${campaignId}:${saved.fresh?.at ?? ""}`} campaignId={campaignId} initial={(saved.fresh?.data as Fresh | undefined) ?? null} at={saved.fresh?.at} />
 
       <section className="mt-12">
@@ -496,6 +523,52 @@ function Board({ campaignId }: { campaignId: number }) {
 
 // Risky changes from the table that were never answered. Wrap-up waits for them, so a session
 // can't close with something undecided.
+// What the GM knows and the players don't. Everything Loom writes steers by these.
+function GmNotes({ campaignId }: { campaignId: number }) {
+  const [notes, setNotes] = useState<{ id: number; text: string; source: string }[]>([]);
+  const [text, setText] = useState("");
+  const [error, setError] = useState("");
+  const send = useCallback(
+    (body: { add?: string; noteId?: number }) =>
+      post<{ notes: typeof notes }>("/api/notes", { campaignId, ...body })
+        .then((r) => setNotes(r.notes))
+        .catch((e) => setError(e.message)),
+    [campaignId],
+  );
+  useEffect(() => void send({}), [send]);
+  return (
+    <section className="mt-12">
+      <h2 className="text-[15px] font-semibold">Secrets</h2>
+      <p className="mb-2 text-sm text-muted">What you know and the players don&apos;t. Loom steers by these and never says them outright.</p>
+      {error && <Note>{error}</Note>}
+      <form
+        className="flex items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!text.trim()) return;
+          send({ add: text });
+          setText("");
+        }}
+      >
+        <input value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} placeholder="The cracks in reality are what's causing the madness" className="min-w-0 flex-1 border-b border-line bg-transparent py-1 text-[15px] outline-none focus:border-thread/60" />
+        <button disabled={!text.trim()} className="btn-secondary text-sm">Add</button>
+      </form>
+      {!!notes.length && (
+        <ul className="mt-3 space-y-1.5">
+          {notes.map((n) => (
+            <li key={n.id} className="story flex items-start justify-between gap-3 text-[15px]">
+              <span><Linked text={n.text} /></span>
+              <button aria-label="Remove this secret" onClick={() => send({ noteId: n.id })} className="shrink-0 text-muted hover:text-foreground">
+                <Icon name="close" size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function OpenQuestions({ questions, onAnswered }: { questions: Live["questions"]; onAnswered: () => Promise<unknown> }) {
   const [busy, setBusy] = useState(false);
   const answer = async (qs: Live["questions"], yes: boolean) => {

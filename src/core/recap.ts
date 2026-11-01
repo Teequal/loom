@@ -3,6 +3,7 @@ import { settleStates } from "./nudges";
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "./db/client";
+import { listNotes, notesBlock, recapQuestions } from "./gm-notes";
 import { ENTITY_TYPES, MOMENT_TONES, PAIR_WEIGHTS, THREAD_KINDS } from "./db/schema";
 import {
   applyEntityChanges,
@@ -145,7 +146,7 @@ ${PROPERTY_RULES}
 
 ${MOMENT_RULES}
 
-Use only what the recap says; do not invent facts. Lists of unanswered questions in the recap are strong signals for threads.`;
+Use only what the recap says; do not invent facts. Never state a cause or a link the notes don't state (a strange event isn't a known cause's work just because it would fit): leave it out, and GM NOTES settle what's true. Lists of unanswered questions in the recap are strong signals for threads.`;
 
 const ENRICH_SYSTEM = `You maintain the records of the characters, places, items and factions in a tabletop RPG campaign, so the game master's assistant never contradicts established facts (a dead NPC acting, someone appearing where they can't be).
 
@@ -193,15 +194,16 @@ export async function proposeRecapChanges(campaignId: number, recap: string, mod
   const liveNote = opts.live
     ? "\nThis is a single moment, so expect few changes: often one thread progressed or one new thread, a detail or two. Don't propose key moments unless something truly memorable happened.\n"
     : "";
-  const prompt = `${await entityStateText(campaignId)}
+  const records = await entityStateText(campaignId);
+  const prompt = `${records}
 
 EXISTING OPEN THREADS
 ${threadLines.join("\n") || "(none yet)"}
-${already}${liveNote}
+${notesBlock((await listNotes(campaignId)).slice(0, 30))}${already}${liveNote}
 ${heading}
 ${recap}`;
 
-  const [res, props] = await Promise.all([
+  const [res, props, asked] = await Promise.all([
     callLlm({
       feature: opts.live ? "live" : "recap",
       campaignId,
@@ -214,9 +216,10 @@ ${recap}`;
     }),
     // A single moment at the table leaves these to the table nudges; a failed call loses only these.
     opts.live ? null : proposeProperties(campaignId, { notes: recap }).catch(() => null),
+    opts.live ? null : recapQuestions(campaignId, records, recap).catch(() => null),
   ]);
   const data: Proposal = { ...res.data, sub_properties: props?.data.sub_properties ?? [], pair_weights: props?.data.pair_weights ?? [] };
-  return { ...res, data, costUsd: res.costUsd + (props?.costUsd ?? 0) };
+  return { ...res, data, questions: asked?.questions ?? [], costUsd: res.costUsd + (props?.costUsd ?? 0) + (asked?.costUsd ?? 0) };
 }
 
 // Reads every stored recap for the campaign and proposes entity details (no thread changes).

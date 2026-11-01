@@ -3,6 +3,7 @@ import { db, schema } from "./db/client";
 import type { EffectInPlay } from "./effects";
 import type { EntityTraits } from "./entity-fields";
 import type { Budget } from "./graph";
+import { listNotes, notesBlock, relevantNotes } from "./gm-notes";
 import { capabilitiesOf, RELATION_LAWS, togglesText } from "./rules";
 import { buildSituation, loadWorld, type Overrides, type Presence, type Situation } from "./situation";
 
@@ -198,8 +199,16 @@ export async function buildScene(
     lines.push("", `ALSO NEARBY (name only): ${nearby.map((e) => `${e.name} (${e.type}${e.status === "dead" ? ", dead" : ""})`).join("; ")}`);
   }
 
+  const inPlay = [...situation.here, ...opts.mentioned, ...opts.threadEntities].flatMap((n) => {
+    const e = lookup.get(n.toLowerCase());
+    return e ? [e.name, ...e.aliases] : [n];
+  });
+  const known = entities.flatMap((e) => [e.name, ...e.aliases]);
+  // With no moment it's prep: every secret counts.
+  const notes = relevantNotes(await listNotes(campaignId), inPlay, known, situation.moment.trim() ? 6 : 30);
+
   return {
-    text: lines.join("\n"),
+    text: lines.join("\n") + notesBlock(notes),
     partyLocation: party,
     pcs,
     entities,

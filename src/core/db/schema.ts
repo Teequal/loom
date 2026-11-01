@@ -308,6 +308,15 @@ export const llmCalls = sqliteTable("llm_calls", {
   createdAt: createdAt(),
 });
 
+// What the GM knows and the players don't: typed in, or an answer to Loom's questions after a recap.
+export const gmNotes = sqliteTable("gm_notes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+  text: text("text").notNull(),
+  source: text("source").notNull().default("dm"), // dm | answer
+  createdAt: createdAt(),
+});
+
 // Every improv option the checks threw away, and why, so changes to the answer format and the
 // checks can be measured against how often the model breaks them (and at the table, not just in tests).
 export const optionRejections = sqliteTable("option_rejections", {

@@ -120,6 +120,13 @@
       "when": 1793515065306,
       "tag": "0016_complete_captain_cross",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1793515328082,
+      "tag": "0017_curly_thanos",
+      "breakpoints": true
     }
   ]
 }

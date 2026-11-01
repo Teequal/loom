@@ -4,6 +4,7 @@ import { db, schema } from "@/core/db/client";
 import { applyProposal, newBatch, proposeRecapChanges, type ProposalFile } from "@/core/recap";
 import { reviewProposal, splitRisky } from "@/core/review";
 import { draftNotes, liveEntries, NOTED, wrapLiveSession } from "@/core/live";
+import { addNote, answerNote } from "@/core/gm-notes";
 import { suggest } from "@/core/suggest";
 import { recentBatches, undoBatch } from "@/core/undo";
 
@@ -71,18 +72,20 @@ export async function proposeRecap(campaignId: number, recap: string, sessionNum
   const reviewed = await reviewProposal(file);
   return {
     sessionNumber: number,
+    questions: res.questions,
     items: reviewed.map((r) => ({ n: r.item.n, tier: r.tier, group: r.group, summary: r.summary, evidence: r.evidence, check: r.check, reasons: r.reasons })),
     llm: { model: res.model, seconds: res.latencyMs / 1000, costUsd: res.costUsd },
   };
 }
 
-export async function applyRecap(campaignId: number, sessionNumber: number, skip: number[], confirmed: number[]) {
+export async function applyRecap(campaignId: number, sessionNumber: number, skip: number[], confirmed: number[], answers: { question: string; answer: string }[] = []) {
   const path = proposalPath(campaignId, sessionNumber);
   if (!existsSync(path)) throw new Error("That proposal has expired. Read the notes again.");
   const file = JSON.parse(readFileSync(path, "utf8")) as ProposalFile & { savedAs?: string; wrapsLive?: boolean };
   // A proposal is saved once. Marked before writing, so a retry after a failure can't add the
   // same threads again; the GM undoes the batch and reads the notes again instead.
   if (file.savedAs) throw new Error(`These notes were already saved ("${file.savedAs}"). To redo them, undo that save under Recent changes, then read the notes again.`);
+  for (const a of answers) await addNote(campaignId, answerNote(a.question, a.answer), "answer");
   const batch = newBatch(file);
   writeFileSync(path, JSON.stringify({ ...file, savedAs: batch }, null, 2));
   const r = await applyProposal(file, new Set(skip), batch, new Set(confirmed));
