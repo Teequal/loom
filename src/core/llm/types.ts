@@ -12,6 +12,7 @@ export interface LlmRequest<T> {
   effort?: "low" | "medium" | "high";
   model?: string; // overrides the feature's default model; short names like "opus" work
   fast?: boolean; // skip the model's hidden reasoning where the model allows it (lower latency)
+  cacheHour?: boolean; // on Haiku, keep the cache an hour: table asks can be minutes apart
   onText?: (snapshot: string) => void; // streams the answer as it's written (the JSON so far)
 }
 
@@ -22,6 +23,7 @@ export interface ProviderResponse<T> {
   outputTokens: number;
   cacheReadTokens: number; // read from the prompt cache, not counted in inputTokens
   cacheWriteTokens: number; // written to the prompt cache, not counted in inputTokens
+  cacheHourTokens: number; // those of them kept for an hour, which cost more
 }
 
 export interface LlmProvider {

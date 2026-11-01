@@ -18,7 +18,7 @@ export interface Ref {
 // What a "happens" beat can be: a body part (or "none" for the whole of them) and a sensation.
 export const BODY_PARTS = ["none", "hands", "fingers", "palm", "arm", "legs", "chest", "heart", "head", "eyes", "ears", "skin", "throat", "stomach", "back", "wound", "scar", "tail", "horns", "scales"] as const;
 export const SENSATIONS = ["goes cold", "grows warm", "burns", "tingles", "aches", "throbs", "stings", "goes numb", "prickles", "feels heavy", "pounds", "itches", "trembles", "rings"] as const;
-const BODY = new RegExp(`^(?:${BODY_PARTS.filter((p) => p !== "none").join("|")}|hand|finger|palms|arms|leg|eyes?|knees?|feet|foot|body|mouth|jaw|lips|teeth|shoulders?|breath|voice|mind|thoughts|vision|blood|pulse|grip)$`, "i");
+const BODY = new RegExp(`^(?:${BODY_PARTS.filter((p) => p !== "none").join("|")}|hand|finger|palms|arms|leg|wrists?|elbows?|collar|sleeve|cloak|necks?|ankles?|eyes?|knees?|feet|foot|body|mouth|jaw|lips|teeth|shoulders?|breath|voice|mind|thoughts|vision|blood|pulse|grip)$`, "i");
 
 const PLURAL: Record<(typeof SENSATIONS)[number], string> = {
   "goes cold": "go cold", "grows warm": "grow warm", burns: "burn", tingles: "tingle", aches: "ache", throbs: "throb", stings: "sting",
@@ -94,7 +94,11 @@ export function pcOpensClause(tagged: string, tagger: Tagger, except?: string): 
 // down behind the wall". A person reaching for them is fine; the roll or the player settles it.
 // The world's forces aren't read here: what happens TO a PC is the GM's.
 const MOVES_PC = /\b(?:pulls?|pulled|drags?|dragged|hauls?|hauled|shoves?|shoved|yanks?|yanked|push(?:es)?|pushed|carr(?:y|ies)|carried|lifts?|lifted|throws?|threw|hurls?|hurled|bundles?|bundled|hustles?|hustled|tackles?|tackled|knocks?|knocked|wrestles?|wrestled|steers?|steered|grabs?|grabbed|seizes?|seized|pins?|pinned|tows?|towed|whisks?|whisked|ushers?|ushered)\s+(?:(the party)\b|\{([^{}|]+)(?:\|[^{}]*)?\}(?!['’]s)|(him|them|her)\b(?=\s*(?:$|[.,;:!?—]|down|back|away|aside|up|behind|into|out|from|through|across|to|toward|towards|under|over|along|clear)))/i;
+// Taking hold of them counts too: "grabs {Salaena}'s wrist".
+const HOLDS_PC = /\b(?:grabs?|grabbed|seizes?|seized|pins?|pinned|yanks?|yanked|wrenches|wrenched)\s+\{([^{}|]+)(?:\|[^{}]*)?\}['’]s\s+(\w+)/i;
 export function movesPc(tagged: string, tagger: Tagger): string | null {
+  const held = HOLDS_PC.exec(tagged);
+  if (held && BODY.test(held[2]) && tagger.entityOf(held[1])?.type === "pc") return `someone takes hold of ${tagger.entityOf(held[1])!.name} before any roll ("${tagger.render(held[0])}…")`;
   const m = MOVES_PC.exec(tagged);
   if (!m) return null;
   if (m[1]) return `someone moves the party before any roll ("${tagger.render(m[0])}…")`;

@@ -73,6 +73,9 @@ const SUPPORTS_FALLBACK = new Set(["claude-opus-5-5", "claude-sonnet-5-5"]);
 // Sonnet 5.5 has a different off switch, so it's left thinking.
 const CAN_DISABLE_THINKING = new Set(["claude-haiku-5-5"]);
 
+// Rarely repeated within the cache's life, so caching only adds the write premium.
+const ONE_OFF = new Set(["recap", "enrich", "infer", "properties", "questions", "aftermath", "hook", "suggest", "fresh", "flavor", "rule"]);
+
 export const anthropicProvider: LlmProvider = {
   name: "anthropic",
   defaultModel: "claude-haiku-5-5",
@@ -85,9 +88,12 @@ export const anthropicProvider: LlmProvider = {
     const params = {
       model,
       max_tokens: req.maxTokens ?? 4000,
-      // The fixed instructions come first and are cached, so a repeat within 5 minutes reads them at
-      // a tenth of the price. A changed answer format starts a new cache entry (LOOM_CACHE=off skips it).
-      system: process.env.LOOM_CACHE === "off" ? req.system : [{ type: "text" as const, text: req.system, cache_control: { type: "ephemeral" as const } }],
+      // The fixed instructions come first and are cached, so a repeat reads them at a tenth of the
+      // price and answers sooner. A changed answer format misses (LOOM_CACHE=off skips all this).
+      system:
+        process.env.LOOM_CACHE === "off" || ONE_OFF.has(req.feature)
+          ? req.system
+          : [{ type: "text" as const, text: req.system, cache_control: { type: "ephemeral" as const, ...(req.cacheHour && model === "claude-haiku-5-5" ? { ttl: "1h" as const } : {}) } }],
       messages: [{ role: "user" as const, content: req.prompt }],
       // Low effort keeps live calls fast; recap extraction can ask for more.
       output_config: { effort: req.effort ?? "low", format: outputFormat(req.schema) },
@@ -136,6 +142,7 @@ export const anthropicProvider: LlmProvider = {
       outputTokens: response.usage.output_tokens,
       cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
       cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
+      cacheHourTokens: response.usage.cache_creation?.ephemeral_1h_input_tokens ?? 0,
     };
   },
 };

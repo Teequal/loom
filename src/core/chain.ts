@@ -1,7 +1,7 @@
 import { holdPlace, MOVES_THERE, placeContext, type PlaceContext } from "./place";
 import { applyPlans, beatPlansOn, planMoves, plansBlock, PLAN_TEXT, spentThisSession, type PlanBeat } from "./beat-plans";
 import { z } from "zod";
-import { APPROACH_SKILLS, FLAVOURS, adoptHand, handText, priceRule, type Approach, checkOption, contextPrompt, fitToMove, liveRulesOf, settleLost, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
+import { APPROACH_SKILLS, FLAVOURS, adoptHand, formatTooBig, handText, priceRule, stableFormat, stableLists, type Approach, checkOption, contextPrompt, fitToMove, liveRulesOf, settleLost, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
 import { callLlm, type LlmResult } from "./llm";
 import { db, schema } from "./db/client";
 import { PILLARS } from "./db/schema";
@@ -123,15 +123,19 @@ function towardDirection(p: Prepared) {
   return new Set(p.threads.filter((t) => (`${t.title} ${t.summary}`.toLowerCase().match(/[a-z']{5,}/g) ?? []).some((w) => words.has(w))).map((t) => t.id));
 }
 
-function chainSchema(p: Prepared, moves: Move[], turn: Hand | null, foes?: string[], plans: string[] = []) {
+const openingOf = (turn: Hand | null): [string, ...string[]] => (!turn ? ["start"] : ROLLS.has(turn.kind) ? ["success", "failure"] : turn.kind === "choice" ? ["first", "second"] : ["any"]);
+
+function chainSchema(p: Prepared, moves: Move[], turn: Hand | null, foes?: string[], plans: string[] = [], stable = true) {
   // Kind "npc" offers only who's here: someone away can only arrive or act from afar, and once
   // they've arrived their later lines stay kind "arrival" (rendered the same: name, then what they do).
-  const lists = { moves: moves.map((m) => m.id), threads: p.threads.map((t) => `T${t.id}`), nameable: p.lists.nameable, npcActors: p.lists.npcActors, absentActors: p.lists.absentActors, outcomeActors: p.lists.outcomeActors, handOff: p.lists.handOff, pcs: p.lists.pcs, mechanics: p.lists.mechanics, moments: p.callbacks.map((m) => `M${m.id}`), plans };
+  const perMoment = { moves: moves.map((m) => m.id), threads: p.threads.map((t) => `T${t.id}`), nameable: p.lists.nameable, npcActors: p.lists.npcActors, absentActors: p.lists.absentActors, outcomeActors: p.lists.outcomeActors, handOff: p.lists.handOff, pcs: p.lists.pcs, mechanics: p.lists.mechanics, moments: p.callbacks.map((m) => `M${m.id}`), plans };
+  const lists = stable ? stableLists(p, perMoment) : perMoment;
   const { Beat, Hand, thread, refs, move } = scaffoldParts(lists);
   const step = (after: [string, ...string[]]) => z.object({ after: z.enum(after), if_they: z.string(), setup: z.array(Beat), hand: Hand, on_fail: z.object({ target: z.string(), effect: z.string() }) });
   // The first step can only follow an outcome of the turn the GM's choice ended on, so it can't
   // restage the choice: a roll's success or failure, one side of a choice, an answer to a question.
-  const opening: [string, ...string[]] = !turn ? ["start"] : ROLLS.has(turn.kind) ? ["success", "failure"] : turn.kind === "choice" ? ["first", "second"] : ["any"];
+  // (One list for every turn keeps the format the same; code holds it to this turn's, in openingOf.)
+  const opening: [string, ...string[]] = stable ? ["start", "success", "failure", "first", "second", "any"] : openingOf(turn);
   // (Two step shapes made the format too large for the API to compile, so the first step's outcome
   // is its own small field on the chain, and the first step's own "after" is set from it.)
   const Chain = z.object({ move, thread, also_ties_to: z.array(thread), refs, opens_on: z.enum(opening), opens_if: z.string(), steps: z.array(step(["success", "failure", "first", "second", "any"])), label: z.string(), headline: z.string(), why: z.string(), flavour: z.enum(FLAVOURS), pillar: z.enum(PILLARS), callback: z.string() });
@@ -459,7 +463,7 @@ export async function developChain(campaignId: number, input: ChainInput) {
     for (const [k, b] of planMoves(p.scene.situation.view, moves, { size: 4, spent: spentThisSession(p.scene.situation.view) }).plans) plans.set(k, b);
   }
   const planIds = [...plans.values()].flat().map((b) => b.id);
-  const { Schema, Chain } = chainSchema(p, moves, turn, foes, planIds);
+  let { Schema, Chain } = chainSchema(p, moves, turn, foes, planIds, stableFormat(campaignId));
   const StepSchema = Chain.shape.steps.element;
   const sized = stepsFor(input);
   const steps = keep.length ? { ...sized, max: Math.max(1, sized.max - keep.length), text: `STEPS: ${Math.max(1, sized.max - keep.length)} new step${sized.max - keep.length > 1 ? "s" : ""} after the kept ones, each 1-2 beats, under 35 words.` } : refine && refine.how !== "shorter" ? { ...sized, text: `STEPS: ${refine.chain.steps.length} steps, as now, each 1-2 beats, under 35 words.` } : sized;
@@ -525,7 +529,7 @@ ${!turn ? 'None: opens_on is "start".' : ROLLS.has(turn.kind) ? 'The roll above.
         return;
       }
       let raw = parsed.data as unknown as RawStep;
-      if (l.used === 0) raw = { ...raw, after: head.opens_on, if_they: head.opens_if.trim() || raw.if_they };
+      if (l.used === 0) raw = { ...raw, after: openingOf(turn).includes(head.opens_on) ? head.opens_on : openingOf(turn)[0], if_they: head.opens_if.trim() || raw.if_they };
       const st = l.run.take(raw);
       if (st && index < count && !l.dropped) input.onStep?.(index, st, l.run.steps.length - 1);
     }
@@ -595,6 +599,7 @@ ${!turn ? 'None: opens_on is "start".' : ROLLS.has(turn.kind) ? 'The roll above.
       for (const [i, c] of res.data.chains.entries()) if (i >= seen) finish(base + i, c);
     } catch (err) {
       if (err instanceof Error && /credit has run out|AI allowance|switched off/.test(err.message)) throw err;
+      if (formatTooBig(campaignId, err)) ({ Schema, Chain } = chainSchema(p, moves, turn, foes, planIds, false));
       for (const [i, l] of live) if (i >= base && l.run.steps.length && !accepted.some((c) => c.steps === l.run.steps)) input.onDrop?.(i);
       log.push({ label: `attempt ${attempt + 1}`, reason: `unusable answer (${err instanceof Error ? err.message.slice(0, 300) : "error"}…)` });
     }

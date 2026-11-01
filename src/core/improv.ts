@@ -227,6 +227,29 @@ const nonEmpty = (xs: string[], fallback: string): [string, ...string[]] => (xs.
 export type SchemaLists = { moves: string[]; threads: string[]; nameable: string[]; npcActors: string[]; absentActors: string[]; outcomeActors: string[]; handOff: string[]; pcs: string[]; mechanics: string[]; moments: string[]; plans?: string[]; anchors?: string[] };
 
 /** The shapes a scaffold is built from, each with only the values allowed right now. */
+// The API won't compile a format past a certain size. A campaign that big goes back to per-moment
+// lists: no cache, but it works.
+const TOO_BIG = new Set<number>();
+export const stableFormat = (campaignId: number) => process.env.LOOM_STABLE_FORMAT !== "off" && !TOO_BIG.has(campaignId);
+export function formatTooBig(campaignId: number, err: unknown) {
+  if (!(err instanceof Error) || !/grammar|schema.*(?:large|complex)/i.test(err.message)) return false;
+  TOO_BIG.add(campaignId);
+  return true;
+}
+
+/**
+ * The same answer format for every moment in a campaign, so the prompt cache can hit: a changed
+ * format misses it (measured: ~6.5 s and $0.0022 a miss, ~4.5 s and $0.0014 a hit). The lists are
+ * the whole campaign's, and the per-moment rules (who's here, who can arrive) stay with the
+ * prompt and the code's checks.
+ */
+export function stableLists(p: Prepared, m: SchemaLists): SchemaLists {
+  const world = p.scene.situation.entities;
+  const pcs = world.filter((e) => e.type === "pc").map((e) => e.name);
+  const npcs = world.filter((e) => (e.type === "npc" || e.type === "faction") && e.status !== "dead" && e.status !== "destroyed").map((e) => e.name);
+  return { ...m, moves: ["M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8"], threads: p.allThreads.map((t) => `T${t.id}`), nameable: world.map((e) => e.name), npcActors: npcs, absentActors: npcs, outcomeActors: pcs, handOff: pcs, pcs, mechanics: [...p.scene.situation.view.g.nodes.values()].filter((n) => n.kind === "rule").map((n) => n.name), moments: ["M0"] };
+}
+
 export function scaffoldParts(lists: SchemaLists) {
   // One shape per kind of beat, each with only the actors that kind allows. A kind with nobody to
   // offer is left out.
@@ -818,7 +841,8 @@ export async function prepareMoment(campaignId: number, moment: string, opts: Pr
 }
 export type Prepared = Awaited<ReturnType<typeof prepareMoment>>;
 
-export const liveRulesOf = (scene: Scene) => scene.situation.effects.filter((e) => e.live).map((e) => ({ name: e.effect.name, why: e.why, sourceName: e.sourceName }));
+export const liveRulesOf = (scene: Scene) => scene.situation.effects.filter((e) => e.live).map((e) => ({ name: e.effect.name, why: e.why, sourceName: e.sourceName, to: e.targets, onFail: e.effect.onFail, used: /moment uses/.test(e.why) }));
+
 
 // Bands not worth a line: the middle of each property.
 const QUIET_BANDS = new Set(["mixed", "steady", "neutral", "at ease", "holds", "half-truths", "trades", "resistant", "none", "holding", "unknown", "quiet"]);
@@ -895,9 +919,27 @@ export function priceRule(o: ScaffoldOption, view: View) {
   if (line) o.hand_off.text = `${o.hand_off.text} ${line}`;
 }
 
+/** Ends an option on a rule's own roll. */
+export function ownRule(o: ScaffoldOption, rule: { name: string; to: string[]; onFail: string }) {
+  const who = rule.to.length > 1 ? (rule.to.includes(o.hand_off.to) ? o.hand_off.to : "table") : (rule.to[0] ?? "table");
+  o.hand = { ...(o.hand ?? {}), kind: "rule", to: who, mechanic: rule.name };
+  o.hand_off = { to: who, ...handText(o.hand) };
+  o.on_fail = { target: who, effect: o.on_fail.effect && o.on_fail.target !== "none" ? o.on_fail.effect : rule.onFail };
+}
+
 export function fitToMove(o: ScaffoldOption, moves: Move[], c: CheckContext, droppedSentences: { label: string; reason: string }[]) {
   const move = moves.find((m) => m.id === o.move);
   if (move && !move.threads.includes(Number(o.thread.replace(/^T/, "")))) o.thread = `T${move.threads[0]}`;
+  // An option on a rule's move ends on that rule's roll, whatever the model picked: the GM's rule
+  // isn't the model's to swap for a save it made up.
+  if (move?.rule && o.hand_off.mechanic !== move.rule.name) ownRule(o, move.rule);
+  // A roll made up for what a set-off rule already covers ("a save against the figurine's hold")
+  // is that rule's roll.
+  const owed = moves.find((m) => m.rule?.used)?.rule;
+  if (!move?.rule && owed && (o.hand?.kind === "save" || o.hand?.kind === "check") && owed.to.includes(o.hand.to) && owed.words.some((w) => o.hand!.what?.toLowerCase().includes(w))) {
+    o.hand = { ...o.hand, kind: "rule", mechanic: owed.name };
+    o.hand_off = { to: o.hand.to, ...handText(o.hand) };
+  }
   if (move) o.moveInfo = { kind: move.kind, source: move.source, cast: move.cast.map((c) => ({ name: c.name, can: c.can, part: c.part })) };
   let supportLines = 0;
   const outsideCast = (b: ScaffoldBeat) => {
@@ -950,7 +992,8 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
     planDropped.push(...pl.dropped);
   }
   const planIds = [...plans.values()].flat().map((b) => b.id);
-  const OptionsSchema = optionsSchema({ moves: moves.map((m) => m.id), threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`), plans: planIds, anchors: anchorIds });
+  const momentLists = { moves: moves.map((m) => m.id), threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`), plans: planIds, anchors: anchorIds };
+  let OptionsSchema = optionsSchema(stableFormat(campaignId) ? stableLists(P, momentLists) : momentLists);
   const prompt = `${contextPrompt(P, moves)}${planIds.length ? `${plansBlock(scene.situation.view, plans)}\nPLANNED BEATS\n${PLAN_TEXT}\n` : ""}${anchorIds.length ? `${anchorsBlock(anchors, [])}\nSOFT PLAN\n${SOFT_TEXT}\n` : ""}
 ${lengthFor(moment, P.taste.length)}
 MIX: ${MIXES[opts.mix ?? "mix"]}${
@@ -1010,7 +1053,8 @@ ${moment}`;
   const shown: ScaffoldOption[] = [];
   const rejected: { label: string; reason: string }[] = [];
   const droppedSentences: { label: string; reason: string }[] = []; // logged, but the option survived
-  const OptionSchema = OptionsSchema.shape.options.element;
+  let OptionSchema = OptionsSchema.shape.options.element;
+  let rulePaid = false;
   const wanted = MIX_FLAVOURS[opts.mix ?? "mix"];
   const showEarly = opts.onOption && !lines.length;
   for (let attempt = 0; attempt < 2 && accepted.length < 2; attempt++) {
@@ -1039,6 +1083,15 @@ ${moment}`;
       if (!settleLost(o, rawSetup, droppedSentences)) return rejected.push({ label: o.label, reason: "nothing left once what dropped sentences set up was removed" });
       const reason = checkOption(o, lists.check);
       if (reason) return rejected.push({ label: o.label, reason });
+      // A rule the moment set off is rolled every time: if the model hasn't, the first option does.
+      const owed = moves.find((m) => m.rule?.used)?.rule;
+      if (owed) {
+        if (o.hand_off.mechanic === owed.name) rulePaid = true;
+        else if (!rulePaid && owed.to.includes(o.hand_off.to)) {
+          ownRule(o, owed);
+          rulePaid = true;
+        }
+      }
       priceRule(o, scene.situation.view);
       accepted.push(o);
       const fits = !wanted.length || (!!o.flavour && wanted.includes(o.flavour));
@@ -1061,9 +1114,13 @@ ${moment}`;
     // options that streamed in whole before it went wrong still count.
     let res: LlmResult<z.infer<typeof OptionsSchema>>;
     try {
-      res = await callLlm({ feature: "improv", campaignId, system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true, onText });
+      res = await callLlm({ feature: "improv", campaignId, system: SYSTEM, prompt, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true, onText, cacheHour: true });
     } catch (err) {
       if (err instanceof Error && /credit has run out|AI allowance|switched off/.test(err.message)) throw err; // retrying won't help
+      if (formatTooBig(campaignId, err)) {
+        OptionsSchema = optionsSchema(momentLists);
+        OptionSchema = OptionsSchema.shape.options.element;
+      }
       rejected.push({ label: `attempt ${attempt + 1}`, reason: `unusable answer (${err instanceof Error ? err.message.slice(0, 60) : "error"}…)` });
       continue;
     }
@@ -1077,7 +1134,9 @@ ${moment}`;
   const score = (o: ScaffoldOption) =>
     spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama") + (mentioned.has(o.hand_off.to) ? 0.7 : 0) + (wanted.length && o.flavour && wanted.includes(o.flavour) ? 2 : 0) + (o.flavour ? (P.taste.flavour[o.flavour] ?? 0) : 0) +
     // An option on the surprise move is shown when it's written: the GM asked for surprises.
-    (moves.find((m) => m.id === o.move)?.surprise ? 5 : 0);
+    (moves.find((m) => m.id === o.move)?.surprise ? 5 : 0) +
+    // A rule the moment set off comes up: the GM rolls it every time.
+    (moves.find((m) => m.id === o.move)?.rule?.used ? 3 : 0);
   let kept = [...shown, ...accepted.filter((o) => !shown.includes(o)).sort((a, b) => score(b) - score(a))].slice(0, 3);
   const safety = await safetyCheck(lines, kept.map((o) => renderOption(o, lists.tagger)));
   if (safety.call) calls.push(safety.call);

@@ -37,6 +37,7 @@ export interface Move {
   source?: string; // the interplay or property it comes from ("conflicted", "candour")
   offers?: string[]; // hand-offs it can offer the players ("Iresia makes a Charisma check to hold the charm")
   surprise?: string; // set when this is the session's surprise: why it's explicable
+  rule?: { name: string; to: string[]; onFail: string; used: boolean; words: string[] }; // the house rule a rule move ends on
 }
 
 const endKey = (e: { kind: string; id: number }) => `${e.kind}:${e.id}` as NodeKey;
@@ -86,7 +87,7 @@ export function findMoves(
   threads: SelectedThread[],
   opts: {
     callbacks: { id: number; title: string }[];
-    liveRules: { name: string; why: string; sourceName: string | null }[];
+    liveRules: { name: string; why: string; sourceName: string | null; to: string[]; onFail: string; used: boolean }[];
     limit?: number;
     steer?: Steer;
     surprise?: { chance: number; seed: string }; // an occasional surprise move (§7.8)
@@ -162,7 +163,7 @@ export function findMoves(
     const t = onThreads[0] ?? threads[0];
     // Which use this is: a rule's cost can grow with use.
     const uses = ruleUsesOf(v).get(r.name)?.session ?? 0;
-    if (t) add({ kind: "rule", threads: [t.id], cast: castOf(partsOf(t)), because: `${r.name} is triggered (${r.why})${uses ? `; this would be use ${uses + 1} this session, so its cost should grow${ruleUsesOf(v).get(r.name)?.lastCost ? ` beyond "${ruleUsesOf(v).get(r.name)!.lastCost}"` : ""}` : ""}`, score: 1 + WEIGHT.rule + Math.min(uses, 3) * 0.1 });
+    if (t) add({ kind: "rule", rule: { name: r.name, to: r.to, onFail: r.onFail, used: r.used, words: `${r.name} ${r.sourceName ?? ""}`.toLowerCase().match(/[a-z]{5,}/g)?.map((w) => w.replace(/s$/, "")) ?? [] }, threads: [t.id], cast: castOf(partsOf(t)), because: `${r.name} is triggered (${r.why})${uses ? `; this would be use ${uses + 1} this session, so its cost should grow${ruleUsesOf(v).get(r.name)?.lastCost ? ` beyond "${ruleUsesOf(v).get(r.name)!.lastCost}"` : ""}` : ""}`, score: 1 + WEIGHT.rule + Math.min(uses, 3) * 0.1 });
   }
   for (const cb of opts.callbacks.slice(0, 2)) {
     const t = threads[0];
@@ -226,6 +227,8 @@ export function findMoves(
 
   // A busy lead costs a move a little, so quieter characters get more of the stage.
   for (const m of moves) m.score -= 0.3 * m.cast.filter((c) => c.busy).length;
+  // A rule the moment set off gets its roll; the GM makes it every time.
+  for (const m of moves) if (m.rule?.used) m.score += 2;
   // What this GM tends to use leans the kinds a little; it never outweighs the moment.
   if (opts.taste) for (const m of moves) m.score += 0.4 * (opts.taste.move[m.kind] ?? 0);
   // The GM's steer leans the kinds; a heartfelt take favours a character's own condition, and
@@ -346,6 +349,7 @@ export function movesBlock(moves: Move[], titleOf: Map<number, string>) {
         `${m.id} ${m.kind}: ${m.threads.map((t) => `T${t} "${titleOf.get(t) ?? ""}"`).join(" + ")} · cast: ${cast}`,
         support.length && `support (here, one line at most): ${support.map((c) => c.name).join(", ")}`,
         m.resting.length && `resting (here, but not in this move): ${m.resting.join(", ")}`,
+        m.rule?.used && "the moment set this rule off: one option must build on this move",
         `because: ${m.because}`,
         m.offers?.length && `could offer: ${m.offers.join("; ")}`,
         m.surprise && "SURPRISE: the GM asked for one now and then; build exactly one option on this move, and keep it explicable",

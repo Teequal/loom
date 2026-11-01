@@ -51,6 +51,8 @@ const CONTACT_BEFORE =
 const PLACE_BEFORE = /\b(?:heads?|head|goes|go|going|returns?|return|back|travels?|walks?|rides?|sails?|arrives?|arriving|enters?|runs?|flees?|sneaks?|moves?|hurries|hurry|rushes?)\b[^.!?]{0,25}?\b(?:to|into|at|in|towards?|toward)\s+(?:the\s+)?$/i;
 const USE_BEFORE =
   /\b(?:uses?|using|pulls? out|takes? out|draws?|holds? up|raises?|lifts?|activates?|wields?|touches?|rubs?|consults?|looks? into|peers? into|asks?|invokes?|calls? on|opens?|drinks?|reads?|plays?|clutches?|grips?|casts? (?:a )?(?:spell )?(?:on|into|through))\b[^.!?,]{0,25}$/i;
+// "…reaches for the figurine and uses it".
+const USE_AFTER = /^[^.!?]{0,40}?\b(?:uses?|activates?|wields?|invokes?|holds? up|raises?)\s+(?:it|them)\b/i;
 const GIVE_TO_AFTER = /^[^.!?]{0,40}?\b(?:to|for)\s+$/i;
 export const WHOLE_PARTY = /\b(?:the party|everyone|the group|they all|we|the players|the heroes|the adventurers)\b/i;
 export const MOMENT_CONDITIONS: [RegExp, string][] = [
@@ -128,6 +130,7 @@ export const READING_RULES: Rule[] = [
     says: "Pulling out, using, consulting or holding up an item is using it (for “on use” rules). Selling or carrying it isn't.",
     examples: [
       { moment: "Khayiulad pulls out the knight figurine yet again", name: "Knight figurine", expect: "used" },
+      { moment: "Salaena reaches for the monk figurine in her pack and uses it", name: "Monk figurine", expect: "used" },
       { moment: "Khayiulad tries to sell the monk figurine to a shady merchant", name: "Monk figurine", expect: "not-used" },
     ],
   },
@@ -242,7 +245,7 @@ export function readMoment(entities: ReadEntity[], moment: string): MomentReadin
     const start = sentenceStart(moment, s.at);
     const end = sentenceEnd(moment, s.end);
     const before = moment.slice(start, s.at);
-    if (USE_BEFORE.test(before)) r.used.add(s.e.name);
+    if (USE_AFTER.test(moment.slice(s.end)) || USE_BEFORE.test(before)) r.used.add(s.e.name);
     const givenTo = pcSpans.find((p) => p.at > s.end && p.at < end && GIVE_TO_AFTER.test(moment.slice(s.end, p.at)));
     const holder = givenTo ?? [...pcSpans].reverse().find((p) => p.at < s.at && p.at >= start);
     if (holder) r.inHand.push({ pc: holder.e.name, item: s.e.name });

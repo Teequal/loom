@@ -59,14 +59,15 @@ function modelFor(req: LlmRequest<unknown>) {
   return resolveModel(choice);
 }
 
-// Cache writes cost 1.25× the input price for 5 minutes; reads 0.1× (0.05× on Opus 5.5).
+// Cache writes cost 1.25× the input price for 5 minutes, 2× for an hour; reads 0.1× (0.05× on Opus 5.5).
 const CACHE_WRITE = 1.25;
+const CACHE_WRITE_HOUR = 2;
 const CACHE_READ: Record<string, number> = { "claude-opus-5-5": 0.05 };
 
-export function costOf(modelId: string, inputTokens: number, outputTokens: number, cacheReadTokens = 0, cacheWriteTokens = 0) {
+export function costOf(modelId: string, inputTokens: number, outputTokens: number, cacheReadTokens = 0, cacheWriteTokens = 0, cacheHourTokens = 0) {
   const price = PRICES[modelId];
   if (!price) return 0;
-  const cached = cacheReadTokens * (CACHE_READ[modelId] ?? 0.1) + cacheWriteTokens * CACHE_WRITE;
+  const cached = cacheReadTokens * (CACHE_READ[modelId] ?? 0.1) + (cacheWriteTokens - cacheHourTokens) * CACHE_WRITE + cacheHourTokens * CACHE_WRITE_HOUR;
   return ((inputTokens + cached) * price.input + outputTokens * price.output) / 1_000_000;
 }
 
@@ -79,7 +80,7 @@ export async function callLlm<T>(req: LlmRequest<T>): Promise<LlmResult<T>> {
   try {
     const res = await provider.complete(req, model);
     const latencyMs = Math.round(performance.now() - started);
-    const costUsd = costOf(res.model, res.inputTokens, res.outputTokens, res.cacheReadTokens, res.cacheWriteTokens);
+    const costUsd = costOf(res.model, res.inputTokens, res.outputTokens, res.cacheReadTokens, res.cacheWriteTokens, res.cacheHourTokens);
     await db.insert(schema.llmCalls).values({
       campaignId: req.campaignId ?? null,
       testerId,
