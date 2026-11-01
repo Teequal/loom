@@ -652,7 +652,8 @@ async function safetyCheck(lines: string[], texts: string[]) {
 // How much to write follows how much the GM wrote: a quick line gets a quick answer.
 export function lengthFor(moment: string, shift = 0) {
   // A GM who keeps saying "too long" gets the size below (taste.ts).
-  const words = moment.trim().split(/\s+/).length * (shift < 0 ? 0.3 : 1);
+  const count = moment.trim().split(/\s+/).length;
+  const words = shift < 0 ? (count > 35 ? 35 : 10) : count;
   if (words <= 10) return "LENGTH: the GM wrote a quick line, so answer quickly: setup is 1 beat, under 20 words; hand-off one short sentence; why under 10 words.";
   if (words <= 35) return "LENGTH: setup is 1-2 beats, under 35 words in total.";
   return "LENGTH: the GM gave detail, so answer in kind: setup is 2-3 beats, up to 60 words in total, and an option may tie in a second or third thread where it genuinely fits.";
