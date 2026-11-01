@@ -400,7 +400,7 @@ function Learned({ campaignId }: { campaignId: number }) {
           <ul className="space-y-0.5 text-foreground">
             {t.lines.map((l) => <li key={l}>{l}</li>)}
           </ul>
-        ) : <p>Nothing yet. A session of use, or the small arrows on any option, will start to show here.</p>)}
+        ) : <p>Nothing yet. A session of use, or &quot;More like this&quot; on any option, will start to show here.</p>)}
         {t.on && !!t.lines.length && <button type="button" onClick={() => void send({ reset: true })} className="btn-tertiary text-[13px]">Start over</button>}
       </div>
     </details>

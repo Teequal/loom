@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Choice, Field, Steps, Switch, Tune } from "./controls";
 import { Develop } from "./develop";
 import { Icon } from "./icons";
-import { type Encounter, FightPanel } from "./fight";
+import { Aftermath, type Encounter, FightPanel } from "./fight";
 import { ResultPrompt, SidePrompt } from "./results";
 import { Linked, LoomProvider, RefChips, RefLink, useLoom } from "./loom-ui";
 import { setPref, usePrefs } from "./prefs";
@@ -478,6 +478,9 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   }
 
   const current = done ? entries.find((e) => e.id === done.entryId) : undefined;
+  // A fight just won: what it's worth and what it left, until play moves on.
+  const lastPlayed = [...entries].reverse().find((e) => e.choiceKind);
+  const wonFight = lastPlayed?.choiceKind === "result" && /won/i.test(lastPlayed.choiceLabel) ? entries.find((e) => e.id === lastPlayed.parentId && e.encounter) : undefined;
 
   // Uses an option (or your own) for the moment just asked. Changing your mind undoes the old pick.
   async function use(choice: { kind: "option" | "own"; label: string; text: string; awaiting?: "roll" | "fight" | null }) {
@@ -776,6 +779,8 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
               <Icon name="arrow" size={12} className={`transition-transform ${showOthers ? "-rotate-90" : "rotate-90"}`} />
             </button>
           )}
+
+          {wonFight && <Aftermath key={wonFight.id} entryId={wonFight.id} fight={wonFight.encounter as Encounter} />}
 
           {/* One tap re-weaves the options: no typing. */}
           {status === "done" && !current?.choiceKind && !!done?.steers.length && (

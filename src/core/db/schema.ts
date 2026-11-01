@@ -320,6 +320,15 @@ export const gmNotes = sqliteTable("gm_notes", {
   createdAt: createdAt(),
 });
 
+// The GM's own random tables: one result per line.
+export const gmTables = sqliteTable("gm_tables", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  lines: text("lines", { mode: "json" }).$type<string[]>().notNull(),
+  createdAt: createdAt(),
+});
+
 // Every improv option the checks threw away, and why, so changes to the answer format and the
 // checks can be measured against how often the model breaks them (and at the table, not just in tests).
 export const optionRejections = sqliteTable("option_rejections", {

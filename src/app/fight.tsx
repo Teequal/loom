@@ -202,3 +202,51 @@ function FightView({ enc, onChange, onAgain, busy }: { enc: Encounter; onChange:
     </div>
   );
 }
+
+// What a won fight leaves: the XP straight away, and on one tap what's on the field.
+interface After {
+  loot: { what: string; thread: { id: number; title: string } | null }[];
+  clue: string;
+  consequence: string;
+}
+export function Aftermath({ entryId, fight }: { entryId: number; fight: Encounter }) {
+  const [after, setAfter] = useState<After | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const { xp } = rate(fight.foes, fight.levels, fight.edition);
+  const look = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      setAfter(await post<After>("/api/encounter/aftermath", { entryId }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="rise mt-3 rounded-xl border border-line bg-surface p-3 text-sm">
+      <p className="flex flex-wrap items-baseline justify-between gap-2">
+        <span>
+          <span className="font-medium">After the fight:</span> {xp} XP, <span className="tabular-nums">{Math.floor(xp / Math.max(1, fight.levels.length))}</span> each
+        </span>
+        {!after && (
+          <button type="button" disabled={busy} onClick={look} className="btn-secondary text-[13px]">
+            {busy ? "Looking…" : "What's left behind"}
+          </button>
+        )}
+      </p>
+      {error && <p className="mt-1 text-danger">{error}</p>}
+      {after && (
+        <ul className="story mt-2 space-y-1 text-[15px]">
+          {after.loot.map((l) => (
+            <li key={l.what}><Linked text={l.what} />{l.thread && <span className="text-[13px] text-muted"> · {l.thread.title}</span>}</li>
+          ))}
+          {after.clue && <li><Linked text={after.clue} /></li>}
+          {after.consequence && <li><Linked text={after.consequence} /></li>}
+        </ul>
+      )}
+    </div>
+  );
+}

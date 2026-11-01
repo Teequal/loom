@@ -1,5 +1,6 @@
 "use client";
 
+import { GmTools } from "./gm-tools";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { batchLabel, post } from "./shell";
@@ -76,6 +77,12 @@ export function LoomProvider({ campaignId, children }: { campaignId: number; chi
   // Jump anywhere: ⌘K / Ctrl+K, or the search button in the header (which sends "loom:search").
   const [searching, setSearching] = useState(false);
   const [rules, setRules] = useState<{ question: string } | null>(null);
+  const [tools, setTools] = useState(false);
+  useEffect(() => {
+    const open = () => setTools(true);
+    window.addEventListener("loom:tools", open);
+    return () => window.removeEventListener("loom:tools", open);
+  }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -107,6 +114,7 @@ export function LoomProvider({ campaignId, children }: { campaignId: number; chi
     <Ctx.Provider value={value}>
       {children}
       {trail.length > 0 && <Inspector trail={trail} setTrail={setTrail} />}
+      {tools && <GmTools campaignId={campaignId} onClose={() => setTools(false)} />}
       {rules && <RulesPanel key={rules.question} campaignId={campaignId} initial={rules.question} onClose={() => setRules(null)} />}
       {searching && (
         <Palette

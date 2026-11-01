@@ -155,6 +155,14 @@ export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
         >
           Rules
         </button>
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new Event("loom:tools"))}
+          className="btn-tertiary rounded-md border border-line px-2 py-1 text-[13px]"
+          title="Secret rolls and your tables"
+        >
+          Tools
+        </button>
         <Link
           href="/settings"
           aria-label="Settings"
@@ -209,7 +217,7 @@ export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
         ) : (
           <select
             aria-label="Campaign"
-            className="quiet max-w-[11rem] truncate sm:max-w-[13rem] rounded-md border border-line bg-surface py-1 pl-2.5 text-sm text-muted outline-none hover:text-foreground focus:border-thread/60"
+            className="quiet max-w-[7.5rem] truncate sm:max-w-[13rem] rounded-md border border-line bg-surface py-1 pl-2.5 text-sm text-muted outline-none hover:text-foreground focus:border-thread/60"
             value={c.campaignId ?? ""}
             onChange={(e) =>
               e.target.value === "new"

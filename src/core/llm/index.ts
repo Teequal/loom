@@ -36,6 +36,7 @@ const FEATURE_MODELS: Record<string, string> = {
   enrich: "claude-opus-5-5", // one-off backfill of entity details from stored recaps
   infer: "claude-sonnet-5-5", // the property model's pass over all recaps: what NPCs are like, how they stand (blanks only)
   questions: "claude-sonnet-5-5", // what a recap leaves unclear: short, alongside the recap's own extraction
+  aftermath: "claude-sonnet-5-5", // what a fight leaves behind, tied to threads
   properties: "claude-sonnet-5-5", // the same, for one session's notes, alongside its recap extraction
   flavor: "claude-opus-5-5", // read-aloud polish of the one option the GM picked
   rule: "claude-sonnet-5-5", // drafting a structured house rule from plain words
