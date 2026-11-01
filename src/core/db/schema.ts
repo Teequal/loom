@@ -300,6 +300,8 @@ export const llmCalls = sqliteTable("llm_calls", {
   latencyMs: integer("latency_ms").notNull(),
   inputTokens: integer("input_tokens").notNull().default(0),
   outputTokens: integer("output_tokens").notNull().default(0),
+  cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+  cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
   costUsd: real("cost_usd").notNull().default(0),
   ok: integer("ok", { mode: "boolean" }).notNull(),
   error: text("error"),

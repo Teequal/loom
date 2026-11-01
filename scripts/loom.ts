@@ -89,6 +89,7 @@ Engine
   score <blind-report.md>    Count your ticks in a blind report per model
   ping                       Make one small LLM call to check the API key and logging
   costs                      Show LLM calls, latency and cost so far
+  cache-test [model]         Check the prompt cache: what repeats read, and whether a changed format breaks it
   invite add|list|cap|revoke Invite testers when Loom is shared (see docs/sharing.md)
 
   --model takes haiku, sonnet, opus, fable or a full model id.
@@ -547,6 +548,18 @@ async function main() {
     }
     case "invite": {
       await inviteCommand(args);
+      break;
+    }
+    case "cache-test": {
+      // Does the prompt cache pay off? Same instructions; the third call changes the answer format.
+      const system = `Answer in one short sentence. ${"Keep every answer brief, plain and to the point. ".repeat(160)}Run ${Date.now()}.`;
+      const format = (names: [string, ...string[]]) => z.object({ who: z.enum(names) });
+      const calls: [string, [string, ...string[]]][] = [["first call", ["Ann", "Bob"]], ["same format", ["Ann", "Bob"]], ["changed format", ["Ann", "Cid"]], ["same format", ["Ann", "Bob"]]];
+      for (const [label, names] of calls) {
+        const r = await callLlm({ feature: "ping", system, prompt: "Who comes first?", schema: format(names), fast: true, model: args[0] ?? "haiku" });
+        console.log(`${label.padEnd(15)} read ${r.cacheReadTokens} · wrote ${r.cacheWriteTokens} · plain ${r.inputTokens} · ${usd(r.costUsd)}`);
+        await new Promise((go) => setTimeout(go, 2000));
+      }
       break;
     }
     case "costs": {

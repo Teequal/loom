@@ -20,6 +20,8 @@ export interface ProviderResponse<T> {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number; // read from the prompt cache, not counted in inputTokens
+  cacheWriteTokens: number; // written to the prompt cache, not counted in inputTokens
 }
 
 export interface LlmProvider {

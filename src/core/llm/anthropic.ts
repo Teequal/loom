@@ -28,7 +28,7 @@ function strict(node: Json): Json {
   else out.type = type;
   const en = take("enum");
   const cn = take("const");
-  if (en !== undefined) out.enum = en;
+  if (en !== undefined) out.enum = Array.isArray(en) ? [...en].sort() : en; // sorted, so the same choices make the same format (and cache)
   else if (cn !== undefined) out.enum = [cn];
   for (const k of ["description", "title"]) if (s[k] !== undefined) out[k] = take(k);
   if (type === "object") {
@@ -85,7 +85,9 @@ export const anthropicProvider: LlmProvider = {
     const params = {
       model,
       max_tokens: req.maxTokens ?? 4000,
-      system: req.system,
+      // The fixed instructions come first and are cached, so a repeat within 5 minutes reads them at
+      // a tenth of the price. A changed answer format starts a new cache entry (LOOM_CACHE=off skips it).
+      system: process.env.LOOM_CACHE === "off" ? req.system : [{ type: "text" as const, text: req.system, cache_control: { type: "ephemeral" as const } }],
       messages: [{ role: "user" as const, content: req.prompt }],
       // Low effort keeps live calls fast; recap extraction can ask for more.
       output_config: { effort: req.effort ?? "low", format: outputFormat(req.schema) },
@@ -132,6 +134,8 @@ export const anthropicProvider: LlmProvider = {
       model: response.model, // the model that actually answered (differs if a fallback ran)
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
+      cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
     };
   },
 };
