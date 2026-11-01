@@ -142,6 +142,7 @@ function Loom({ campaignId }: { campaignId: number }) {
         <Direction campaignId={campaignId} initial={data.campaign.direction} />
         <Settings campaignId={campaignId} initial={data.campaign} />
         <Learned campaignId={campaignId} />
+        <Export campaignId={campaignId} />
       </section>
 
       {!data.threads.length && !data.cast.length && (
@@ -353,6 +354,32 @@ function Settings({ campaignId, initial }: { campaignId: number; initial: Overvi
       </Switch>
       {initial.safety.length > 0 && <span>Safety lines: {initial.safety.join(", ")}</span>}
     </div>
+  );
+}
+
+// The campaign out of Loom. A file, built here so it can't be opened by anyone with the address.
+function Export({ campaignId }: { campaignId: number }) {
+  const [error, setError] = useState("");
+  const save = async (format: "markdown" | "data") => {
+    setError("");
+    try {
+      const f = await post<{ filename: string; type: string; content: string }>("/api/campaign/export", { campaignId, format });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([f.content], { type: f.type }));
+      a.download = f.filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't export this campaign.");
+    }
+  };
+  return (
+    <p className="mt-2.5 flex flex-wrap items-center gap-x-3 px-1 text-[13px] text-muted">
+      Export, secrets included:
+      <button type="button" onClick={() => save("markdown")} className="btn-tertiary text-[13px]">Readable notes</button>
+      <button type="button" onClick={() => save("data")} className="btn-tertiary text-[13px]">All the data</button>
+      {error && <span className="text-danger">{error}</span>}
+    </p>
   );
 }
 
