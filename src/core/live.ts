@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lt, or, sql } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import { settleStates, tableNudges } from "./nudges";
 import { deltasOf, untag } from "./deltas";
@@ -166,7 +166,7 @@ export async function commitChoice(entryId: number, choice: { kind: "option" | "
   const awaiting = needsResult(choice.text, choice.awaiting);
   const [e] = await db
     .update(schema.liveEntries)
-    .set({ choiceKind: choice.kind, choiceLabel: choice.label, choice: choice.text, status: "extracting", awaiting, resultState: awaiting ? "pending" : null })
+    .set({ choiceKind: choice.kind, choiceLabel: choice.label, choice: choice.text, status: "extracting", attempts: 0, claimedAt: null, awaiting, resultState: awaiting ? "pending" : null })
     .where(eq(schema.liveEntries.id, entryId))
     .returning();
   return choice.kind === "option" ? waitForSide(e) : e;
@@ -200,13 +200,49 @@ export async function skipResult(entryId: number) {
 }
 
 // Extracts one choice into the loom. Called after the response, in the background.
-export function extractEntry(entryId: number) {
+// The database is the queue, so a restart loses nothing: an entry stays "extracting" until it's
+// done, and a claim stops two servers (the dev server and the shared copy) doing it twice. A
+// failure tries again a little later, then shows as failed, with Try again on the page.
+const MAX_TRIES = 3;
+const RETRY_MS = (Number(process.env.LOOM_RETRY_MS) || 5000);
+const STALE_MS = 120_000; // a claim this old is a server that went away
+
+async function claim(entryId: number, retrying: boolean) {
+  const now = Date.now();
+  const open = or(isNull(schema.liveEntries.claimedAt), lt(schema.liveEntries.claimedAt, now - STALE_MS));
+  const [e] = await db
+    .update(schema.liveEntries)
+    .set({ claimedAt: now, attempts: sql`${schema.liveEntries.attempts} + 1` })
+    .where(and(eq(schema.liveEntries.id, entryId), eq(schema.liveEntries.status, "extracting"), retrying ? undefined : open))
+    .returning();
+  return e;
+}
+
+export function extractEntry(entryId: number, retrying = false): Promise<void> {
   return db
-    .select()
+    .select({ campaignId: schema.liveEntries.campaignId })
     .from(schema.liveEntries)
     .where(eq(schema.liveEntries.id, entryId))
-    .then(([e]) => (e ? queued(e.campaignId, () => runExtraction(e)) : undefined));
+    .then(async ([row]) => {
+      if (!row) return;
+      await queued(row.campaignId, async () => {
+        const e = await claim(entryId, retrying);
+        if (e) await runExtraction(e);
+      });
+    });
 }
+
+/** Picks up saves a stopped server left behind. Runs when the table page loads. */
+export async function resumeExtractions(campaignId: number) {
+  const stuck = await db
+    .select({ id: schema.liveEntries.id })
+    .from(schema.liveEntries)
+    .where(and(eq(schema.liveEntries.campaignId, campaignId), eq(schema.liveEntries.status, "extracting"), or(isNull(schema.liveEntries.claimedAt), lt(schema.liveEntries.claimedAt, Date.now() - STALE_MS))));
+  for (const { id } of stuck) void extractEntry(id).catch(console.error);
+}
+
+/** Try again, after a failed save. */
+export const queueRetry = (entryId: number) => db.update(schema.liveEntries).set({ status: "extracting", attempts: 0, claimedAt: null }).where(and(eq(schema.liveEntries.id, entryId), eq(schema.liveEntries.status, "failed")));
 
 /**
  * The engine's scaffold behind a logged choice: an improv option's (kept on the entry's options),
@@ -256,6 +292,7 @@ export async function directProposal(e: Entry, o: ScaffoldOption, text: string, 
 }
 
 async function runExtraction(e: Entry) {
+  let started: string | null = null;
   try {
     // Undo what an earlier pick for this moment added, so changing your mind doesn't double up.
     if (e.batch) await undoBatch(e.campaignId, e.batch, { force: true });
@@ -289,11 +326,13 @@ async function runExtraction(e: Entry) {
     const batch = `live s${e.sessionNumber} ${stamp()} #e${e.id}`;
     const applied = reviewed.filter((r) => auto || r.tier !== "must");
     const confirmed = new Set(auto ? reviewed.filter((r) => r.tier === "must").map((r) => r.item.n) : []);
+    started = batch;
     if (applied.length) await applyProposal(file, new Set(must.map((r) => r.item.n)), batch, confirmed);
     await db
       .update(schema.liveEntries)
       .set({
         status: "done",
+        claimedAt: null,
         batch,
         // "Threads" items already say which thread; details need to say whose.
         summary: applied.map((r) => `${r.group === "Threads" ? "" : `${r.group}: `}${r.summary}${confirmed.has(r.item.n) ? " (auto-approved)" : ""}`),
@@ -302,7 +341,11 @@ async function runExtraction(e: Entry) {
       .where(eq(schema.liveEntries.id, e.id));
   } catch (err) {
     console.error(err);
-    await db.update(schema.liveEntries).set({ status: "failed" }).where(eq(schema.liveEntries.id, e.id));
+    // A save that stopped partway is taken back whole, so the next try can't double anything.
+    if (started) await undoBatch(e.campaignId, started, { force: true }).catch(console.error);
+    const hopeless = e.attempts >= MAX_TRIES || (err instanceof Error && /credit|allowance/i.test(err.message));
+    if (hopeless) await db.update(schema.liveEntries).set({ status: "failed", claimedAt: null }).where(eq(schema.liveEntries.id, e.id));
+    else setTimeout(() => void extractEntry(e.id, true).catch(console.error), RETRY_MS * 6 ** (e.attempts - 1));
   }
 }
 
@@ -330,7 +373,7 @@ export async function clearChoice(entryId: number) {
   const r = e.batch ? await queued(e.campaignId, () => undoBatch(e.campaignId, e.batch!, { force: true })) : null;
   const [next] = await db
     .update(schema.liveEntries)
-    .set({ choiceKind: null, choiceLabel: "", choice: "", status: "asked", batch: null, summary: [], questions: [], awaiting: null, resultState: null, encounter: null })
+    .set({ choiceKind: null, choiceLabel: "", choice: "", status: "asked", attempts: 0, claimedAt: null, batch: null, summary: [], questions: [], awaiting: null, resultState: null, encounter: null })
     .where(eq(schema.liveEntries.id, entryId))
     .returning();
   return { entry: next, undone: r?.undone ?? 0 };

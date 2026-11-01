@@ -342,6 +342,11 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
   // While a choice is being added to the loom, check back every couple of seconds.
   const extracting = entries.some((e) => e.status === "extracting");
   useEffect(() => {
+    const again = () => void reload().catch(() => {});
+    window.addEventListener("loom:reload", again);
+    return () => window.removeEventListener("loom:reload", again);
+  }, [reload]);
+  useEffect(() => {
     if (!extracting) return;
     const t = setInterval(() => reload().catch(() => {}), 2000);
     return () => clearInterval(t);
@@ -1400,7 +1405,15 @@ function Branches({ parent, live, onOpen }: { parent: Entry; live: Live; onOpen?
 // What using a choice did to the loom. Questions live in the tray above the box.
 function LoomStatus({ entry, compact = false }: { entry: Entry; compact?: boolean }) {
   if (entry.status === "extracting") return <Reading final="Adding it to the loom" className={compact ? "" : "mt-3"} />;
-  if (entry.status === "failed") return <p className={`${compact ? "" : "mt-3"} text-xs text-danger`}>Couldn&apos;t add this to the loom. It&apos;s still in the session log for wrap-up.</p>;
+  if (entry.status === "failed")
+    return (
+      <p className={`${compact ? "" : "mt-3"} text-xs text-danger`}>
+        Couldn&apos;t add this to the loom. It&apos;s safe in the session log.{" "}
+        <button type="button" onClick={() => void post("/api/live/retry", { entryId: entry.id }).then(() => window.dispatchEvent(new Event("loom:reload")))} className="underline">
+          Try again
+        </button>
+      </p>
+    );
   if (entry.status !== "done") return null;
   if (compact) return <span className="text-xs text-muted">{entry.summary.length ? `${entry.summary.length} added to the loom` : "Logged"}{entry.questions.length ? ` · ${entry.questions.length} to answer above` : ""}</span>;
   return (

@@ -378,6 +378,9 @@ export const liveEntries = sqliteTable("live_entries", {
   encounter: text("encounter", { mode: "json" }).$type<unknown>(), // the fight as set up, when there is one
   // Develop results for this choice, kept so the branches survive a reload (newest last).
   developments: text("developments", { mode: "json" }).$type<unknown[]>().notNull().default([]),
+  // The background save: tries so far, and when one last started (ms). "extracting" is the queue.
+  attempts: integer("attempts").notNull().default(0),
+  claimedAt: integer("claimed_at"),
   // Thumbs on what was shown, by option number (or a Develop take's key): see taste.ts.
   votes: text("votes", { mode: "json" }).$type<Record<string, Vote>>().notNull().default({}),
   createdAt: createdAt(),

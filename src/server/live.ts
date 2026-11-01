@@ -1,7 +1,7 @@
 import { desc, eq } from "drizzle-orm";
 import { db, schema } from "@/core/db/client";
 import { FIXTURE_NAME, SAMPLE_NAME } from "@/core/seed";
-import { liveEntries, liveSessionNumber } from "@/core/live";
+import { liveEntries, liveSessionNumber, resumeExtractions } from "@/core/live";
 import { developmentView } from "./develop";
 
 type Entry = typeof schema.liveEntries.$inferSelect;
@@ -50,6 +50,7 @@ export async function liveState(campaignId: number) {
   const titleOf = new Map(
     (await db.select({ id: schema.threads.id, title: schema.threads.title }).from(schema.threads).where(eq(schema.threads.campaignId, campaignId))).map((t) => [t.id, t.title]),
   );
+  await resumeExtractions(campaignId);
   const session = await liveSessionNumber(campaignId);
   const entries = (await liveEntries(campaignId)).map((e) => entryView(e, titleOf));
   return {
