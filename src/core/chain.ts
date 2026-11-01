@@ -1,7 +1,7 @@
 import { holdPlace, MOVES_THERE, placeContext, type PlaceContext } from "./place";
 import { applyPlans, beatPlansOn, planMoves, plansBlock, PLAN_TEXT, spentThisSession, type PlanBeat } from "./beat-plans";
 import { z } from "zod";
-import { APPROACH_SKILLS, FLAVOURS, adoptHand, handText, type Approach, checkOption, contextPrompt, fitToMove, liveRulesOf, settleLost, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
+import { APPROACH_SKILLS, FLAVOURS, adoptHand, handText, priceRule, type Approach, checkOption, contextPrompt, fitToMove, liveRulesOf, settleLost, normaliseHandOff, prepareMoment, renderBeat, renderOption, SCAFFOLD_TEXT, scaffoldParts, TONE_TEXT, type Hand, type Prepared, type ScaffoldOption } from "./improv";
 import { callLlm, type LlmResult } from "./llm";
 import { db, schema } from "./db/client";
 import { PILLARS } from "./db/schema";
@@ -330,6 +330,7 @@ export class StepRunner {
     }
     const reason = checkOption(o, ctx);
     if (reason) return void this.end(`step ${n + 1}: ${reason}`);
+    priceRule(o, this.p.scene.situation.view);
 
     // No two steps open on the same condition ("If they deal with the guards" twice).
     let when = this.when(raw);

@@ -161,7 +161,7 @@ export function findMoves(
     const t = onThreads[0] ?? threads[0];
     // Which use this is: a rule's cost can grow with use.
     const uses = ruleUsesOf(v).get(r.name)?.session ?? 0;
-    if (t) add({ kind: "rule", threads: [t.id], cast: castOf(partsOf(t)), because: `${r.name} is triggered (${r.why})${uses ? `; this would be use ${uses + 1} this session, so its cost should grow` : ""}`, score: 1 + WEIGHT.rule + Math.min(uses, 3) * 0.1 });
+    if (t) add({ kind: "rule", threads: [t.id], cast: castOf(partsOf(t)), because: `${r.name} is triggered (${r.why})${uses ? `; this would be use ${uses + 1} this session, so its cost should grow${ruleUsesOf(v).get(r.name)?.lastCost ? ` beyond "${ruleUsesOf(v).get(r.name)!.lastCost}"` : ""}` : ""}`, score: 1 + WEIGHT.rule + Math.min(uses, 3) * 0.1 });
   }
   for (const cb of opts.callbacks.slice(0, 2)) {
     const t = threads[0];

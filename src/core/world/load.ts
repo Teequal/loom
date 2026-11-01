@@ -44,9 +44,10 @@ export interface LogEvent {
   mechanic: string | null; // a house rule's name, for its roll
   fight: boolean; // a fight was set up or started
   outcome: "success" | "failure" | "partial" | "won" | "lost" | "fled" | "talked" | null; // results only
+  failText?: string; // what its failure would cost, as written, for a rule to go further next time
   payloads: string[]; // what a used option or step delivered (beat plans), so it isn't made twice
 }
-type Scaffoldish = { hand?: { kind?: string; to?: string; mechanic?: string }; hand_off?: { to?: string; kind?: string; mechanic?: string }; setup?: { payload?: string }[] };
+type Scaffoldish = { hand?: { kind?: string; to?: string; mechanic?: string }; hand_off?: { to?: string; kind?: string; mechanic?: string }; setup?: { payload?: string }[]; on_fail?: { effect?: string } };
 export const OUTCOME: Record<string, LogEvent["outcome"]> = { succeeded: "success", success: "success", failed: "failure", failure: "failure", partly: "partial", partial: "partial", won: "won", lost: "lost", fled: "fled", "talked it out": "talked" };
 
 type Entity = typeof schema.entities.$inferSelect;
@@ -425,6 +426,7 @@ function liveLog(rows: LiveRow[]): LogEvent[] {
     }
     const roll = kind === "asked" ? { roller: null, rollKind: null, mechanic: null } : rollOf(r);
     const payloads = kind === "option" || kind === "branch" ? (scaffoldOf(r)?.setup ?? []).map((b) => b.payload).filter((x): x is string => !!x) : [];
-    return { id: r.id, session: r.session, kind, ...roll, fight: r.awaiting === "fight" || !!r.encounter || roll.rollKind === "attack", outcome: null, payloads };
+    const failText = (scaffoldOf(r)?.on_fail?.effect ?? "").replace(/\{([^{}|]+)(?:\|([^{}]*))?\}/g, (_, n: string, s?: string) => s ?? n).trim() || undefined;
+    return { id: r.id, session: r.session, kind, ...roll, fight: r.awaiting === "fight" || !!r.encounter || roll.rollKind === "attack", outcome: null, failText, payloads };
   });
 }

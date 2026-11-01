@@ -14,8 +14,9 @@ import { listMoments, momentLine } from "./moments";
 import { personalLines, spotlightScore, tableSeats } from "./players";
 import { buildScene, type Scene } from "./scene";
 import { findMoves, movesBlock, SURPRISE_CHANCE, type Move, type Surprises } from "./moves";
-import { derivedLines } from "./world/derived";
+import { derivedLines, ruleCostLine } from "./world/derived";
 import { interplayLine, interplaysOf } from "./world/interplays";
+import type { View } from "./world/engine";
 import type { NodeKey } from "./world/nodes";
 import { propertiesOf } from "./world/properties";
 import { holdPlace, placeContext } from "./place";
@@ -198,8 +199,9 @@ Each option is a scaffold:
   - "rule": a rule from RULES IN PLAY; it can only go to someone it applies to right now (listed after "now"), or to "table" if it applies to everyone.
   - "death_save": a PC who is dying.
   Rolls are for player characters only; what NPCs notice or decide is the GM's call, never a roll.
+- NPCs may reach for, shout at or block a PC, but only a failed roll moves one: never write "Tomas pulls {1} down". Offer the pull as a question or a save.
 - Where: everything happens where the party is now. A beat may point elsewhere (someone mentions a place, a sound carries from it), but nobody and nothing there acts on the party unless they arrive (kind "arrival"). The party only goes somewhere if the players choose to: offer it as a choice or a question.
-- on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. For a roll by the table, the effect says who it hits ("whoever fails…"), never "he" or "she". This is the only place a PC may act against their player's will. Otherwise target "none" and effect "".`;
+- on_fail: for rolls only. target is the PC who rolled, effect is what happens if the roll fails, one short sentence that adds something new. For a roll by the table, the effect says who it hits ("whoever fails…"), never "he" or "she". Only a danger or a house rule moves or changes a PC here: a failed talking, reading or knowing roll changes what the world does instead, and no failure decides what a PC thinks or chooses. Otherwise target "none" and effect "".`;
 
 const SYSTEM = `You are Loom, a game master's assistant used live at the table. The players just did something unexpected. Offer 3 short, playable options that tie the moment back to threads already in the campaign, instead of inventing new material.
 
@@ -883,6 +885,12 @@ export function settleLost(o: ScaffoldOption, rawSetup: { does?: string; kind?: 
   return o.setup.length > 0;
 }
 
+/** A house rule's roll says which use this is and what that costs (derived.ts). */
+export function priceRule(o: ScaffoldOption, view: View) {
+  const line = o.hand_off.mechanic !== "none" ? ruleCostLine(view, o.hand_off.mechanic) : null;
+  if (line) o.hand_off.text = `${o.hand_off.text} ${line}`;
+}
+
 export function fitToMove(o: ScaffoldOption, moves: Move[], c: CheckContext, droppedSentences: { label: string; reason: string }[]) {
   const move = moves.find((m) => m.id === o.move);
   if (move && !move.threads.includes(Number(o.thread.replace(/^T/, "")))) o.thread = `T${move.threads[0]}`;
@@ -1027,6 +1035,7 @@ ${moment}`;
       if (!settleLost(o, rawSetup, droppedSentences)) return rejected.push({ label: o.label, reason: "nothing left once what dropped sentences set up was removed" });
       const reason = checkOption(o, lists.check);
       if (reason) return rejected.push({ label: o.label, reason });
+      priceRule(o, scene.situation.view);
       accepted.push(o);
       const fits = !wanted.length || (!!o.flavour && wanted.includes(o.flavour));
       if (showEarly && shown.length < 3 && fits) {

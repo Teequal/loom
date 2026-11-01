@@ -90,6 +90,34 @@ export function pcOpensClause(tagged: string, tagger: Tagger, except?: string): 
   return null;
 }
 
+// Someone physically moving a PC before any roll decides it for the player: "Tomas pulls Iresia
+// down behind the wall". A person reaching for them is fine; the roll or the player settles it.
+// The world's forces aren't read here: what happens TO a PC is the GM's.
+const MOVES_PC = /\b(?:pulls?|pulled|drags?|dragged|hauls?|hauled|shoves?|shoved|yanks?|yanked|push(?:es)?|pushed|carr(?:y|ies)|carried|lifts?|lifted|throws?|threw|hurls?|hurled|bundles?|bundled|hustles?|hustled|tackles?|tackled|knocks?|knocked|wrestles?|wrestled|steers?|steered|grabs?|grabbed|seizes?|seized|pins?|pinned|tows?|towed|whisks?|whisked|ushers?|ushered)\s+(?:(the party)\b|\{([^{}|]+)(?:\|[^{}]*)?\}(?!['’]s)|(him|them|her)\b(?=\s*(?:$|[.,;:!?—]|down|back|away|aside|up|behind|into|out|from|through|across|to|toward|towards|under|over|along|clear)))/i;
+export function movesPc(tagged: string, tagger: Tagger): string | null {
+  const m = MOVES_PC.exec(tagged);
+  if (!m) return null;
+  if (m[1]) return `someone moves the party before any roll ("${tagger.render(m[0])}…")`;
+  if (m[2]) return tagger.entityOf(m[2])?.type === "pc" ? `someone moves ${tagger.entityOf(m[2])!.name} before any roll ("${tagger.render(m[0])}…")` : null;
+  const last = [...tagged.slice(0, m.index).matchAll(/\{([^{}|]+)(?:\|[^{}]*)?\}/g)].map((x) => tagger.entityOf(x[1])).filter((e) => e?.type === "pc" || e?.type === "npc").filter((e) => couldBe(m[3], pronounsOf(e!))).pop();
+  return last?.type === "pc" ? `someone moves ${last.name} before any roll ("${tagger.render(m[0])}…")` : null;
+}
+
+// A failed roll may cost a PC something, but only some rolls move them. A failed talking, reading
+// or knowing roll changes what the world does, never what they do; and short of a rule (a charm, a
+// madness) no failure makes up their mind for them.
+const MIND_SKILLS = /^(?:Persuasion|Deception|Intimidation|Performance|Insight|Perception|Investigation|Arcana|History|Nature|Religion|Medicine|Survival|Animal Handling)$/;
+const DECIDES = /\b(?:decides?|chooses?|agrees?|resolves?|concludes?|accepts?|gives? up|gives? in|concedes?|pockets?|hands? over)\b/i;
+export function failureDecides(hand: { kind?: string; skill?: string } | undefined, effect: string, tagger: Tagger, roller: string): string | null {
+  if (!hand || !effect.trim() || hand.kind === "rule") return null;
+  const said = tagger.render(effect);
+  const rollerActs = pcOpensClause(effect, tagger);
+  const mind = hand.kind === "notice" || ((hand.kind === "check" || hand.kind === "contest") && MIND_SKILLS.test(hand.skill ?? ""));
+  if (mind && rollerActs) return `a failed ${hand.skill ?? "roll"} decides what ${roller} does ("${said.slice(0, 60)}")`;
+  if (DECIDES.test(said) && (rollerActs || /\b(?:he|she|they)\s+\w*\s*(?:decides?|chooses?|agrees?|resolves?|concludes?|accepts?|gives?|concedes?|pockets?|hands?)\b/i.test(said))) return `the failure makes up ${roller}'s mind ("${said.slice(0, 60)}")`;
+  return null;
+}
+
 /** Replaces {1}, {2} with the references, tagged for the checks: "{Bram}", "{Bram}'s". */
 export function expand(text: string, refs: Ref[], tagger: Tagger): { tagged: string; problem: string | null } {
   let problem: string | null = null;
@@ -177,6 +205,7 @@ export interface SlotOption {
   refs?: Ref[];
   setup: (ScaffoldBeat | Happens)[];
   on_fail: { target: string; effect: string };
+  hand?: { kind?: string; skill?: string };
 }
 
 /** The option with its slots filled: names in place, "happens" beats written as sentences. */
@@ -193,7 +222,8 @@ export function fillSlots<O extends SlotOption>(o: O, tagger: Tagger): { option:
       continue;
     }
     const r = expand(b.does, refs, tagger);
-    if (r.problem) dropped.push(r.problem);
+    const moved = b.kind === "world" ? null : movesPc(r.tagged, tagger);
+    if (r.problem || moved) dropped.push((r.problem ?? moved)!);
     else if (selfReference(b.actor, r.tagged, tagger)) dropped.push(`${b.actor} names themself as someone else ("${tagger.render(r.tagged).slice(0, 60)}…"): the sentence was written from another character's side`);
     else setup.push({ ...b, does: ownPossessive(b.actor, r.tagged, tagger) });
   }
@@ -202,7 +232,10 @@ export function fillSlots<O extends SlotOption>(o: O, tagger: Tagger): { option:
   const fail = expand(o.on_fail.effect, refs, tagger);
   const otherPc = pcOpensClause(fail.tagged, tagger, o.on_fail.target);
   if (otherPc && o.on_fail.effect.trim()) problem ??= `on a failure, ${otherPc}`;
-  return { option: { ...o, setup, on_fail: { ...o.on_fail, effect: fail.tagged } }, problem, dropped };
+  // What's left of a failure that decides for its roller is the world's: the option keeps its roll.
+  const decided = failureDecides(o.hand, fail.tagged, tagger, o.on_fail.target);
+  if (decided) dropped.push(decided);
+  return { option: { ...o, setup, on_fail: decided ? { target: "none", effect: "" } : { ...o.on_fail, effect: fail.tagged } }, problem, dropped };
 }
 
 // ---------- What a dropped sentence set up stays gone ----------

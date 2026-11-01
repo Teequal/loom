@@ -62,6 +62,7 @@ export interface RuleUse {
   session: number; // uses this session
   total: number;
   by: Map<string, number>; // this session, per roller
+  lastCost?: string; // what its last failure cost, as written
 }
 
 /**
@@ -79,6 +80,7 @@ export function ruleUsesOf(v: View): Map<string, RuleUse> {
     if (!e.mechanic || (e.kind !== "option" && e.kind !== "branch")) continue;
     const u = out.get(e.mechanic) ?? { session: 0, total: 0, by: new Map<string, number>() };
     u.total++;
+    u.lastCost = e.failText ?? u.lastCost;
     if (e.session === latest) {
       u.session++;
       if (e.roller) u.by.set(e.roller, (u.by.get(e.roller) ?? 0) + 1);
@@ -89,6 +91,19 @@ export function ruleUsesOf(v: View): Map<string, RuleUse> {
   return out;
 }
 const rulesCache = new WeakMap<View, Map<string, RuleUse>>();
+
+/**
+ * The line a rule's roll carries once it's been used this session. Code says it, so the cost grows
+ * at the table whether or not the model remembered to: the rule's own escalation when the GM wrote
+ * one, otherwise a plain nudge to make it worse than the last.
+ */
+export function ruleCostLine(v: View, name: string): string | null {
+  const uses = ruleUsesOf(v).get(name)?.session ?? 0;
+  if (!uses) return null;
+  const rule = [...v.g.nodes.values()].find((n) => n.kind === "rule" && n.name === name) as { escalation?: string } | undefined;
+  const ordinal = ["", "", "Second", "Third", "Fourth", "Fifth"][uses + 1] ?? `Use ${uses + 1}`;
+  return `${ordinal} use this session: ${rule?.escalation?.trim().replace(/\.$/, "") || "it should cost more than last time"}.`;
+}
 
 /**
  * The session's pace, from the last few choices used: "tense" right after a fight or a run of
@@ -125,7 +140,7 @@ export function derivedLines(v: View): string[] {
   for (const [rule, u] of ruleUsesOf(v)) {
     if (!u.session) continue;
     const who = [...u.by].map(([w, n]) => `${w === "table" ? "the table" : w} ${n}`).join(", ");
-    lines.push(`${rule}: used ${plural(u.session, "time")} this session${who ? ` (${who})` : ""}${u.session >= 2 ? ": its cost should be growing" : ""}.`);
+    lines.push(`${rule}: used ${plural(u.session, "time")} this session${who ? ` (${who})` : ""}${u.session >= 2 ? ": its cost should be growing" : ""}${u.lastCost ? `. Last time's price: "${u.lastCost}"; go further than that` : ""}.`);
   }
   return lines;
 }
