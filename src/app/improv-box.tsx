@@ -1,5 +1,6 @@
 "use client";
 
+import { VoteRow, type VoteValue } from "./vote";
 import { Reading } from "./reading";
 import { useCenterLock } from "./center-lock";
 import { NowStrip, readWords, SlotRow, Smoke, Still, type NowLine, type Read } from "./answer-box";
@@ -57,6 +58,7 @@ export interface Entry {
   parentId: number | null;
   moment: string;
   options: Card[]; // what Loom offered (empty for notes, branches and results)
+  votes?: Record<string, VoteValue>;
   choiceKind: "option" | "own" | "branch" | "result" | null;
   choiceLabel: string;
   choice: string;
@@ -758,6 +760,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                   known={state === "used" ? current?.id : null}
                   saved={state === "used" ? current?.developments : undefined}
                   result={state === "used" ? entries.find((e) => e.parentId === current?.id && e.choiceKind === "result") : undefined}
+                  votable={current ? { entryId: current.id, n: i, vote: current.votes?.[i] } : undefined}
                 />
               );
             })}
@@ -1477,6 +1480,7 @@ function OptionCard({
   known,
   saved,
   result,
+  votable,
 }: {
   card: Card;
   n: number;
@@ -1489,6 +1493,7 @@ function OptionCard({
   known?: number | null; // the logged choice, once this card is used
   saved?: unknown[];
   result?: Entry; // how its roll, fight or choice turned out, once recorded
+  votable?: { entryId: number; n: number; vote?: VoteValue };
 }) {
   const [copied, setCopied] = useState(false);
   const showWhy = usePrefs().why;
@@ -1536,6 +1541,7 @@ function OptionCard({
           {result.choice.replace(/^[^.]*\.\s*/, "").trim() && <span className="story text-muted">{result.choice.replace(/^[^.]*\.\s*/, "")}</span>}
         </p>
       )}
+      {votable && <VoteRow entryId={votable.entryId} voteKey={String(votable.n)} initial={votable.vote} />}
       <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
         {/* One action while choosing; what grows from it (Develop) comes once it's used. */}
         {state !== "used" ? (

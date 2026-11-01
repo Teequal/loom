@@ -92,6 +92,7 @@ export function findMoves(
     surprise?: { chance: number; seed: string }; // an occasional surprise move (§7.8)
     toward?: Set<number>; // threads closest to where the GM wants the story to go
     exclude?: string[]; // moves already used ("kind:thread"), for another take
+    taste?: { move: Record<string, number> }; // what this GM tends to use (taste.ts)
   },
 ): Move[] {
   const memo = new Map();
@@ -225,6 +226,8 @@ export function findMoves(
 
   // A busy lead costs a move a little, so quieter characters get more of the stage.
   for (const m of moves) m.score -= 0.3 * m.cast.filter((c) => c.busy).length;
+  // What this GM tends to use leans the kinds a little; it never outweighs the moment.
+  if (opts.taste) for (const m of moves) m.score += 0.4 * (opts.taste.move[m.kind] ?? 0);
   // The GM's steer leans the kinds; a heartfelt take favours a character's own condition, and
   // "tie to the story" the threads closest to the GM's direction.
   if (opts.steer) {

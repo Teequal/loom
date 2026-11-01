@@ -1,3 +1,4 @@
+import type { Vote } from "../taste";
 import { sql } from "drizzle-orm";
 import { type AnySQLiteColumn, blob, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import {
@@ -35,6 +36,8 @@ export const campaigns = sqliteTable("campaigns", {
   direction: text("direction").notNull().default(""),
   // At the table: apply risky changes without asking (still logged, still undoable).
   autoApprove: integer("auto_approve", { mode: "boolean" }).notNull().default(false),
+  learn: integer("learn", { mode: "boolean" }).notNull().default(true), // lean on what this GM uses (taste.ts)
+  learnFrom: integer("learn_from").notNull().default(0), // the live entry a reset counts from
   // The latest prep ideas and fresh ideas, kept so leaving the Prep page doesn't lose them.
   // Whose campaign it is when Loom is shared with invited testers; empty means the owner's.
   testerId: integer("tester_id"),
@@ -375,5 +378,7 @@ export const liveEntries = sqliteTable("live_entries", {
   encounter: text("encounter", { mode: "json" }).$type<unknown>(), // the fight as set up, when there is one
   // Develop results for this choice, kept so the branches survive a reload (newest last).
   developments: text("developments", { mode: "json" }).$type<unknown[]>().notNull().default([]),
+  // Thumbs on what was shown, by option number (or a Develop take's key): see taste.ts.
+  votes: text("votes", { mode: "json" }).$type<Record<string, Vote>>().notNull().default({}),
   createdAt: createdAt(),
 });

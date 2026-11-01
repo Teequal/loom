@@ -141,6 +141,7 @@ function Loom({ campaignId }: { campaignId: number }) {
         </p>
         <Direction campaignId={campaignId} initial={data.campaign.direction} />
         <Settings campaignId={campaignId} initial={data.campaign} />
+        <Learned campaignId={campaignId} />
       </section>
 
       {!data.threads.length && !data.cast.length && (
@@ -352,6 +353,30 @@ function Settings({ campaignId, initial }: { campaignId: number; initial: Overvi
       </Switch>
       {initial.safety.length > 0 && <span>Safety lines: {initial.safety.join(", ")}</span>}
     </div>
+  );
+}
+
+// The active default, out in the open: what Loom has picked up, a switch, and a way to start over.
+function Learned({ campaignId }: { campaignId: number }) {
+  const [t, setT] = useState<{ on: boolean; lines: string[] } | null>(null);
+  const send = useCallback((body: { on?: boolean; reset?: boolean }) => post<{ on: boolean; lines: string[] }>("/api/taste", { campaignId, ...body }).then(setT).catch(() => {}), [campaignId]);
+  useEffect(() => void send({}), [send]);
+  if (!t) return null;
+  return (
+    <details className="mt-2.5 px-1 text-[13px] text-muted">
+      <summary className="cursor-pointer">What Loom has learned about your table</summary>
+      <div className="mt-2 space-y-2">
+        <Switch checked={t.on} hint="Loom leans toward what you use and away from what you pass over." onChange={(on) => void send({ on })}>
+          Learn from what I use
+        </Switch>
+        {t.on && (t.lines.length ? (
+          <ul className="space-y-0.5 text-foreground">
+            {t.lines.map((l) => <li key={l}>{l}</li>)}
+          </ul>
+        ) : <p>Nothing yet. A session of use, or the small arrows on any option, will start to show here.</p>)}
+        {t.on && !!t.lines.length && <button type="button" onClick={() => void send({ reset: true })} className="btn-tertiary text-[13px]">Start over</button>}
+      </div>
+    </details>
   );
 }
 

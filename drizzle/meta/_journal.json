@@ -127,6 +127,13 @@
       "when": 1793515328082,
       "tag": "0017_curly_thanos",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1793515654811,
+      "tag": "0018_crazy_firebrand",
+      "breakpoints": true
     }
   ]
 }

@@ -14,6 +14,7 @@ import { listMoments, momentLine } from "./moments";
 import { personalLines, spotlightScore, tableSeats } from "./players";
 import { buildScene, type Scene } from "./scene";
 import { findMoves, movesBlock, SURPRISE_CHANCE, type Move, type Surprises } from "./moves";
+import { loadTaste, tasteBlock } from "./taste";
 import { derivedLines, ruleCostLine } from "./world/derived";
 import { interplayLine, interplaysOf } from "./world/interplays";
 import type { View } from "./world/engine";
@@ -649,8 +650,9 @@ async function safetyCheck(lines: string[], texts: string[]) {
 }
 
 // How much to write follows how much the GM wrote: a quick line gets a quick answer.
-export function lengthFor(moment: string) {
-  const words = moment.trim().split(/\s+/).length;
+export function lengthFor(moment: string, shift = 0) {
+  // A GM who keeps saying "too long" gets the size below (taste.ts).
+  const words = moment.trim().split(/\s+/).length * (shift < 0 ? 0.3 : 1);
   if (words <= 10) return "LENGTH: the GM wrote a quick line, so answer quickly: setup is 1 beat, under 20 words; hand-off one short sentence; why under 10 words.";
   if (words <= 35) return "LENGTH: setup is 1-2 beats, under 35 words in total.";
   return "LENGTH: the GM gave detail, so answer in kind: setup is 2-3 beats, up to 60 words in total, and an option may tie in a second or third thread where it genuinely fits.";
@@ -810,7 +812,8 @@ export async function prepareMoment(campaignId: number, moment: string, opts: Pr
   const [campaignRow] = await db.select({ direction: schema.campaigns.direction }).from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
   const direction = campaignRow?.direction.trim() ?? "";
   const soFar = await sessionSoFar(campaignId);
-  return { budget, allThreads, base, mentioned, provider, meaning, meaningNote, threads, distances, scene, lists, typeOf, seats, quietest, tableBlock, lines, callbacks, sessionNumber, sceneBlock, titleOf, direction, soFar };
+  const taste = await loadTaste(campaignId);
+  return { taste, budget, allThreads, base, mentioned, provider, meaning, meaningNote, threads, distances, scene, lists, typeOf, seats, quietest, tableBlock, lines, callbacks, sessionNumber, sceneBlock, titleOf, direction, soFar };
 }
 export type Prepared = Awaited<ReturnType<typeof prepareMoment>>;
 
@@ -864,7 +867,7 @@ ${standingBlock(p, moves, unit)}${(() => {
     const lately = derivedLines(p.scene.situation.view);
     return lately.length ? `\nLATELY (worked out from this session, not recorded)\n${lately.map((l) => `- ${l}`).join("\n")}\n` : "";
   })()}${p.sceneBlock}${p.callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${p.callbacks.map(momentLine).join("\n")}\n` : ""}${p.tableBlock ? `\n${p.tableBlock}\n` : ""}
-${p.direction ? `\nWHERE THE GM WANTS THE STORY TO GO\n${p.direction}\n` : ""}${p.soFar ? `\nTHIS SESSION SO FAR (what already happened at the table, oldest first)\n${p.soFar}\n` : ""}`;
+${tasteBlock(p.taste)}${p.direction ? `\nWHERE THE GM WANTS THE STORY TO GO\n${p.direction}\n` : ""}${p.soFar ? `\nTHIS SESSION SO FAR (what already happened at the table, oldest first)\n${p.soFar}\n` : ""}`;
 }
 
 /**
@@ -920,7 +923,7 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   // A surprise now and then (the GM's setting), seeded by the moment and how far the session has
   // got, so asking the same thing again gives the same answer.
   const surprise = { chance: SURPRISE_CHANCE[opts.surprises ?? "rare"], seed: `${campaignId}|${moment}|${scene.situation.view.g.log.length}|${opts.steer ?? ""}` };
-  const moves = findMoves(scene.situation.view, threads, { callbacks, liveRules: liveRulesOf(scene), surprise });
+  const moves = findMoves(scene.situation.view, threads, { callbacks, liveRules: liveRulesOf(scene), surprise, taste: P.taste });
   const places = placeContext(scene.situation);
   {
     const s = scene.situation;
@@ -948,7 +951,7 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   const planIds = [...plans.values()].flat().map((b) => b.id);
   const OptionsSchema = optionsSchema({ moves: moves.map((m) => m.id), threads: threads.map((t) => `T${t.id}`), nameable: lists.nameable, npcActors: lists.npcActors, absentActors: lists.absentActors, outcomeActors: lists.outcomeActors, handOff: lists.handOff, pcs: lists.pcs, mechanics: lists.mechanics, moments: callbacks.map((m) => `M${m.id}`), plans: planIds, anchors: anchorIds });
   const prompt = `${contextPrompt(P, moves)}${planIds.length ? `${plansBlock(scene.situation.view, plans)}\nPLANNED BEATS\n${PLAN_TEXT}\n` : ""}${anchorIds.length ? `${anchorsBlock(anchors, [])}\nSOFT PLAN\n${SOFT_TEXT}\n` : ""}
-${lengthFor(moment)}
+${lengthFor(moment, P.taste.length)}
 MIX: ${MIXES[opts.mix ?? "mix"]}${
     opts.steer
       ? /^bring in /i.test(opts.steer)
@@ -956,7 +959,7 @@ MIX: ${MIXES[opts.mix ?? "mix"]}${
         : `\nSTEER (the GM asked for this; follow it): make every option ${opts.steer}, still tied to threads.`
       : ""
   }
-${TONE_TEXT[Math.max(0, Math.min(4, opts.tone ?? 1))]}
+${TONE_TEXT[Math.max(0, Math.min(4, (opts.tone ?? 1) + P.taste.tone))]}
 
 WHAT JUST HAPPENED AT THE TABLE
 ${moment}`;
@@ -1071,7 +1074,7 @@ ${moment}`;
   // Options already on screen keep their place.
   // A leaned mix (action, light…) keeps the options of that kind first.
   const score = (o: ScaffoldOption) =>
-    spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama") + (mentioned.has(o.hand_off.to) ? 0.7 : 0) + (wanted.length && o.flavour && wanted.includes(o.flavour) ? 2 : 0) +
+    spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama") + (mentioned.has(o.hand_off.to) ? 0.7 : 0) + (wanted.length && o.flavour && wanted.includes(o.flavour) ? 2 : 0) + (o.flavour ? (P.taste.flavour[o.flavour] ?? 0) : 0) +
     // An option on the surprise move is shown when it's written: the GM asked for surprises.
     (moves.find((m) => m.id === o.move)?.surprise ? 5 : 0);
   let kept = [...shown, ...accepted.filter((o) => !shown.includes(o)).sort((a, b) => score(b) - score(a))].slice(0, 3);

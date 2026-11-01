@@ -1,5 +1,6 @@
 "use client";
 
+import { VoteRow } from "./vote";
 import { Reading } from "./reading";
 import { keyWords, Smoke, WriteIn } from "./answer-box";
 import { useEffect, useRef, useState } from "react";
@@ -472,6 +473,7 @@ function ChainCard({ slot, pending, index, devId, entryId, live, depth, writing,
         <>
           <RefChips refs={[...threadRefs(chain.threads), ...(chain.callback ? [{ kind: "moment" as const, id: chain.callback.id, name: `Callback: ${chain.callback.title}` }] : [])]} />
           {chain.why && showWhy && <p className="mt-1.5 text-[13px] italic text-muted">{chain.why}</p>}
+          {entryId && devId && <VoteRow entryId={entryId} voteKey={`c${devId}-${index}`} move={chain.move.split(":")[0]} initial={live.entries.find((e) => e.id === entryId)?.votes?.[`c${devId}-${index}`]} />}
           {/* Refine in place, folded behind one button: one version on screen, Back to the one before. */}
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px]">
             <button type="button" disabled={!!busy} onClick={() => setReworking(!reworking)} aria-expanded={reworking} className="btn-tertiary px-1.5 text-[12px]">
