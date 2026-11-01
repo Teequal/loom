@@ -19,6 +19,7 @@ import { derivedLines, ruleCostLine } from "./world/derived";
 import { interplayLine, interplaysOf } from "./world/interplays";
 import type { View } from "./world/engine";
 import type { NodeKey } from "./world/nodes";
+import { ruleWords } from "./world/engine";
 import { propertiesOf } from "./world/properties";
 import { holdPlace, placeContext } from "./place";
 import { BODY_PARTS, cascadeDropped, expand, fillSlots, pcOpensClause, refersTo, SENSATIONS, type Ref } from "./slots";
@@ -92,13 +93,58 @@ const DECLARES: [Approach, RegExp][] = [
   ["move", /\b(?:run|flee|jump|leap|swim|climb|dash|chase|escape|ride|vault|dodge|balanc)\w*/i],
   ["wait", /\b(?:wait|rest|guard|keep watch)\w*/i],
 ];
+// The skill a verb means, when it means one: these come first, so the engine's answer is the
+// first in the set.
+const VERB_SKILL: [string, RegExp][] = [
+  ["Deception", /\b(?:lie|lies|lied|lying|bluff|deceiv|disguis|forg|pretend)\w*/i],
+  ["Intimidation", /\b(?:threaten|intimidat|menac|glare)\w*/i],
+  ["Persuasion", /\b(?:beg|plead|persuad|convinc|negotiat|haggl|bargain|reason|flatter|charm)\w*/i],
+  ["Performance", /\b(?:sing|sang|perform|dance|juggl)\w*/i],
+  ["Sleight of Hand", /\b(?:steal|stole|pickpocket|palm|pocket|swipe|pinch|lift the)\w*/i],
+  ["Stealth", /\b(?:sneak|hide|hid|creep|tail|shadow)\w*/i],
+  ["Athletics", /\b(?:climb|swim|jump|leap|shove|grapple|wrestl|tackl|lift|break|smash|pry|haul|drag)\w*/i],
+  ["Acrobatics", /\b(?:balanc|tumbl|vault|dodge)\w*/i],
+  ["Investigation", /\b(?:search|examin|inspect|investigat|stud)\w*/i],
+  ["Perception", /\b(?:look|watch|listen|scan|peer)\w*/i],
+  ["Survival", /\btrack\w*/i],
+];
 export function declaredSkills(moment: string): Set<string> | null {
   const found = DECLARES.filter(([, re]) => re.test(moment)).map(([a]) => a);
-  return found.length ? new Set(found.flatMap((a) => APPROACH_SKILLS[a])) : null;
+  const own = VERB_SKILL.filter(([, re]) => re.test(moment)).map(([s]) => s);
+  return found.length || own.length ? new Set([...own, ...found.flatMap((a) => APPROACH_SKILLS[a])]) : null;
+}
+
+// Saves, by what the danger is: the model says what it is, the engine knows the ability.
+export const SAVE_KINDS = { dodge: "Dexterity", endure: "Constitution", brace: "Strength", will: "Wisdom", wits: "Intelligence", self: "Charisma" } as const;
+export type SaveKind = keyof typeof SAVE_KINDS;
+export const RULE_KINDS = ["rule1", "rule2", "rule3"] as const;
+// What the danger's own words say settles it, whatever was picked; a thing the words don't place
+// keeps the pick.
+const DANGER_WORDS: [(typeof ABILITIES)[number], RegExp][] = [
+  ["Wisdom", /\b(?:pull|whisper|voice|charm|fear|terror|dread|panic|compuls|madness|temptation|urge|lure|hold on|grip on|sway|call of|mind|will)\w*/i],
+  ["Charisma", /\b(?:possess|banish|soul|ward off|exorcis)\w*/i],
+  ["Intelligence", /\b(?:illusion|phantasm|psychic|mental (?:assault|attack)|riddle)\w*/i],
+  ["Constitution", /\b(?:poison|venom|toxin|disease|plague|sickness|fumes|gas|cold|frost|heat|thirst|hunger|drown|exhaust|fatigue|smoke)\w*/i],
+  ["Strength", /\b(?:current|undertow|shove|crush|drag|grab|being pulled|chains?|net|restrain|wind|gale)\w*/i],
+  ["Dexterity", /\b(?:blast|explosion|fall|falling|collapse|beam|trap|dart|arrow|bolt|fireball|rockfall|avalanche|lightning|flames?)\w*/i],
+];
+export const dangerAbility = (what = "") => DANGER_WORDS.find(([, re]) => re.test(what.replace(/\{[^}|]*\|([^}]*)\}/g, "$1").replace(/[{}]/g, "")))?.[0] ?? null;
+
+// What a condition does to a roll (SRD), said once on the roll so the GM doesn't have to recall it.
+const AUTO_FAIL = ["paralyzed", "petrified", "stunned", "unconscious"];
+export function conditionNote(h: Hand, conditions: string[], name: string): string | null {
+  const has = (...xs: string[]) => xs.filter((x) => conditions.includes(x));
+  const check = ["check", "contest", "notice"].includes(h.kind);
+  if (h.kind === "save" && (h.ability === "Strength" || h.ability === "Dexterity")) {
+    const out = has(...AUTO_FAIL);
+    if (out.length) return `${name} fails automatically (${out[0]}).`;
+  }
+  const dis = h.kind === "attack" ? has("poisoned", "frightened", "blinded", "prone", "restrained") : check ? has("poisoned", "frightened") : h.kind === "save" && h.ability === "Dexterity" ? has("restrained") : [];
+  return dis.length ? `With disadvantage (${dis.join(", ")}).` : null;
 }
 
 export type Hand = {
-  kind: "question" | "choice" | "check" | "contest" | "attack" | "notice" | "save" | "rule" | "death_save";
+  kind: "question" | "choice" | "check" | "contest" | "attack" | "notice" | "save" | "rule" | "death_save" | SaveKind | (typeof RULE_KINDS)[number];
   to: string;
   what?: string; // what they face (question), the first choice, what they're up against, or what a notice roll is about
   or?: string; // the second choice
@@ -148,6 +194,8 @@ export function handText(h: Hand): Pick<ScaffoldOption["hand_off"], "kind" | "me
       return roll(`${who} makes a {${h.mechanic}} roll.`, h.mechanic ?? "none");
     case "death_save":
       return roll(`${who} makes a death saving throw.`);
+    default:
+      return { kind: "question", mechanic: "none", text: `Ask ${player}: what do you do?` };
   }
 }
 
@@ -193,11 +241,11 @@ Each option is a scaffold:
 - hand: how the players get involved, chosen in parts; code writes the sentence. to is a PC or "table". Fill only the fields its kind uses, and leave the others "" (or "none"). Pick the kind:
   - "question": ask what they do. what is a short noun phrase for what they're facing ("the heckling patron"), or "".
   - "choice": offer two clear choices: what and or are short verb phrases a player would say ("write a note", "wave him off"), and aim and or_aim say what each does to the NPC the choice is about: ${ACTS.join(", ")} (press: push them on what they know), or none. For other kinds, aim and or_aim are "none".
-  - "check" or "contest": only for a PC doing what their player declared in this moment. Pick the ability and skill (or "none"); what is who or what they're up against ("the captain", "the current"), or "".
+  - "check": only for a PC doing what their player declared; ROLLS THIS MOMENT says who and which skill, and the engine works out the ability. what is who or what they're up against ("the captain", "the current"), or "".
   - "attack": only for a PC who declared an attack. what is the target.
-  - "notice": a perception or knowledge check (Perception, Insight, Investigation, Arcana, History…), for anyone or the table. what is a noun phrase for what it's about ("what's bobbing in the current", "the sigil on the crates").
-  - "save": a saving throw against a danger that hits them, for anyone. what is the danger ("the falling beam"). Only real dangers: a fall, a blast, poison, a spell, a curse.
-  - "rule": a rule from RULES IN PLAY; it can only go to someone it applies to right now (listed after "now"), or to "table" if it applies to everyone.
+  - "notice": a perception or knowledge check, for anyone or the table. skill is Perception (sights, sounds), Insight (reading a person), Investigation (working out a clue), Arcana (magic), Religion (gods, undead, rites), History (the past), Nature (beasts, plants, weather), Medicine (wounds, sickness) or Survival (tracks, the wild). what is a noun phrase for what it's about ("what's bobbing in the current", "the sigil on the crates").
+  - A saving throw against a danger that hits them, for anyone, is named for what the danger is; the engine knows the ability. "dodge": blasts, falls, traps, things flying at them. "endure": poison, sickness, cold, exhaustion. "brace": being crushed, dragged or swept away. "will": charm, fear, compulsion, anything pulling at the mind. "wits": illusions, psychic attacks. "self": possession, banishment, anything against the soul. what is the danger ("the falling beam"). Only real dangers, never for what a house rule covers.
+  - "rule1", "rule2", "rule3": the house rule with that number in ROLLS THIS MOMENT. When none is listed, there is no rule roll.
   - "death_save": a PC who is dying.
   Rolls are for player characters only; what NPCs notice or decide is the GM's call, never a roll.
 - NPCs may reach for, shout at or block a PC, but only a failed roll moves one: never write "Tomas pulls {1} down". Offer the pull as a question or a save.
@@ -272,15 +320,13 @@ export function scaffoldParts(lists: SchemaLists) {
   // The hand-off, in one flat shape (a union per kind made the format too large for the API to
   // compile); code checks who each kind may go to (see Hand and checkOption).
   const Hand = z.object({
-    kind: z.enum(["question", "choice", "check", "contest", "attack", "notice", "save", ...(lists.mechanics.length ? (["rule"] as const) : []), "death_save"]),
+    kind: z.enum(["question", "choice", "check", "attack", "notice", ...(Object.keys(SAVE_KINDS) as SaveKind[]), ...RULE_KINDS, "death_save"]),
     to: z.enum(nonEmpty(["table", ...lists.handOff], "table")),
     what: z.string(),
     or: z.string(),
     aim: z.enum(["none", ...ACTS]),
     or_aim: z.enum(["none", ...ACTS]),
-    ability: z.enum(["none", ...ABILITIES]),
     skill: z.enum(SKILLS),
-    mechanic: z.enum(nonEmpty(["none", ...lists.mechanics], "none")),
   });
   const refs = z.array(z.object({ name: z.enum(nonEmpty(lists.nameable, "none")), as: z.enum(["object", "possessor"]) }));
   return { Beat, Hand, thread, refs, move: z.enum(nonEmpty(lists.moves, "M1")) };
@@ -398,12 +444,20 @@ export function pillarOf(o: Pick<ScaffoldOption, "flavour" | "hand">): Pillar {
   return "drama";
 }
 
-export function adoptHand(o: ScaffoldOption): ScaffoldOption {
+/** What the model picked, as the engine's roll: a danger's ability, a house rule by its number. */
+export function pickRoll(h: Hand, rules: string[]): Hand {
+  if (h.kind in SAVE_KINDS) return { ...h, kind: "save", ability: SAVE_KINDS[h.kind as SaveKind] };
+  const n = RULE_KINDS.indexOf(h.kind as (typeof RULE_KINDS)[number]);
+  if (n < 0) return h;
+  return rules[n] ? { ...h, kind: "rule", mechanic: rules[n] } : { ...h, kind: "question" };
+}
+
+export function adoptHand(o: ScaffoldOption, rules: string[] = []): ScaffoldOption {
   if (!o.hand) return o;
   // What the engine knows fills a gap rather than failing the option: a notice roll without a
   // skill is Perception; a check whose skill isn't a notice skill but was asked as "notice" keeps
   // its skill as a check of that kind.
-  const hand = { ...o.hand };
+  const hand = pickRoll({ ...o.hand }, rules);
   if (hand.kind === "notice" && (!hand.skill || hand.skill === "none")) hand.skill = "Perception";
   // How each side of a choice is done follows from what it does ("persuade" is talking), so the
   // model no longer writes it.
@@ -438,20 +492,36 @@ export function normaliseHandOff(o: ScaffoldOption, c: CheckContext) {
     // Declared: the PC is acting in this moment, and the skill fits what they declared ("begs" is
     // talking, so not Stealth). A check with no skill (an ability alone) fits anything they declared.
     const skill = h.skill && h.skill !== "none" ? h.skill : null;
-    const fits = !skill || !c.declaredSkills || c.declaredSkills.has(skill);
+    const own = c.declaredSkills ? [...c.declaredSkills][0] : null;
+    // A PC acting gets the roll for what they declared: the engine's skill, if the model's doesn't fit.
+    if ((h.kind === "check" || h.kind === "contest") && c.checkTo.includes(h.to) && own && (!skill || !c.declaredSkills!.has(skill)) && !(h.ability && h.ability !== "none")) {
+      o.hand = { ...h, skill: own };
+    }
+    const fits = !o.hand.skill || o.hand.skill === "none" || !c.declaredSkills || c.declaredSkills.has(o.hand.skill);
     const declared = c.checkTo.includes(h.to) && fits;
     if ((h.kind === "check" || h.kind === "contest" || h.kind === "attack") && !declared) {
       // A PC who didn't declare this doesn't attempt it: noticing is a notice roll; a physical
       // reaction to something coming at them is a save; anything else they'd choose to do (sneak,
       // talk, palm something) is theirs to decide, so it's a question.
       const notice = skill && NOTICE_SKILLS.includes(skill as (typeof NOTICE_SKILLS)[number]);
-      const physical = !skill || ["Athletics", "Acrobatics"].includes(skill);
+      const physical = (!skill || ["Athletics", "Acrobatics"].includes(skill)) && !!dangerAbility(h.what);
       o.hand = notice
         ? { ...h, kind: "notice" }
         : physical
           ? { ...h, kind: "save", ability: skill ? (SKILL_ABILITY[skill] ?? h.ability) : h.ability, skill: "none" }
           : { ...h, kind: "question", skill: "none", ability: "none" };
     }
+    // Nothing says which skill: the engine won't guess, so the player says what they do.
+    if ((o.hand.kind === "check" || o.hand.kind === "contest") && (!o.hand.skill || o.hand.skill === "none") && !(o.hand.ability && o.hand.ability !== "none")) o.hand = { ...o.hand, kind: "question" };
+    // Pushing or hiding from someone is against them, so it's a contest.
+    if (o.hand.kind === "check" && o.hand.skill === "Athletics" && c.tagger.tagsIn(c.tagger.tag(o.hand.what ?? "")).some((n) => ["npc", "pc"].includes(c.tagger.entityOf(n)?.type ?? ""))) o.hand = { ...o.hand, kind: "contest" };
+    // A danger's own words settle which save it is.
+    if (o.hand.kind === "save") {
+      const ability = dangerAbility(o.hand.what);
+      if (ability && ability !== o.hand.ability) o.hand = { ...o.hand, ability };
+    }
+    // A rule that isn't set off has no roll.
+    if (o.hand.kind === "rule" && c.scene.situation.effects.some((e) => e.effect.name === o.hand!.mechanic && !e.live)) o.hand = { ...o.hand, kind: "question", what: "" };
     // A choice is something the player would do: a phrase that starts with someone's name ("Tomas
     // proposes a tavern…") isn't one, so it becomes a question.
     if (o.hand.kind === "choice" && [o.hand.what, o.hand.or].some((x) => /^\s*\{?[A-Z][\w'’-]+/.test(x ?? "") && c.tagger.entityOf((x ?? "").replace(/^\s*\{?/, "").split(/[|}\s]/)[0]))) o.hand = { ...o.hand, kind: "question", what: "" };
@@ -640,7 +710,7 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
     notes: [...s.notes],
     fixes: [...s.fixes],
     stated: s.stated,
-    check: { scene, tagger, present, remoteOk, outcomePcs, checkTo, possession, declaredSkills: declaredSkills(moment) } satisfies CheckContext,
+    check: { scene, tagger, present, remoteOk, outcomePcs, checkTo, possession, declaredSkills: declaredSkills(moment) ?? new Set<string>() } satisfies CheckContext,
     // Who each kind of beat may name, within reach of the moment (and anyone it names). The answer
     // format offers each kind only its own list, so an absent NPC can't be written acting here and a
     // PC can't be written as an NPC: the model can't choose them, rather than code catching it.
@@ -841,7 +911,7 @@ export async function prepareMoment(campaignId: number, moment: string, opts: Pr
 }
 export type Prepared = Awaited<ReturnType<typeof prepareMoment>>;
 
-export const liveRulesOf = (scene: Scene) => scene.situation.effects.filter((e) => e.live).map((e) => ({ name: e.effect.name, why: e.why, sourceName: e.sourceName, to: e.targets, onFail: e.effect.onFail, used: /moment uses/.test(e.why) }));
+export const liveRulesOf = (scene: Scene) => scene.situation.effects.filter((e) => e.live).map((e) => ({ name: e.effect.name, why: e.why, sourceName: e.sourceName, to: e.targets, onFail: e.effect.onFail, used: /moment (?:uses|touches)/.test(e.why) }));
 
 
 // Bands not worth a line: the middle of each property.
@@ -873,6 +943,18 @@ export function standingBlock(p: Prepared, moves: Move[], unit = "option") {
   return `\nHOW THEY STAND (worked out by the engine from the records; let it shape what they do, never state it as a label)\n${lines.join("\n")}\n`;
 }
 
+/** The rolls the engine allows in this moment; the model picks from these. */
+export function rollsBlock(p: Prepared) {
+  const skills = p.lists.check.declaredSkills ? [...p.lists.check.declaredSkills].slice(0, 2) : [];
+  const who = p.lists.check.checkTo.map((n) => (n === "table" ? "the table" : n)).join(", ");
+  const rules = liveRulesOf(p.scene);
+  const dying = p.scene.pcs.filter((e) => !capabilitiesOf(e).aware && e.status !== "dead").map((e) => e.name);
+  return `ROLLS THIS MOMENT (the engine's list)
+- Checks and attacks: ${who ? `${who}${skills.length ? `, with ${skills.join(" or ")}` : ""}` : "nobody; use a question, a choice, a notice roll or a save"}
+- House rules: ${rules.length ? rules.map((r, i) => `rule${i + 1} ${r.name} (for ${r.to.join(", ") || "the table"}: ${r.why})`).join("; ") : "none set off, so no rule roll and no save standing in for one"}
+${dying.length ? `- Dying: ${dying.join(", ")}\n` : ""}`;
+}
+
 /** The prompt's context: the scene, who may act, the threads, the engine's moves and the rest. */
 export function contextPrompt(p: Prepared, moves: Move[], unit = "option") {
   return `${p.scene.text}
@@ -881,8 +963,8 @@ WHO MAY ACT
 - Here now (kind "npc"): ${[...p.lists.check.present].filter((n) => p.typeOf.get(n) === "npc").join(", ") || "nobody named; use walk-ons"}
 - Not here (only kind "arrival" or "remote"): ${p.lists.actors.filter((n) => p.typeOf.get(n) === "npc" && !p.lists.check.present.has(n)).join(", ") || "nobody"}. Bring one in only when it pays off their thread, at most one per option; otherwise use walk-ons.
 - Acting in this moment (what they declared is settled by the hand and the world's response, never narrated): ${p.lists.outcomeActors.join(", ") || "no PC in particular"}
-- Checks, contests and attacks only for: ${p.lists.check.checkTo.map((n) => (n === "table" ? "the table" : n)).join(", ") || "nobody (use a question, a choice, a notice roll or a save)"}
 ${p.lists.stated.length ? `- As of this moment: ${p.lists.stated.join("; ")}\n` : ""}${p.lists.check.remoteOk.size ? `- The players reached out to: ${[...p.lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${p.lists.check.possession.holders.size ? `- Who holds what: ${[...p.lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
+${rollsBlock(p)}
 OPEN THREADS
 ${p.threads.map((t) => (t.detail === "full" ? threadBlock(t, p.titleOf, p.typeOf) : `T${t.id} [${t.kind}] ${t.title}: ${t.summary}`)).join("\n")}
 
@@ -917,6 +999,17 @@ export function settleLost(o: ScaffoldOption, rawSetup: { does?: string; kind?: 
 export function priceRule(o: ScaffoldOption, view: View) {
   const line = o.hand_off.mechanic !== "none" ? ruleCostLine(view, o.hand_off.mechanic) : null;
   if (line) o.hand_off.text = `${o.hand_off.text} ${line}`;
+  const pc = o.hand && o.hand.to !== "table" ? view.g.find(o.hand.to) : null;
+  if (pc?.kind !== "character" || !o.hand) return;
+  const body = view.body.get(pc.key as NodeKey) ?? pc.body;
+  const note = conditionNote(o.hand, [...body.conditions.map((x) => x.name.toLowerCase()), ...(body.health === "unconscious" ? ["unconscious"] : [])], `{${pc.name}}`);
+  if (note) o.hand_off.text = `${o.hand_off.text} ${note}`;
+}
+
+/** The rule a roll's words belong to, if that rule isn't set off in this moment. */
+export function idleRuleBehind(what: string, scene: Scene) {
+  const words = what.toLowerCase();
+  return scene.situation.effects.find((e) => !e.live && ruleWords(`${e.effect.name} ${e.sourceName ?? ""}`).some((w) => words.includes(w)));
 }
 
 /** Ends an option on a rule's own roll. */
@@ -939,6 +1032,15 @@ export function fitToMove(o: ScaffoldOption, moves: Move[], c: CheckContext, dro
   if (!move?.rule && owed && (o.hand?.kind === "save" || o.hand?.kind === "check") && owed.to.includes(o.hand.to) && owed.words.some((w) => o.hand!.what?.toLowerCase().includes(w))) {
     o.hand = { ...o.hand, kind: "rule", mechanic: owed.name };
     o.hand_off = { to: o.hand.to, ...handText(o.hand) };
+  }
+  // A rule that isn't set off gets no roll, and no save or check standing in for it: the player
+  // says what they do about it instead.
+  const idle = o.hand && ["save", "check", "contest"].includes(o.hand.kind) ? idleRuleBehind(o.hand.what ?? "", c.scene) : null;
+  if (idle) {
+    droppedSentences.push({ label: o.label, reason: `roll dropped: ${idle.effect.name} isn't set off in this moment` });
+    o.hand = { ...o.hand!, kind: "question" };
+    o.hand_off = { to: o.hand.to, ...handText(o.hand) };
+    o.on_fail = { target: "none", effect: "" };
   }
   if (move) o.moveInfo = { kind: move.kind, source: move.source, cast: move.cast.map((c) => ({ name: c.name, can: c.can, part: c.part })) };
   let supportLines = 0;
@@ -1070,7 +1172,7 @@ ${moment}`;
       // Each sentence remembers its place in the answer, so code can tell later which were dropped.
       const rawSetup = (parsed.data as { setup: { does?: string; kind?: string; src?: number }[] }).setup;
       rawSetup.forEach((b, i) => (b.src = i));
-      const filled = fillSlots(applyPlans(adoptHand(parsed.data as unknown as ScaffoldOption), plans, droppedSentences), lists.tagger);
+      const filled = fillSlots(applyPlans(adoptHand(parsed.data as unknown as ScaffoldOption, liveRulesOf(scene).map((r) => r.name)), plans, droppedSentences), lists.tagger);
       for (const d of filled.dropped) droppedSentences.push({ label: (parsed.data as unknown as ScaffoldOption).label, reason: `sentence dropped: ${d}` });
       if (filled.problem) return rejected.push({ label: (parsed.data as unknown as ScaffoldOption).label, reason: filled.problem });
       const o = filled.option;
@@ -1153,7 +1255,7 @@ ${moment}`;
 IMPORTANT: this moment runs into the table's safety line(s): ${lines.join("; ")}. Every option must steer away from it: keep it off-screen, redirect the danger elsewhere (often onto the party or the villain's plans), or resolve it without depicting or threatening it.`;
     const res = await callLlm({ feature: "improv", campaignId, system: SYSTEM, prompt: steer, schema: OptionsSchema, maxTokens: 4000, effort: "low", model, fast: true });
     calls.push(res);
-    const fresh = (res.data.options as unknown as ScaffoldOption[]).map(named).map(adoptHand).map((o) => fillSlots(applyPlans(o, plans, droppedSentences), lists.tagger)).filter((f) => {
+    const fresh = (res.data.options as unknown as ScaffoldOption[]).map(named).map((o) => adoptHand(o, liveRulesOf(scene).map((r) => r.name))).map((o) => fillSlots(applyPlans(o, plans, droppedSentences), lists.tagger)).filter((f) => {
       if (f.problem) rejected.push({ label: f.option.label, reason: f.problem });
       return !f.problem;
     }).map((f) => f.option).filter((o) => {

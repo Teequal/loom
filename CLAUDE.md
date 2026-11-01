@@ -890,6 +890,16 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - The prompt says it too ("Where:" in `SCAFFOLD_TEXT`). It's all in code, with no new answer field: the formats are near the API's size limit.
   - 9 crafted checks (372/372). Live, 6 asks on Haiku (enriched copy and sample campaign): no teleports and no false drops. The rule didn't get to fire live, so Jacob's own case rests on the crafted check.
 
+- [x] **The engine owns the rolls** (2 Nov; Jacob: put rules content to the engine, and Haiku pulls the answer in, as with threads).
+  - **The model no longer picks an ability or a rule name.** The format's `ability` and `mechanic` are gone (a new rule no longer changes the format, so it can't miss the cache). `hand.kind` is now question, choice, check, attack, notice, a save named for the danger (`dodge`, `endure`, `brace`, `will`, `wits`, `self`, in `SAVE_KINDS`), `rule1`–`rule3`, or death_save. `pickRoll` turns these into the same `Hand` as before.
+  - **ROLLS THIS MOMENT** (`rollsBlock`) lists who may make checks, with which skills, the rules set off by number, and who's dying.
+  - **Engine has first say:** a danger's own words beat the pick (`dangerAbility`: a mind's pull is never Dexterity). A PC acting gets the skill for the verb they declared (`VERB_SKILL`, "bluffs" = Deception), whatever the model chose; a shove at a named character is a contest. With nothing to go on, a check is a question.
+  - **Rules fire only when set off.** On-use as before. `on-exposure` and `on-event` now need the moment to touch the rule or its source (`ruleWords`), or the party to stand in a place-bound source; `on-rest` needs someone resting. A moment that touches a rule owes its roll, like one that uses it. A save or check standing in for a rule that isn't set off (`idleRuleBehind`) becomes a question, and its failure line goes. Asking what someone knows about the thing is fine.
+  - **Conditions on the roll** (`conditionNote`, run in `priceRule`): "With disadvantage (poisoned)", or "fails automatically (stunned)" on Strength and Dexterity saves. Exhaustion isn't covered. The moment can state poisoned, frightened and prone now too.
+  - **Live, Haiku, enriched copy and sample campaign:** 23 options on 8 moments, then 31 on 11 after the exposure change (5.5 s average, 2 rejected). No figurine or microfracture roll appeared in a moment that didn't set one off. Cache still hits (7,259 tokens read). Develop compiles and runs on Haiku and Sonnet.
+  - **Seen, not fixed:** two options can end on the same rule roll. A rule's `check` field holds only "madness roll" or "type and DC not specified", so it isn't shown. An exposure moment worded without the rule's words ("a crack opens in the air") doesn't set it off. Haiku tends to skip the roll for a declared climb. The Develop chain above used Persuasion for "against Pip's fear and the river's pull".
+  - 426/426 crafted checks, engine tests pass.
+
 ## Entity model build (docs/entity-model.md)
 
 - [x] Step 1: Schema with provenance (migration `drizzle/0001`):

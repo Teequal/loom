@@ -264,6 +264,10 @@ export interface LiveRule {
   text: string; // one line for prompts
 }
 
+// The words that mark something as a rule's business: its name and its source's.
+const PLAIN_RULE_WORDS = /^(?:power|magic|rolls?|check|saves?|curse|their|great|small|house|effect|using|with|from|that|this|rule|hand|what|when|into|upon|there)$/;
+export const ruleWords = (text: string) => [...new Set((text.toLowerCase().match(/[a-z]{4,}/g) ?? []).filter((w) => !PLAIN_RULE_WORDS.test(w)).map((w) => w.replace(/s$/, "")))];
+
 export function liveRules(v: View): LiveRule[] {
   const pcs = [...v.g.nodes.values()].filter((n): n is Character => n.kind === "character" && n.side === "pc" && n.status !== "dead" && capabilities(v, n).aware);
   const used = new Set([...v.reading.used].map((n) => v.g.find(n)).filter((n): n is AnyNode => !!n).map(keyOfNode));
@@ -308,6 +312,13 @@ export function liveRules(v: View): LiveRule[] {
       if ((v.corrections.rulesOn ?? []).includes(rule.name)) return { ...base, live: true, why: "you said it's triggered", text };
       if (rule.trigger === "on-use" || rule.trigger === "on-touch")
         return usedNow ? { ...base, live: true, why: `the moment uses ${v.g.nodes.get(usedNow)?.name}`, text } : { ...base, live: false, why: `nobody uses ${source?.name ?? "its source"} in this moment`, text };
+      // Exposure to something, or an event, has to actually happen: being reachable isn't enough.
+      // Standing in a place-bound source is the exposure; otherwise the moment has to touch it.
+      if ((rule.trigger === "on-exposure" || rule.trigger === "on-event") && !(placeBound && partyThere)) {
+        const touched = ruleWords(`${rule.name} ${source?.name ?? ""}`).find((w) => new RegExp(`\\b${w}`, "i").test(v.reading.text ?? ""));
+        return touched ? { ...base, live: true, why: `the moment touches ${source?.name ?? rule.name}`, text } : { ...base, live: false, why: `nothing in this moment exposes anyone to ${source?.name ?? rule.name}`, text };
+      }
+      if (rule.trigger === "on-rest" && !/\b(?:rest|sleep|slept|camp|bed|nap|long rest|short rest)/i.test(v.reading.text ?? "")) return { ...base, live: false, why: "nobody rests in this moment", text };
       return { ...base, live: true, why: `it reaches ${targets.join(", ")}`, text };
     });
 }

@@ -27,6 +27,7 @@ export interface Mention {
 }
 
 export interface MomentReading {
+  text?: string; // the moment's own words
   mentions: Mention[];
   broughtIn: Set<string>; // NPCs and factions the moment puts in the scene
   referred: Set<string>; // named, but not here ("Bhen's mother", "looks for Bhen")
@@ -64,7 +65,9 @@ export const MOMENT_CONDITIONS: [RegExp, string][] = [
   [/\bblinded\b/i, "blinded"],
   [/\bdeafened\b/i, "deafened"],
   [/\bcharmed\b/i, "charmed"],
-  [/\bfrightened\b/i, "frightened"],
+  [/\bpoisoned\b/i, "poisoned"],
+  [/\bfrightened\b|\bterrified\b/i, "frightened"],
+  [/\bprone\b|\bknocked down\b/i, "prone"],
 ];
 
 export const READING_RULES: Rule[] = [
@@ -191,6 +194,7 @@ function findSpans(entities: ReadEntity[], moment: string) {
 
 export function readMoment(entities: ReadEntity[], moment: string): MomentReading {
   const r: MomentReading = {
+    text: moment,
     mentions: [],
     broughtIn: new Set(),
     referred: new Set(),
