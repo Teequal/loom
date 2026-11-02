@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { PAIR_WEIGHTS } from "@/core/db/schema";
-import { setPairWeights, setSubProperty, updateEntity } from "@/core/entities";
+import { removeRelation, setPairWeights, setRelation, setSubProperty, updateEntity } from "@/core/entities";
+import { HEALTH } from "@/core/entity-fields";
 import { setThreadPart, setThreadStakes } from "@/core/thread-parts";
 import { recordInterplayChanges } from "@/core/interplay-history";
 import { loomNode } from "@/core/loom";
@@ -13,6 +14,8 @@ import { campaignId, jsonRoute } from "@/server/route";
 // back to worked out. Saved as the DM's (so nothing else overwrites them), logged in one batch each
 // so they can be undone, and the entity comes back as it now reads.
 const Body = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("state"), campaignId, entityId: z.number().int(), status: z.string().max(30).optional(), health: z.enum(HEALTH).optional(), conditions: z.array(z.string().max(40)).max(20).optional() }),
+  z.object({ action: z.literal("holder"), campaignId, entityId: z.number().int(), holderId: z.number().int().nullable() }),
   z.object({ action: z.literal("part"), campaignId, threadId: z.number().int(), entityId: z.number().int(), role: z.string().max(30) }),
   z.object({ action: z.literal("stakes"), campaignId, threadId: z.number().int(), level: z.number().int().min(1).max(5).nullable() }),
   z.object({ action: z.literal("sub"), campaignId, entityId: z.number().int(), path: z.string().max(80), value: z.union([z.number().int().min(-3).max(3), z.boolean(), z.null()]) }),
@@ -42,6 +45,16 @@ export const POST = jsonRoute(Body, async (b) => {
   // pull history have none yet), so this edit's batch holds only what the edit changed.
   await recordInterplayChanges(b.campaignId).catch(() => {});
   const opts = { source: "dm" as const, batch: batchNow() };
+  if (b.action === "state") {
+    const traits = { ...(b.health ? { health: b.health } : {}), ...(b.conditions ? { conditions: b.conditions } : {}) };
+    await updateEntity(e.id, { ...(b.status ? { status: b.status } : {}), ...(Object.keys(traits).length ? { traits } : {}) }, opts);
+  }
+  if (b.action === "holder") {
+    if (e.type !== "item") throw new Error("Only an item has a holder.");
+    const rows = await db.select().from(schema.entityRelations).where(and(eq(schema.entityRelations.toEntityId, e.id), eq(schema.entityRelations.type, "holds")));
+    if (b.holderId == null) for (const r of rows) await removeRelation(r.id, "dm", opts.batch);
+    else await setRelation(b.campaignId, { fromEntityId: b.holderId, toEntityId: e.id, type: "holds" }, opts);
+  }
   if (b.action === "sub") await setSubProperty(e.id, b.path, b.value, opts);
   if (b.action === "pair") {
     if (b.from !== e.id && b.to !== e.id) throw new Error("That weight isn't this character's.");

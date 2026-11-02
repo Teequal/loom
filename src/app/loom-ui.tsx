@@ -652,6 +652,60 @@ function Glance({ items }: { items: { icon: IconName; label: React.ReactNode; to
   );
 }
 
+// The facts the engine checks first, changed by hand: saved as the DM's, undoable under Recent changes.
+function RightNow({ n, edit }: { n: Node; edit: (body: object) => Promise<void> }) {
+  const [error, setError] = useState("");
+  const now = n.now;
+  const set = (body: object) => edit(body).then(() => setError("")).catch((e) => setError(e.message));
+  const rest = (now.conditionNames ?? []).filter((c: string) => !now.conditions?.includes(c));
+  return (
+    <details className="mt-3">
+      <summary className="cursor-pointer select-none text-[11px] font-semibold uppercase tracking-wide text-muted">Change how {n.type === "item" ? "it is" : "they are"} now</summary>
+      <div className="mt-2 grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5 text-[13px]">
+        <span className="text-muted">Status</span>
+        <select aria-label="Status" className="quiet" value={now.status} onChange={(e) => set({ action: "state", status: e.target.value })}>
+          {now.statuses.map((s: string) => <option key={s} value={s}>{cap(s)}</option>)}
+        </select>
+        {now.healths && (
+          <>
+            <span className="text-muted">Health</span>
+            <select aria-label="Health" className="quiet" value={now.health ?? ""} onChange={(e) => set({ action: "state", health: e.target.value })}>
+              {!now.health && <option value="">Not recorded</option>}
+              {now.healths.map((s: string) => <option key={s} value={s}>{cap(s)}</option>)}
+            </select>
+          </>
+        )}
+        {now.conditions && (
+          <>
+            <span className="text-muted">Conditions</span>
+            <span className="flex flex-wrap items-center gap-1">
+              {now.conditions.map((c: string) => (
+                <button key={c} type="button" className="btn-tertiary text-xs" aria-label={`Remove ${c}`} onClick={() => set({ action: "state", conditions: now.conditions.filter((x: string) => x !== c) })}>
+                  {cap(c)} <Icon name="close" />
+                </button>
+              ))}
+              <select aria-label="Add a condition" className="quiet text-xs" value="" onChange={(e) => e.target.value && set({ action: "state", conditions: [...now.conditions.filter((x: string) => !(e.target.value.startsWith("exhaustion") && x.startsWith("exhaustion"))), e.target.value] })}>
+                <option value="">Add…</option>
+                {rest.map((c: string) => <option key={c} value={c}>{cap(c)}</option>)}
+              </select>
+            </span>
+          </>
+        )}
+        {now.holders && (
+          <>
+            <span className="text-muted">Held by</span>
+            <select aria-label="Held by" className="quiet" value={now.holder} onChange={(e) => set({ action: "holder", holderId: Number(e.target.value) || null })}>
+              <option value={0}>Nobody</option>
+              {now.holders.map((h: { id: number; name: string }) => <option key={h.id} value={h.id}>{h.name}</option>)}
+            </select>
+          </>
+        )}
+      </div>
+      {error && <p className="mt-1 text-xs text-danger">{error}</p>}
+    </details>
+  );
+}
+
 function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
   const loom = useLoom()!;
   const details = (n.details as { key: string; value: string; secret: boolean }[]).filter((d) => !MODEL_KEYS.has(d.key));
@@ -694,6 +748,7 @@ function EntityView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
           ...(detail("conditions") ? [{ icon: "signal" as IconName, label: detail("conditions")! }] : []),
         ]}
       />
+      {n.now && <RightNow n={n} edit={(body) => editEntity(loom.campaignId, n, body, onChange)} />}
       <Section title="Threads" icon="thread" items={n.threads} initial={6} render={(r: Ref) => <li key={r.id}><RefLink r={r} /> <span className="text-xs text-muted">{r.sub}</span></li>} />
       <Section
         title="Ties"

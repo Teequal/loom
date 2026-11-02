@@ -1,3 +1,5 @@
+import { ENTITY_STATUSES, HEALTH } from "./entity-fields";
+import { CONDITIONS } from "./rules";
 import { THREAD_ROLES } from "./world/links";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
@@ -78,6 +80,17 @@ async function lookups(campaignId: number) {
 
 const present = <T>(xs: (T | null | undefined)[]) => xs.filter((x): x is T => x != null);
 
+// What the DM can change directly on a character or item: the facts the engine checks first.
+function nowState(e: typeof schema.entities.$inferSelect, holds: { fromEntityId: number }[], all: (typeof schema.entities.$inferSelect)[]) {
+  const statuses = ENTITY_STATUSES[e.type];
+  if (e.type === "item") {
+    const shared = e.traits.possession === "shared" || holds.length > 1;
+    return { statuses, status: e.status ?? "intact", holder: shared ? null : (holds[0]?.fromEntityId ?? 0), holders: shared ? null : all.filter((x) => x.type === "pc" || x.type === "npc").map((x) => ({ id: x.id, name: x.name })) };
+  }
+  if (e.type !== "pc" && e.type !== "npc") return null;
+  return { statuses, status: e.status ?? "alive", health: e.traits.health ?? null, healths: HEALTH, conditions: e.traits.conditions ?? [], conditionNames: [...Object.keys(CONDITIONS), ...[1, 2, 3, 4, 5, 6].map((n) => `exhaustion ${n}`)] };
+}
+
 async function entityNode(campaignId: number, id: number) {
   const L = await lookups(campaignId);
   const e = L.ent.get(id);
@@ -155,6 +168,7 @@ async function entityNode(campaignId: number, id: number) {
     status: e.status,
     attitude: e.attitude,
     importance: e.importance,
+    now: nowState(e, relations.filter((r) => r.type === "holds" && r.toEntityId === e.id), [...L.ent.values()]),
     activity: activity && { band: activity.band, lastSession: activity.lastSession },
     momentum: momentum?.band ? { band: momentum.band, because: momentum.because } : null,
     properties,
