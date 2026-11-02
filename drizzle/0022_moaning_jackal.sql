@@ -1,0 +1,1 @@
+ALTER TABLE `thread_entities` ADD `role_source` text;

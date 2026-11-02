@@ -1,3 +1,4 @@
+import { THREAD_ROLES } from "./world/links";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import { type EntityTraits, hasTrait, traitText } from "./entity-fields";
@@ -215,7 +216,13 @@ async function threadNode(campaignId: number, id: number) {
     secret: t.secret,
     stakes: t.stakes ? { text: t.stakes, secret: meta("stakes") } : null,
     deadline: t.deadline ? { text: t.deadline, secret: meta("deadline") } : null,
-    involves: present(links.map((l) => L.entRef(l.entityId))),
+    involves: present(links.map((l) => L.entRef(l.entityId))).map((r) => {
+      const l = links.find((x) => x.entityId === r.id);
+      return { ...r, role: l?.role ?? "involved", roleMine: l?.roleSource === "dm" };
+    }),
+    roles: Object.entries(THREAD_ROLES).map(([id, d]) => ({ id, says: d.says })),
+    stakesLevel: t.stakesLevel,
+    stakesMine: t.fieldMeta.stakesLevel?.source === "dm",
     // A link recorded both ways shows once, with both notes.
     linked: [
       ...tlinks

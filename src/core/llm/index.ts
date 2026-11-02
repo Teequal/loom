@@ -34,6 +34,7 @@ const FEATURE_MODELS: Record<string, string> = {
   hook: "claude-opus-5-5", // a starter campaign from a random hook, for someone brand new
   suggest: "claude-opus-5-5", // between-session prep: quality over speed
   enrich: "claude-opus-5-5", // one-off backfill of entity details from stored recaps
+  parts: "claude-sonnet-5-5", // who plays what in each thread, and how much it matters: read after notes are saved
   infer: "claude-sonnet-5-5", // the property model's pass over all recaps: what NPCs are like, how they stand (blanks only)
   questions: "claude-sonnet-5-5", // what a recap leaves unclear: short, alongside the recap's own extraction
   aftermath: "claude-sonnet-5-5", // what a fight leaves behind, tied to threads

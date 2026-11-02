@@ -805,7 +805,16 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
       - **Also fixed:** a faction's name describing a thing ("a Ka'Anshar tabard", "the Ka'Anshar chapel") no longer counts as the faction being present; followed by a verb ("the Red Hand attacks"), it still does. This had cost 3 options in one Arlen moment.
       - **Live** (Haiku, the six moments twice): 34 of 36 shown at 6.9 s average. The cascade fired 4 times ("the note" twice, "the runner"), and one option with nothing left was rejected. Arlen moment ×3 after the faction fix: 9 of 9 shown.
       - 12 crafted checks (363/363).
-    - [ ] Stage 4: storage, extraction and typed editing.
+    - [ ] **Stage 4: storage, extraction and typed editing** (started 2 Nov). Re-ordered: what the moves can use first, moving the tables last.
+      - [x] **Parts and stakes from notes** (`src/core/thread-parts.ts`, migration `0022`). Real Duradan's 88 thread links all say "involved" and no thread has a stakes level, and the moves are built from these.
+        - `readThreadParts` (Sonnet, new feature `parts`) reads the stored recaps for each blank part and stakes level. Every value needs a quote found in the notes or the thread's summary, or it's left out. Each is read once (`role_source` "read" marks what the notes didn't support), so later saves only pay for new links.
+        - **Runs after notes are saved** (in the background) and after a hook. `npm run loom -- parts --campaign <id>` backfills; one `undo --batch` takes it back. Real Duradan hasn't been run: it fills in by itself the next time its notes are saved.
+        - **Equal citizens:** values are source "inferred", fill blanks only, and never touch the DM's. History and undo use the change kind `thread-detail`.
+        - **Editing:** the inspector's thread view has "How much it matters" (a dial) and a part picker beside each person, saved as the DM's.
+        - **Measured, temporary copy of Duradan (deleted):** 61 of 88 parts and 32 of 33 stakes filled, 24 s, $0.076. Against the enriched copy's hand-set values: 37 of 58 parts the same, most of the rest arguable (Varek "cause" vs "seeker"), and all 31 comparable stakes within one step. Places were often called "victim"; the prompt now says a place is "place" (not re-measured).
+        - **Effect on options, not proven:** the same 11 moments on Haiku with and without parts: 10/10 and 9/10 expected threads, 1 and 2 dropped, 6.1 s and 5.0 s, about the same cost. One unblind run each; the options read differently, not clearly better.
+      - [ ] Typed editing of conditions, health and who holds what.
+      - [ ] One `links` table replacing `entity_relations`, `thread_entities`, `thread_links`. Held back: the graph already reads them as links, so it's a risky move of 28 files and Jacob's real data for nothing a DM would see. Do it only if something needs it.
     - [ ] Stage 5: plans for Develop, fights and prep ideas.
 
 - [x] **Step 17: UX fixes and feel before public testing** (26–27 Oct; review in [docs/ux-review-2026-10-26.md](docs/ux-review-2026-10-26.md)). Auth and accounts are deferred (Jacob: "hold off right now").

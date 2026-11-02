@@ -89,7 +89,9 @@ export async function historyOf(campaignId: number, entity: { id: number; name: 
     }
     const field = r.field.replace(/^traits\./, "").replace(/^(?:state|disposition)\./, "").replace(/^goals\.(g\d+)\./, "goal $1 ").replace(/LocationId$/, " location").replace(/Id$/, "").replace(/_/g, " ");
     const text =
-      r.kind === "interplay"
+      r.kind === "thread-detail"
+        ? `in "${r.subject}": ${r.field === "stakesLevel" ? `stakes ${(r.after as { stakesLevel?: number })?.stakesLevel ?? "cleared"}` : `part: ${(r.after as { role?: string })?.role}`}`
+        : r.kind === "interplay"
         ? (r.after as { on?: boolean; name?: string; handle?: string })?.on
           ? `now ${(r.after as { name: string }).name}: ${(r.after as { handle: string }).handle}`
           : `no longer ${(r.after as { name?: string })?.name ?? "so"}`

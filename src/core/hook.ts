@@ -1,3 +1,4 @@
+import { readThreadParts } from "./thread-parts";
 import { eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import { z } from "zod";
@@ -47,6 +48,7 @@ export async function startFromHook(campaignId: number, input: { party: string; 
   const everything = new Set(numberItems(file.proposal).map((i) => i.n));
   const must = new Set(reviewed.filter((r) => r.tier === "must").map((r) => r.item.n));
   const applied = await applyProposal(file, new Set(), undefined, new Set([...everything].filter((n) => must.has(n))));
+  await readThreadParts(campaignId).catch(() => null);
   // What the world now holds, for the GM to see before they begin.
   const ents = await db.select({ id: schema.entities.id, name: schema.entities.name, type: schema.entities.type }).from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
   const threads = await db.select({ id: schema.threads.id, title: schema.threads.title }).from(schema.threads).where(eq(schema.threads.campaignId, campaignId));

@@ -1,4 +1,5 @@
 // Loom command-line tool for the Phase 1 spike. Run with: npm run loom -- <command>
+import { readThreadParts } from "@/core/thread-parts";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { desc, eq, isNull, max } from "drizzle-orm";
@@ -509,6 +510,15 @@ async function main() {
       writeFileSync(out, JSON.stringify(file, null, 2));
       if (args.includes("--save-only")) return console.log(`Saved ${out} (review it with: apply ${out})`);
       await reviewAndApply(file, out);
+      break;
+    }
+    case "parts": {
+      // Explicit campaign only: it writes to the campaign straight away (one undo takes it back).
+      const campaignId = Number(flag(args, "campaign"));
+      if (!campaignId) return console.log("parts needs --campaign <id>");
+      const r = await readThreadParts(campaignId, { model: flag(args, "model") });
+      if (!r) return console.log("Nothing left to read: every part and stake is set.");
+      console.log(`Read ${r.parts} of ${r.of} parts and ${r.stakes} stakes (${r.skipped} without evidence left out) · ${r.model} · ${(r.latencyMs / 1000).toFixed(1)} s · ${usd(r.costUsd)}\nTo take it back: undo --batch "${r.batch}"`);
       break;
     }
     case "apply": {

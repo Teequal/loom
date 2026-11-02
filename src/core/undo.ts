@@ -1,3 +1,4 @@
+import { reverseThreadDetail } from "./thread-parts";
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import { RELATION_LAWS } from "./rules";
@@ -138,6 +139,9 @@ async function reverse(c: Change): Promise<string | null> {
           .where(eq(schema.threads.id, c.threadId));
         if (after?.eventId != null) await db.delete(schema.threadEvents).where(eq(schema.threadEvents.id, Number(after.eventId)));
       }
+      return null;
+    case "thread-detail":
+      if (c.threadId != null && before) await reverseThreadDetail(c.threadId, before);
       return null;
     case "interplay":
       return null; // a record of an interplay starting or stopping; it follows its parts, nothing to put back

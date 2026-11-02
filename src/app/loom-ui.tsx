@@ -520,7 +520,15 @@ function Inspector({ trail, setTrail }: { trail: Ref[]; setTrail: (t: Ref[]) => 
             }}
           />
         )}
-        {shown?.kind === "thread" && <ThreadView n={shown} />}
+        {shown?.kind === "thread" && (
+          <ThreadView
+            n={shown}
+            onChange={(n) => {
+              cache.current.set(key, n);
+              setNode(n);
+            }}
+          />
+        )}
         {shown?.kind === "moment" && <MomentView n={shown} />}
         {shown?.kind === "session" && <SessionView n={shown} />}
       </div>
@@ -809,7 +817,19 @@ function DetailRow({ label, value, secret = false }: { label: string; value: str
   );
 }
 
-function ThreadView({ n }: { n: Node }) {
+const STAKES = ["Not set", "A loose end", "A small matter", "It matters", "A big problem", "The campaign turns on it"];
+const roleWord = (role: string) => (role === "involved" ? "part not known" : role);
+
+function ThreadView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
+  const loom = useLoom()!;
+  const [editError, setEditError] = useState("");
+  const edit = (body: object) =>
+    post<Node>("/api/loom/edit", { campaignId: loom.campaignId, threadId: n.id, ...body })
+      .then((next) => {
+        setEditError("");
+        onChange(next);
+      })
+      .catch((e) => setEditError(e.message));
   return (
     <>
       <Head n={n} chips={[n.firstSeen && `since s${n.firstSeen}`, n.lastTouched && n.lastTouched !== n.firstSeen && `last s${n.lastTouched}`, n.secret && "GM only"]} />
@@ -828,8 +848,12 @@ function ThreadView({ n }: { n: Node }) {
           {n.deadline.secret && <Lock />}
         </p>
       )}
+      <div className="mt-3">
+        <Steps label="How much it matters" steps={STAKES} value={n.stakesLevel ?? 0} onChange={(i) => edit({ action: "stakes", level: i || null })} />
+      </div>
+      {editError && <p className="mt-1 text-xs text-danger">{editError}</p>}
       <Properties items={n.properties} />
-      <Section title="Involves" items={n.involves} initial={8} render={(r: Ref) => <li key={r.id}><RefLink r={r} /> <span className="text-xs text-muted">{r.sub}{r.status && !["alive", "intact"].includes(r.status) ? ` · ${r.status}` : ""}</span></li>} />
+      <Section title="Involves" items={n.involves} initial={8} render={(r: Ref & { role: string; roleMine: boolean }) => <li key={r.id}><RefLink r={r} /> <select aria-label={`${r.name}'s part`} className="quiet text-xs" value={r.role} onChange={(e) => edit({ action: "part", entityId: r.id, role: e.target.value })}>{n.roles.map((x: { id: string; says: string }) => <option key={x.id} value={x.id} title={x.says}>{roleWord(x.id)}</option>)}</select> <span className="text-xs text-muted">{r.sub}{r.status && !["alive", "intact"].includes(r.status) ? ` · ${r.status}` : ""}</span></li>} />
       <Section title="Connected threads" items={n.linked} render={(r: any) => <li key={r.id}><RefLink r={r} />{r.note && <span className="text-xs text-muted">: {r.note}</span>}</li>} />
       <Section
         title="History"
