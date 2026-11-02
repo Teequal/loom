@@ -37,7 +37,7 @@ export interface Move {
   source?: string; // the interplay or property it comes from ("conflicted", "candour")
   offers?: string[]; // hand-offs it can offer the players ("Iresia makes a Charisma check to hold the charm")
   surprise?: string; // set when this is the session's surprise: why it's explicable
-  rule?: { name: string; to: string[]; onFail: string; used: boolean; words: string[] }; // the house rule a rule move ends on
+  rule?: { name: string; to: string[]; onFail: string; used: boolean; all?: boolean; words: string[] }; // the house rule a rule move ends on
 }
 
 const endKey = (e: { kind: string; id: number }) => `${e.kind}:${e.id}` as NodeKey;
@@ -87,7 +87,7 @@ export function findMoves(
   threads: SelectedThread[],
   opts: {
     callbacks: { id: number; title: string }[];
-    liveRules: { name: string; why: string; sourceName: string | null; to: string[]; onFail: string; used: boolean }[];
+    liveRules: { name: string; why: string; sourceName: string | null; to: string[]; onFail: string; used: boolean; all?: boolean }[];
     limit?: number;
     steer?: Steer;
     surprise?: { chance: number; seed: string }; // an occasional surprise move (§7.8)
@@ -163,7 +163,7 @@ export function findMoves(
     const t = onThreads[0] ?? threads[0];
     // Which use this is: a rule's cost can grow with use.
     const uses = ruleUsesOf(v).get(r.name)?.session ?? 0;
-    if (t) add({ kind: "rule", rule: { name: r.name, to: r.to, onFail: r.onFail, used: r.used, words: `${r.name} ${r.sourceName ?? ""}`.toLowerCase().match(/[a-z]{5,}/g)?.map((w) => w.replace(/s$/, "")) ?? [] }, threads: [t.id], cast: castOf(partsOf(t)), because: `${r.name} is triggered (${r.why})${uses ? `; this would be use ${uses + 1} this session, so its cost should grow${ruleUsesOf(v).get(r.name)?.lastCost ? ` beyond "${ruleUsesOf(v).get(r.name)!.lastCost}"` : ""}` : ""}`, score: 1 + WEIGHT.rule + Math.min(uses, 3) * 0.1 });
+    if (t) add({ kind: "rule", rule: { name: r.name, to: r.to, onFail: r.onFail, used: r.used, all: r.all, words: `${r.name} ${r.sourceName ?? ""}`.toLowerCase().match(/[a-z]{5,}/g)?.map((w) => w.replace(/s$/, "")) ?? [] }, threads: [t.id], cast: castOf(partsOf(t)), because: `${r.name} is triggered (${r.why})${uses ? `; this would be use ${uses + 1} this session, so its cost should grow${ruleUsesOf(v).get(r.name)?.lastCost ? ` beyond "${ruleUsesOf(v).get(r.name)!.lastCost}"` : ""}` : ""}`, score: 1 + WEIGHT.rule + Math.min(uses, 3) * 0.1 });
   }
   for (const cb of opts.callbacks.slice(0, 2)) {
     const t = threads[0];

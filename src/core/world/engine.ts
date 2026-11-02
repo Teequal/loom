@@ -159,7 +159,8 @@ export function bodyOf(v: View, c: Character) {
 }
 export function capabilities(v: View, c: Character): Capabilities {
   const body = bodyOf(v, c);
-  return capabilitiesOf({ status: c.status, traits: { health: body.health === "dead" ? undefined : body.health, conditions: body.conditions.map((x) => x.name) } });
+  const party = v.g.nodes.get("party:0");
+  return capabilitiesOf({ status: c.status, traits: { health: body.health === "dead" ? undefined : body.health, conditions: body.conditions.map((x) => x.name) } }, party?.kind === "party" ? party.edition : undefined);
 }
 const COMPANION = new Set(["ally", "serves", "family", "romance", "loves", "trusts"]);
 function isCompanion(v: View, c: Character) {
@@ -315,7 +316,8 @@ export function liveRules(v: View): LiveRule[] {
       // Exposure to something, or an event, has to actually happen: being reachable isn't enough.
       // Standing in a place-bound source is the exposure; otherwise the moment has to touch it.
       if ((rule.trigger === "on-exposure" || rule.trigger === "on-event") && !(placeBound && partyThere)) {
-        const touched = ruleWords(`${rule.name} ${source?.name ?? ""}`).find((w) => new RegExp(`\\b${w}`, "i").test(v.reading.text ?? ""));
+        const own = rule.triggerWords.map((w) => w.trim().toLowerCase()).filter(Boolean);
+        const touched = ruleWords(`${rule.name} ${source?.name ?? ""}`).find((w) => new RegExp(`\\b${w}`, "i").test(v.reading.text ?? "")) ?? own.find((w) => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(v.reading.text ?? ""));
         return touched ? { ...base, live: true, why: `the moment touches ${source?.name ?? rule.name}`, text } : { ...base, live: false, why: `nothing in this moment exposes anyone to ${source?.name ?? rule.name}`, text };
       }
       if (rule.trigger === "on-rest" && !/\b(?:rest|sleep|slept|camp|bed|nap|long rest|short rest)/i.test(v.reading.text ?? "")) return { ...base, live: false, why: "nobody rests in this moment", text };

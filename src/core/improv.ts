@@ -26,6 +26,7 @@ import { BODY_PARTS, cascadeDropped, expand, fillSlots, pcOpensClause, refersTo,
 import type { Overrides, RecordFix } from "./situation";
 export type { RecordFix };
 import { capabilitiesOf, checkBeat, checkOnFail, checkPossession, makeTagger, notInScene, type CheckContext, type Possession, type ScaffoldBeat, type Tagger } from "./scaffold";
+import { exhaustionLevel } from "./rules";
 
 // The improv box answers with a scaffold, not free prose. The answer format is built for each
 // request: the "who acts" slot only offers characters allowed to act right now, the thread slot
@@ -46,6 +47,7 @@ export interface ScaffoldOption {
   anchor?: string; // soft plans: the anchor fact it lands ("M2.a1")
   intent?: string; // soft plans: how that fact lands in this moment, in the model's words
   // That move, as it was: kept with the scaffold so a used choice knows what it was (table nudges).
+  owedRule?: string; // a rule this option doesn't end on but the moment still owes
   moveInfo?: { kind: string; source?: string; cast: { name: string; can: string; part?: string }[] };
   on_fail: { target: string; effect: string };
   why: string;
@@ -108,6 +110,10 @@ const VERB_SKILL: [string, RegExp][] = [
   ["Perception", /\b(?:look|watch|listen|scan|peer)\w*/i],
   ["Survival", /\btrack\w*/i],
 ];
+// Skills whose declared action is a roll, not a conversation: nobody asks "what do you do?" of
+// someone already halfway up the wall.
+const ROLLED_SKILLS = ["Athletics", "Acrobatics", "Stealth", "Sleight of Hand"];
+export const rolledSkill = (moment: string) => VERB_SKILL.find(([s, re]) => ROLLED_SKILLS.includes(s) && re.test(moment))?.[0] ?? null;
 export function declaredSkills(moment: string): Set<string> | null {
   const found = DECLARES.filter(([, re]) => re.test(moment)).map(([a]) => a);
   const own = VERB_SKILL.filter(([, re]) => re.test(moment)).map(([s]) => s);
@@ -132,7 +138,7 @@ export const dangerAbility = (what = "") => DANGER_WORDS.find(([, re]) => re.tes
 
 // What a condition does to a roll (SRD), said once on the roll so the GM doesn't have to recall it.
 const AUTO_FAIL = ["paralyzed", "petrified", "stunned", "unconscious"];
-export function conditionNote(h: Hand, conditions: string[], name: string): string | null {
+export function conditionNote(h: Hand, conditions: string[], name: string, edition = "2014"): string | null {
   const has = (...xs: string[]) => xs.filter((x) => conditions.includes(x));
   const check = ["check", "contest", "notice"].includes(h.kind);
   if (h.kind === "save" && (h.ability === "Strength" || h.ability === "Dexterity")) {
@@ -140,7 +146,13 @@ export function conditionNote(h: Hand, conditions: string[], name: string): stri
     if (out.length) return `${name} fails automatically (${out[0]}).`;
   }
   const dis = h.kind === "attack" ? has("poisoned", "frightened", "blinded", "prone", "restrained") : check ? has("poisoned", "frightened") : h.kind === "save" && h.ability === "Dexterity" ? has("restrained") : [];
-  return dis.length ? `With disadvantage (${dis.join(", ")}).` : null;
+  // Exhaustion: 2014 is disadvantage on checks from level 1, and on attacks and saves from 3;
+  // 2024 takes 2 per level off every d20 test.
+  const ex = Math.max(0, ...conditions.map(exhaustionLevel));
+  const d20 = check || h.kind === "attack" || h.kind === "save" || h.kind === "death_save";
+  if (ex && d20 && edition !== "2024" && (check ? ex >= 1 : ex >= 3)) dis.push(`exhaustion ${ex}`);
+  const penalty = ex && d20 && edition === "2024" ? `Take ${ex * 2} off the roll (exhaustion ${ex}).` : null;
+  return [dis.length ? `With disadvantage (${dis.join(", ")}).` : null, penalty].filter(Boolean).join(" ") || null;
 }
 
 export type Hand = {
@@ -515,6 +527,12 @@ export function normaliseHandOff(o: ScaffoldOption, c: CheckContext) {
     if ((o.hand.kind === "check" || o.hand.kind === "contest") && (!o.hand.skill || o.hand.skill === "none") && !(o.hand.ability && o.hand.ability !== "none")) o.hand = { ...o.hand, kind: "question" };
     // Pushing or hiding from someone is against them, so it's a contest.
     if (o.hand.kind === "check" && o.hand.skill === "Athletics" && c.tagger.tagsIn(c.tagger.tag(o.hand.what ?? "")).some((n) => ["npc", "pc"].includes(c.tagger.entityOf(n)?.type ?? ""))) o.hand = { ...o.hand, kind: "contest" };
+    // Persuading is done to people: a talking check "against the river's pull" is against whoever
+    // is in those words, and against nobody if no one is.
+    if ((o.hand.kind === "check" || o.hand.kind === "contest") && ["Persuasion", "Deception", "Intimidation"].includes(o.hand.skill ?? "") && dangerAbility(o.hand.what)) {
+      const person = c.tagger.tagsIn(c.tagger.tag(o.hand.what ?? "")).map((n) => c.tagger.entityOf(n)).find((e) => e?.type === "npc" || e?.type === "faction");
+      o.hand = { ...o.hand, what: person ? `{${person.name}}` : "" };
+    }
     // A danger's own words settle which save it is.
     if (o.hand.kind === "save") {
       const ability = dangerAbility(o.hand.what);
@@ -911,7 +929,7 @@ export async function prepareMoment(campaignId: number, moment: string, opts: Pr
 }
 export type Prepared = Awaited<ReturnType<typeof prepareMoment>>;
 
-export const liveRulesOf = (scene: Scene) => scene.situation.effects.filter((e) => e.live).map((e) => ({ name: e.effect.name, why: e.why, sourceName: e.sourceName, to: e.targets, onFail: e.effect.onFail, used: /moment (?:uses|touches)/.test(e.why) }));
+export const liveRulesOf = (scene: Scene) => scene.situation.effects.filter((e) => e.live).map((e) => ({ name: e.effect.name, why: e.why, sourceName: e.sourceName, to: e.targets, onFail: e.effect.onFail, used: /moment (?:uses|touches)/.test(e.why), all: e.tableWide }));
 
 
 // Bands not worth a line: the middle of each property.
@@ -1002,7 +1020,8 @@ export function priceRule(o: ScaffoldOption, view: View) {
   const pc = o.hand && o.hand.to !== "table" ? view.g.find(o.hand.to) : null;
   if (pc?.kind !== "character" || !o.hand) return;
   const body = view.body.get(pc.key as NodeKey) ?? pc.body;
-  const note = conditionNote(o.hand, [...body.conditions.map((x) => x.name.toLowerCase()), ...(body.health === "unconscious" ? ["unconscious"] : [])], `{${pc.name}}`);
+  const party = view.g.nodes.get("party:0");
+  const note = conditionNote(o.hand, [...body.conditions.map((x) => x.name.toLowerCase()), ...(body.health === "unconscious" ? ["unconscious"] : [])], `{${pc.name}}`, party?.kind === "party" ? party.edition : undefined);
   if (note) o.hand_off.text = `${o.hand_off.text} ${note}`;
 }
 
@@ -1013,12 +1032,44 @@ export function idleRuleBehind(what: string, scene: Scene) {
 }
 
 /** Ends an option on a rule's own roll. */
-export function ownRule(o: ScaffoldOption, rule: { name: string; to: string[]; onFail: string }) {
-  const who = rule.to.length > 1 ? (rule.to.includes(o.hand_off.to) ? o.hand_off.to : "table") : (rule.to[0] ?? "table");
+export function ownRule(o: ScaffoldOption, rule: { name: string; to: string[]; onFail: string; all?: boolean }) {
+  const who = rule.all ? "table" : rule.to.length > 1 ? (rule.to.includes(o.hand_off.to) ? o.hand_off.to : "table") : (rule.to[0] ?? "table");
   o.hand = { ...(o.hand ?? {}), kind: "rule", to: who, mechanic: rule.name };
   o.hand_off = { to: who, ...handText(o.hand) };
   o.on_fail = { target: who, effect: o.on_fail.effect && o.on_fail.target !== "none" ? o.on_fail.effect : rule.onFail };
 }
+
+/**
+ * One option ends on an owed rule's roll. The others are alternatives, so the roll is still owed
+ * whichever the GM picks: they keep their own turn and say so, and using one counts as the rule's use.
+ */
+export function settleRule(o: ScaffoldOption, owed: { name: string; to: string[]; onFail: string; all?: boolean } | undefined, paid: boolean) {
+  if (!owed) return paid;
+  if (!paid && o.hand_off.mechanic === owed.name) return true;
+  if (!paid && (owed.all || owed.to.includes(o.hand_off.to))) {
+    ownRule(o, owed);
+    return true;
+  }
+  if (o.hand_off.mechanic === owed.name && o.hand) {
+    o.hand = { ...o.hand, kind: "question", mechanic: "none" };
+    o.hand_off = { to: o.hand.to, ...handText(o.hand) };
+    o.on_fail = { target: "none", effect: "" };
+  }
+  o.owedRule = owed.name;
+  o.hand_off.text = `${o.hand_off.text} {${owed.name}} is still rolled for ${owed.to.length === 1 && !owed.all ? `{${owed.to[0]}}` : "everyone it reaches"}.`;
+  return paid;
+}
+
+/** A PC who declared something physical or sly gets its roll, not "what do you do?". */
+export function declaredRoll(o: ScaffoldOption, moment: string, c: CheckContext) {
+  const skill = rolledSkill(moment);
+  if (!skill || o.hand?.kind !== "question" || !c.checkTo.includes(o.hand.to) || o.hand.to === "table" || RESOLVED.test(moment)) return false;
+  o.hand = { ...o.hand, kind: skill === "Athletics" && moment.match(/\b(?:shove|grapple|wrestl|tackl)/i) ? "contest" : "check", skill, what: "" };
+  o.hand_off = { to: o.hand.to, ...handText(o.hand) };
+  return true;
+}
+// A moment that already says how it went has no roll left to make.
+const RESOLVED = /\b(?:succeed|fail|manag|makes it|made it|reach(?:es|ed) the|gets? away|got away|without a sound|unnoticed)\w*/i;
 
 export function fitToMove(o: ScaffoldOption, moves: Move[], c: CheckContext, droppedSentences: { label: string; reason: string }[]) {
   const move = moves.find((m) => m.id === o.move);
@@ -1157,6 +1208,7 @@ ${moment}`;
   const droppedSentences: { label: string; reason: string }[] = []; // logged, but the option survived
   let OptionSchema = OptionsSchema.shape.options.element;
   let rulePaid = false;
+  let rollAsked = false;
   const wanted = MIX_FLAVOURS[opts.mix ?? "mix"];
   const showEarly = opts.onOption && !lines.length;
   for (let attempt = 0; attempt < 2 && accepted.length < 2; attempt++) {
@@ -1186,14 +1238,11 @@ ${moment}`;
       const reason = checkOption(o, lists.check);
       if (reason) return rejected.push({ label: o.label, reason });
       // A rule the moment set off is rolled every time: if the model hasn't, the first option does.
-      const owed = moves.find((m) => m.rule?.used)?.rule;
-      if (owed) {
-        if (o.hand_off.mechanic === owed.name) rulePaid = true;
-        else if (!rulePaid && owed.to.includes(o.hand_off.to)) {
-          ownRule(o, owed);
-          rulePaid = true;
-        }
-      }
+      rulePaid = settleRule(o, moves.find((m) => m.rule?.used)?.rule, rulePaid);
+      // What a PC declared gets its roll on the first option that would otherwise only ask them.
+      const skill = rolledSkill(moment);
+      if (skill && o.hand?.skill === skill) rollAsked = true;
+      else if (!rollAsked) rollAsked = declaredRoll(o, moment, lists.check);
       priceRule(o, scene.situation.view);
       accepted.push(o);
       const fits = !wanted.length || (!!o.flavour && wanted.includes(o.flavour));

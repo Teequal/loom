@@ -1,0 +1,1 @@
+ALTER TABLE `effects` ADD `trigger_words` text DEFAULT '[]' NOT NULL;

@@ -162,6 +162,7 @@ export const effects = sqliteTable("effects", {
   escalation: text("escalation").notNull().default(""), // "harder to part with after each use"
   duration: text("duration").notNull().default(""),
   rule: text("rule").notNull().default(""), // the rule in plain words, as the DM would say it
+  triggerWords: text("trigger_words", { mode: "json" }).$type<string[]>().notNull().default([]), // the GM's own words for what sets it off ("crack in the air")
   secret: integer("secret", { mode: "boolean" }).notNull().default(false),
   source: text("source", { enum: SOURCES }).notNull(),
   createdAt: createdAt(),

@@ -900,6 +900,15 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - **Seen, not fixed:** two options can end on the same rule roll. A rule's `check` field holds only "madness roll" or "type and DC not specified", so it isn't shown. An exposure moment worded without the rule's words ("a crack opens in the air") doesn't set it off. Haiku tends to skip the roll for a declared climb. The Develop chain above used Persuasion for "against Pip's fear and the river's pull".
   - 426/426 crafted checks, engine tests pass.
 
+- [x] **Small roll fixes** (2 Nov; migration `0021`).
+  - **A rule's own trigger words:** `effects.trigger_words`, set with `rule words "<name>" "crack in the air; rift"`; `rule draft` proposes them for exposure and event rules. They're phrases the GM picks, specific enough not to fire on any crack in a wall. **Real Duradan's Reality Microfractures has none yet** (set on the enriched copy only).
+  - **An owed rule on every option** (`settleRule`): one option ends on the roll. The others keep their own turn and say "… is still rolled for …", since the GM may pick any of them, and using one counts as the rule's use (`owedRule`).
+  - **A rule that reaches everyone is rolled by everyone** (`all`), not by whoever the option went to.
+  - **Declared action, declared roll** (`declaredRoll`, `rolledSkill`): a climb, a sneak, a theft or a tumble turns the first "what do you do?" to that PC into its check, unless the moment already says how it went.
+  - **Talking checks are against people:** "against Pip's fear and the river's pull" becomes "against Pip", or nothing when no one is named.
+  - **Exhaustion:** 2014 is disadvantage on checks from level 1 and on attacks and saves from 3; 2024 takes 2 per level off every d20 test, and level 5 doesn't stop movement. `Party.edition` carries the edition. The moment can state it ("at exhaustion level 2").
+  - Live, Haiku, enriched copy: "a crack opens in the air" sets the rule off, and "Everyone makes a Reality Microfractures roll"; Iresia's climb got Athletics and her sneak Stealth. 441/441 crafted checks.
+
 ## Entity model build (docs/entity-model.md)
 
 - [x] Step 1: Schema with provenance (migration `drizzle/0001`):

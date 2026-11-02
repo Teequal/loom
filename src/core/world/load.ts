@@ -47,7 +47,7 @@ export interface LogEvent {
   failText?: string; // what its failure would cost, as written, for a rule to go further next time
   payloads: string[]; // what a used option or step delivered (beat plans), so it isn't made twice
 }
-type Scaffoldish = { hand?: { kind?: string; to?: string; mechanic?: string }; hand_off?: { to?: string; kind?: string; mechanic?: string }; setup?: { payload?: string }[]; on_fail?: { effect?: string } };
+type Scaffoldish = { owedRule?: string; hand?: { kind?: string; to?: string; mechanic?: string }; hand_off?: { to?: string; kind?: string; mechanic?: string }; setup?: { payload?: string }[]; on_fail?: { effect?: string } };
 export const OUTCOME: Record<string, LogEvent["outcome"]> = { succeeded: "success", success: "success", failed: "failure", failure: "failure", partly: "partial", partial: "partial", won: "won", lost: "lost", fled: "fled", "talked it out": "talked" };
 
 type Entity = typeof schema.entities.$inferSelect;
@@ -245,12 +245,12 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
   }
   for (const r of effects) {
     add(
-      { ...base(r, "rule", { summary: r.rule }), kind: "rule", trigger: r.trigger, appliesTo: r.appliesTo, check: r.check, onFail: r.onFail, onSuccess: r.onSuccess, escalation: r.escalation, duration: r.duration, secret: r.secret },
+      { ...base(r, "rule", { summary: r.rule }), kind: "rule", trigger: r.trigger, appliesTo: r.appliesTo, check: r.check, onFail: r.onFail, onSuccess: r.onSuccess, escalation: r.escalation, duration: r.duration, triggerWords: r.triggerWords ?? [], secret: r.secret },
       `rule:${r.id}`,
     );
   }
   for (const s of sessions) add({ ...base({ id: s.id, name: `Session ${s.number}` }, "session", { summary: "" }), kind: "session", number: s.number, date: s.date }, `session:${s.id}`);
-  add({ ...base({ id: 0, name: "The party" }, "party", { meta: metaOf(campaign?.fieldMeta ?? {}) }), kind: "party", inGameDate: campaign?.inGameDate ?? "", tone: campaign?.tone ?? "", direction: campaign?.direction ?? "" }, "party:0");
+  add({ ...base({ id: 0, name: "The party" }, "party", { meta: metaOf(campaign?.fieldMeta ?? {}) }), kind: "party", inGameDate: campaign?.inGameDate ?? "", tone: campaign?.tone ?? "", direction: campaign?.direction ?? "", edition: (campaign?.ruleToggles as Record<string, string> | undefined)?.edition ?? "2014" }, "party:0");
 
   // ---------- Links ----------
   const push = (raw: Omit<Link, "campaignId">, at: string) => {
@@ -411,8 +411,8 @@ function liveLog(rows: LiveRow[]): LogEvent[] {
   const rollOf = (r: LiveRow) => {
     const s = scaffoldOf(r);
     const h = s?.hand_off;
-    if (h?.kind === "roll") return { roller: h.to ?? null, rollKind: s?.hand?.kind ?? "check", mechanic: h.mechanic && h.mechanic !== "none" ? h.mechanic : null };
-    if (s) return { roller: null, rollKind: null, mechanic: null };
+    if (h?.kind === "roll") return { roller: h.to ?? null, rollKind: s?.hand?.kind ?? "check", mechanic: h.mechanic && h.mechanic !== "none" ? h.mechanic : (s?.owedRule ?? null) };
+    if (s) return { roller: null, rollKind: null, mechanic: s.owedRule ?? null };
     const t = rollIn(r.choice);
     return t ? { ...t, mechanic: null } : { roller: null, rollKind: null, mechanic: null };
   };

@@ -194,6 +194,7 @@ export const Rule = Base.extend({
   onSuccess: z.string(),
   escalation: z.string(),
   duration: z.string(),
+  triggerWords: z.array(z.string()),
   secret: z.boolean(),
 });
 export type Rule = z.infer<typeof Rule>;
@@ -202,7 +203,7 @@ export const Session = Base.extend({ kind: z.literal("session"), number: z.numbe
 export type Session = z.infer<typeof Session>;
 
 // The party as one node: it's somewhere (a link), and the PCs belong to it (links).
-export const Party = Base.extend({ kind: z.literal("party"), inGameDate: z.string(), tone: z.string(), direction: z.string() });
+export const Party = Base.extend({ kind: z.literal("party"), inGameDate: z.string(), tone: z.string(), direction: z.string(), edition: z.string() });
 export type Party = z.infer<typeof Party>;
 
 export const AnyNode = z.discriminatedUnion("kind", [Character, Item, Place, Faction, Other, Thread, Moment, Rule, Session, Party]);

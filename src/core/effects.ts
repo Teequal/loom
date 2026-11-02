@@ -22,7 +22,17 @@ export interface EffectInput {
   escalation?: string;
   duration?: string;
   rule?: string;
+  triggerWords?: string[];
   secret?: boolean;
+}
+
+/** The GM's own words for what sets a rule off. */
+export async function setTriggerWords(campaignId: number, name: string, words: string[]) {
+  const rows = await db.select().from(schema.effects).where(eq(schema.effects.campaignId, campaignId));
+  const row = rows.find((r) => r.name.toLowerCase() === name.toLowerCase());
+  if (!row) return false;
+  await db.update(schema.effects).set({ triggerWords: words }).where(eq(schema.effects.id, row.id));
+  return true;
 }
 
 export async function addEffect(campaignId: number, input: EffectInput, source: "dm" | "extracted") {
@@ -47,6 +57,7 @@ export async function addEffect(campaignId: number, input: EffectInput, source: 
     escalation: input.escalation ?? "",
     duration: input.duration ?? "",
     rule: input.rule ?? "",
+    triggerWords: input.triggerWords ?? [],
     secret: input.secret ?? false,
     source,
   };

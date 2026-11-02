@@ -33,10 +33,12 @@ export const CONDITIONS: Record<string, Partial<Capabilities>> = {
   unconscious: { act: false, move: false, speak: false, aware: false, sees: false, hears: false, laws: ["drops whatever it's holding"] },
 };
 
-// Exhaustion: 2014 levels 1-6 (5 = speed 0, 6 = death); 2024 levels 1-6 (6 = death).
-function exhaustion(level: number): Partial<Capabilities> {
+// Exhaustion: 2014 levels 1-6 (5 = speed 0, 6 = death); 2024 levels 1-6 (6 = death, and speed
+// only drops by 5 feet a level). What it does to rolls is in conditionNote (improv.ts).
+export const exhaustionLevel = (condition: string) => Number(condition.trim().toLowerCase().match(/^exhaust(?:ion|ed)\D*(\d)/)?.[1] ?? 0);
+function exhaustion(level: number, edition = "2014"): Partial<Capabilities> {
   if (level >= 6) return { act: false, move: false, speak: false, aware: false, sees: false, hears: false, laws: ["dead from exhaustion"] };
-  if (level >= 5) return { move: false, laws: [`exhaustion ${level}`] };
+  if (level >= 5 && edition !== "2024") return { move: false, laws: [`exhaustion ${level}`] };
   return { laws: [`exhaustion ${level}`] };
 }
 
@@ -46,7 +48,7 @@ export interface Capable {
 }
 
 // Everything that limits a creature right now: status, health band and 5e conditions.
-export function capabilitiesOf(e: Capable): Capabilities {
+export function capabilitiesOf(e: Capable, edition?: string): Capabilities {
   const c: Capabilities = { ...FULL, laws: [], causes: [] };
   const apply = (cause: string, p: Partial<Capabilities>) => {
     for (const k of ["act", "move", "speak", "aware", "sees", "hears"] as const) if (p[k] === false) c[k] = false;
@@ -58,8 +60,8 @@ export function capabilitiesOf(e: Capable): Capabilities {
   if (e.traits.health === "unconscious") apply("unconscious", CONDITIONS.unconscious);
   for (const raw of e.traits.conditions ?? []) {
     const name = raw.trim().toLowerCase();
-    const ex = name.match(/^exhaustion\s*(\d)/);
-    if (ex) apply(name, exhaustion(Number(ex[1])));
+    const ex = exhaustionLevel(name);
+    if (ex) apply(name, exhaustion(ex, edition));
     else if (CONDITIONS[name]) apply(name, CONDITIONS[name]);
   }
   return c;

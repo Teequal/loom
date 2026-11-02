@@ -3,7 +3,7 @@ import { createInterface } from "node:readline/promises";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/core/db/client";
-import { addEffect, loadEffectsInPlay, removeEffect, type EffectInput } from "@/core/effects";
+import { addEffect, loadEffectsInPlay, removeEffect, setTriggerWords, type EffectInput } from "@/core/effects";
 import { findEntity } from "@/core/entity-card";
 import { callLlm } from "@/core/llm";
 import { APPLIES_TO, TRIGGERS, type AppliesTo, type Trigger } from "@/core/rules";
@@ -14,6 +14,7 @@ rule add "<name>" source=<item, place, kind or #thread> trigger=<${TRIGGERS.join
          applies=<${APPLIES_TO.join("|")}> check="…" fail="…" [success="…"] [escalation="…"]
          [duration="…"] [rule="in plain words"] [listed="A; B"] [--secret]
 rule draft "<the rule in your own words>" [source=…]     Loom drafts it, you confirm
+rule words "<name>" "crack in the air; rift"              your own words for what sets it off
 rule remove "<name>"`;
 
 async function resolveSource(campaignId: number, raw: string | undefined) {
@@ -59,6 +60,7 @@ const DraftSchema = z.object({
   escalation: z.string(),
   duration: z.string(),
   secret: z.boolean(),
+  trigger_words: z.array(z.string()), // for on-exposure and on-event rules
   question: z.string(), // if something essential is unclear, one short question for the DM
 });
 
@@ -73,6 +75,7 @@ Fields:
 - check: the roll, e.g. "madness roll", "Wisdom save DC 13". "" if none.
 - on_fail / on_success: what happens. Keep the GM's meaning; don't invent numbers they didn't give.
 - escalation: how it grows over time, if it does. duration: how long effects last, if stated.
+- trigger_words: for on-exposure and on-event rules, 3-6 short words or phrases a GM might type when it happens, specific enough not to fire on ordinary events ("crack in the air", not "crack"). Otherwise [].
 - secret: true if players shouldn't know about it.
 - question: if something essential is unclear (who it affects, what triggers it), one short question; otherwise "".`;
 
@@ -104,6 +107,9 @@ export async function ruleCommand(campaignId: number, args: string[]) {
       console.log(`Saved rule "${row.name}".`);
       return printRules(campaignId);
     }
+    case "words":
+      if (!pos[0] || !pos[1]) return console.log(RULE_USAGE);
+      return console.log((await setTriggerWords(campaignId, pos[0], splitList(pos[1]))) ? `Saved what sets off "${pos[0]}".` : `No rule called "${pos[0]}".`);
     case "remove":
       if (!pos[0]) return console.log(RULE_USAGE);
       return console.log((await removeEffect(campaignId, pos[0])) ? `Removed "${pos[0]}".` : `No rule called "${pos[0]}".`);
@@ -149,6 +155,7 @@ ${pos[0]}`;
           escalation: d.escalation,
           duration: d.duration,
           rule: pos[0],
+          triggerWords: d.trigger_words,
           secret: d.secret,
         },
         "dm", // the DM confirmed it

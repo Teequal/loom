@@ -59,6 +59,7 @@ export const WHOLE_PARTY = /\b(?:the party|everyone|the group|they all|we|the pl
 export const MOMENT_CONDITIONS: [RegExp, string][] = [
   [/\b(?:unconscious|knocked out|out cold|passed out|at 0 hp|at 0 hit points|at zero hit points|dropped to 0)\b/i, "unconscious"],
   [/\bparaly[sz]ed\b/i, "paralyzed"],
+  ...[1, 2, 3, 4, 5, 6].map((n): [RegExp, string] => [new RegExp(`\\bexhaust(?:ion|ed)\\D{0,12}${n}\\b`, "i"), `exhaustion ${n}`]),
   [/\bstunned\b/i, "stunned"],
   [/\bpetrified\b|\bturned to stone\b/i, "petrified"],
   [/\brestrained\b|\btied up\b|\bbound\b/i, "restrained"],
