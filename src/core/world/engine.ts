@@ -109,6 +109,40 @@ export function placeChain(v: View, key: NodeKey | null | undefined): NodeKey[] 
 const within = (v: View, inner: NodeKey | null | undefined, outer: NodeKey | null | undefined) => !!inner && !!outer && placeChain(v, inner).includes(outer);
 const near = (v: View, a: NodeKey | null | undefined, b: NodeKey | null | undefined) => within(v, a, b) || within(v, b, a);
 
+// Where a place is on the map: its own pin, or the nearest pinned place it's inside.
+export function posOf(v: View, key: NodeKey): { x: number; y: number } | null {
+  return pinOf(v, key)?.pos ?? null;
+}
+function pinOf(v: View, key: NodeKey): { pos: { x: number; y: number }; key: NodeKey } | null {
+  for (const k of placeChain(v, key)) {
+    const n = v.g.nodes.get(k);
+    if (n?.kind === "place" && n.pos) return { pos: n.pos, key: k };
+  }
+  return null;
+}
+// A pin on a big place (a region, a city, a district, anything with places inside it) only says
+// roughly where: two things "in Duradan" share its pin without being anywhere near each other.
+function broadPin(v: View, key: NodeKey) {
+  const n = v.g.nodes.get(key);
+  if (n?.kind !== "place") return true;
+  if (n.scale === "region" || n.scale === "settlement" || n.scale === "district") return true;
+  return v.g.linksOf(key, { type: "inside", dir: "in" }).some((l) => v.g.nodes.get(endKey(l.from))?.kind === "place");
+}
+/** Miles between two places on the map, or null when either has no pin (or inherits none). */
+export function milesBetween(v: View, a: NodeKey, b: NodeKey) {
+  const p = posOf(v, a);
+  const q = posOf(v, b);
+  return p && q ? Math.hypot(p.x - q.x, p.y - q.y) : null;
+}
+// How far that is, the way a GM would say it: 5e travel pace on foot, about 3 miles an hour.
+export const ON_HAND_MILES = 0.5;
+export function farWords(miles: number) {
+  if (miles <= ON_HAND_MILES) return "close by";
+  const hours = miles / 3;
+  const time = hours < 1 ? `${Math.max(5, Math.round((hours * 60) / 5) * 5)} minutes` : hours < 8 ? `${Math.round(hours)} hour${Math.round(hours) === 1 ? "" : "s"}` : `${Math.round((miles / 24) * 2) / 2 || 1} day${Math.round((miles / 24) * 2) / 2 > 1 ? "s" : ""}`;
+  return `${miles < 10 ? miles.toFixed(1) : Math.round(miles)} miles, about ${time} on foot`;
+}
+
 // Close enough to walk in on the party: the same small place (a district, building, room or site),
 // or somewhere inside the one the party is in, or the small place the party is inside. Being in the
 // same city or region isn't: someone recorded "in Duradan" hasn't been set up to be on hand.
@@ -220,6 +254,18 @@ export function presenceOf(v: View, key: NodeKey, memo = new Map<NodeKey, Presen
     if (said || reading.broughtIn.has(n.name)) return set({ role: "here", where: "here", standing: "here: the moment brings them in", why: said ? "you said they're here" : "the moment brings them in" });
     if (reading.contacted.has(n.name)) return set({ role: "reachable", where: "elsewhere", standing: placeName ? `at ${placeName}; the players reach them from afar` : "reached from afar", why: "the players reach them from afar" });
     if (isCompanion(v, n) && place && near(v, keyOfNode(place), v.recordedParty && keyOfNode(v.recordedParty))) return set({ role: "here", where: "with-party", standing: "travelling with the party", why: "travelling with the party" });
+    // With pins on the map, distance decides: half a mile or less is on hand, anything further is
+    // that far away (word from them, a sign of them, or a later arrival).
+    // Only pins on small places are precise enough to say "close by"; a big place's pin still says
+    // that somewhere is clearly further off.
+    const a = place ? pinOf(v, keyOfNode(place)) : null;
+    const b = v.party ? pinOf(v, keyOfNode(v.party)) : null;
+    if (a && b && place && !onHand(v, place, v.party!)) {
+      const miles = Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y);
+      const precise = !broadPin(v, a.key) && !broadPin(v, b.key);
+      if (precise && miles <= ON_HAND_MILES) return set({ role: "reachable", where: "nearby", standing: `close by (${place.name}), not with the party`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : "on the map, close by" });
+      if (precise || miles > 2) return set({ role: "reachable", where: "elsewhere", standing: `at ${place.name}, ${farWords(miles)}`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : `on the map, ${farWords(miles)}` });
+    }
     if (place && v.party && onHand(v, place, v.party)) return set({ role: "reachable", where: "nearby", standing: `somewhere around here (${place.name}), not with the party`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : "recorded around here, not with the party" });
     if (place && v.party && near(v, keyOfNode(place), keyOfNode(v.party))) return set({ role: "reachable", where: "elsewhere", standing: place.name === v.party.name ? `somewhere in ${place.name}, not on hand` : `at ${place.name}, not on hand`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : `recorded in ${place.name}, not set up to be on hand` });
     return set({ role: "reachable", where: place ? "elsewhere" : "unknown", standing: place ? `last seen at ${place.name}` : "whereabouts unknown", why: reading.referred.has(n.name) ? "only mentioned in the moment" : place ? "recorded elsewhere" : "whereabouts unknown" });

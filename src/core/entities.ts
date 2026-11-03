@@ -81,6 +81,8 @@ export interface EntityPatch {
   lastKnownLocationId?: number | null;
   actualLocationId?: number | null;
   parentId?: number | null; // the place it's inside, the set it belongs to, the kind it is
+  mapX?: number | null; // a place's pin on the campaign map, in miles
+  mapY?: number | null;
   traits?: EntityTraits;
 }
 

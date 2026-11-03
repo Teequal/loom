@@ -118,6 +118,7 @@ const NAV = [
   { href: "/", label: "At the table", short: "Table" },
   { href: "/prep", label: "Between sessions", short: "Prep" },
   { href: "/campaign", label: "Campaign", short: "Campaign" },
+  { href: "/map", label: "Map", short: "Map" },
 ];
 
 export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
@@ -217,7 +218,7 @@ export function Header({ c }: { c: ReturnType<typeof useCampaigns> }) {
         ) : (
           <select
             aria-label="Campaign"
-            className="quiet max-w-[7.5rem] truncate sm:max-w-[13rem] rounded-md border border-line bg-surface py-1 pl-2.5 text-sm text-muted outline-none hover:text-foreground focus:border-thread/60"
+            className="quiet max-w-[7.5rem] truncate sm:max-w-[11rem] rounded-md border border-line bg-surface py-1 pl-2.5 text-sm text-muted outline-none hover:text-foreground focus:border-thread/60"
             value={c.campaignId ?? ""}
             onChange={(e) =>
               e.target.value === "new"

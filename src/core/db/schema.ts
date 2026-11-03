@@ -94,6 +94,9 @@ export const entities = sqliteTable("entities", {
   // kind, a cell of a faction. Children inherit effects from their parents.
   parentId: integer("parent_id").references((): AnySQLiteColumn => entities.id, { onDelete: "set null" }),
   playerId: integer("player_id").references(() => players.id, { onDelete: "set null" }), // PCs: who plays them
+  // A place's pin on the campaign map, in miles from the map's origin (blank until the GM places it).
+  mapX: real("map_x"),
+  mapY: real("map_y"),
   // Tier 2/3 (story fuel and flavour), validated by TraitsSchema.
   traits: text("traits", { mode: "json" }).$type<EntityTraits>().notNull().default({}),
   fieldMeta: fieldMeta(),

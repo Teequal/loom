@@ -131,6 +131,7 @@ export const Place = Base.extend({
   kind: z.literal("place"),
   status: z.enum(["intact", "destroyed", "occupied", "abandoned", "unknown"]).optional(),
   scale: z.enum(PLACE_SCALES).optional(), // so "in Duradan" isn't "in the tavern"
+  pos: z.object({ x: z.number(), y: z.number() }).optional(), // its pin on the campaign map, in miles
   placeType: z.string().optional(), // as the notes put it: tavern, ruins, woods
   hazards: z.array(z.string()),
   atmosphere: z.array(z.string()),
