@@ -115,6 +115,9 @@ export const TraitsSchema = z
     passive_insight: z.string(),
     // locations
     location_type: z.string(),
+    // Roads, paths and rivers from this place to another (by the other's id), for travel time. A
+    // closed one is a way that's blocked (a wall, a chasm). Read both ways.
+    routes: z.array(z.object({ to: z.number().int(), kind: z.enum(["road", "path", "river", "closed"]), miles: z.number().positive().optional() })),
     hazards: list, // location effects, e.g. mind-affecting butterflies
     atmosphere: list,
     // items
@@ -142,7 +145,7 @@ export type EntityTraits = z.infer<typeof TraitsSchema>;
 export const TRAIT_KEYS = Object.keys(TraitsSchema.shape) as (keyof EntityTraits)[];
 // Structured traits: written by the DM, the CLI, the table or a reviewed inference pass, never as
 // "key: text" by the extractor (its schema can't express them yet).
-export const STRUCTURED_TRAITS = new Set<string>(["goals", "beliefs", "mood", "disposition", "state", "condition_sources", "power", "pull", "cost_severity", "cost_grows", "aims", "aggression", "alert", "danger", "interplay_overrides"]);
+export const STRUCTURED_TRAITS = new Set<string>(["routes", "goals", "beliefs", "mood", "disposition", "state", "condition_sources", "power", "pull", "cost_severity", "cost_grows", "aims", "aggression", "alert", "danger", "interplay_overrides"]);
 // Arrays whose items carry stable ids, and the letter their ids start with.
 export const ID_LISTS: Record<string, string> = { goals: "g", beliefs: "b", aims: "a" };
 export const LIST_TRAITS = new Set<string>([

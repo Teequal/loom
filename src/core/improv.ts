@@ -15,6 +15,7 @@ import { personalLines, spotlightScore, tableSeats } from "./players";
 import { buildScene, type Scene } from "./scene";
 import { echoIds, latentMoves, withoutParty } from "./latent";
 import { offeredLately } from "./world/derived";
+import { canArriveNow, travelWords } from "./world/engine";
 import { findMoves, movesBlock, SURPRISE_CHANCE, type Move, type Surprises } from "./moves";
 import { loadTaste, tasteBlock } from "./taste";
 import { derivedLines, ruleCostLine } from "./world/derived";
@@ -723,7 +724,7 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
   // Who could walk in: those recorded around the party's place. Others send word or leave a sign.
   // With no place recorded for the party there's nothing to measure against, so anyone whose
   // whereabouts are unknown may still arrive (a campaign that hasn't set up its places yet).
-  const nearby = new Set(scene.entities.filter((e) => e.type === "npc" && !present.has(e.name) && (s.presence(e) === "nearby" || (!s.party && s.presence(e) === "unknown"))).map((e) => e.name));
+  const nearby = new Set(scene.entities.filter((e) => e.type === "npc" && !present.has(e.name) && (canArriveNow(s.reach(e)) || (!s.party && s.presence(e) === "unknown"))).map((e) => e.name));
   const possession: Possession = { holders: s.holders, parentOf: s.parentOf, lost: s.lost };
   // A check, contest or attack is for a PC acting on what their player declared; the whole table
   // when the moment is about the whole party.
@@ -1009,7 +1010,7 @@ export function contextPrompt(p: Prepared, moves: Move[], unit = "option") {
 
 WHO MAY ACT
 - Here now (kind "npc"): ${[...p.lists.check.present].filter((n) => p.typeOf.get(n) === "npc").join(", ") || "nobody named; use walk-ons"}
-- Not here but nearby (may arrive, kind "arrival", or send word, kind "remote"): ${p.lists.actors.filter((n) => p.typeOf.get(n) === "npc" && !p.lists.check.present.has(n) && p.lists.check.nearby?.has(n)).join(", ") || "nobody"}. Bring one in only when it pays off their thread, at most one per option; otherwise use walk-ons.
+- Not here but near enough to turn up this scene (may arrive, kind "arrival", or send word, kind "remote"): ${p.lists.actors.filter((n) => p.typeOf.get(n) === "npc" && !p.lists.check.present.has(n) && p.lists.check.nearby?.has(n)).map((n) => { const e = p.scene.situation.entities.find((x) => x.name === n); const t = e && p.scene.situation.reach(e).travel; return t ? `${n} (${travelWords(t)} away: arrives later in the scene, having come from there)` : n; }).join(", ") || "nobody"}. Bring one in only when it pays off their thread, at most one per option; otherwise use walk-ons.
 - Not nearby (never seen in person; they may only send word, kind "remote", or be hinted at by an unnamed sign: a rustle in the shadows, a shape at the window, a token left behind, with a notice roll to catch it): ${p.lists.actors.filter((n) => p.typeOf.get(n) === "npc" && !p.lists.check.present.has(n) && !p.lists.check.nearby?.has(n) && !p.lists.check.remoteOk.has(n)).join(", ") || "nobody"}.
 - Acting in this moment (what they declared is settled by the hand and the world's response, never narrated): ${p.lists.outcomeActors.join(", ") || "no PC in particular"}
 ${p.lists.stated.length ? `- As of this moment: ${p.lists.stated.join("; ")}\n` : ""}${p.lists.check.remoteOk.size ? `- The players reached out to: ${[...p.lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${p.lists.check.possession.holders.size ? `- Who holds what: ${[...p.lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}

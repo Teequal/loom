@@ -224,7 +224,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     } else if (kind === "item") {
       add({ ...b, kind, status: e.status ?? undefined, properties: { known: t.known_properties, true: t.true_properties, cost: t.cost, rarity: t.rarity, power: t.power, pull: t.pull, costSeverity: t.cost_severity, costGrows: t.cost_grows }, sharedPossession: t.possession === "shared" }, b.key);
     } else if (kind === "place") {
-      add({ ...b, kind, status: e.status ?? undefined, placeType: t.location_type, scale: scaleOf(t.location_type, e.name), pos: e.mapX != null && e.mapY != null ? { x: e.mapX, y: e.mapY } : undefined, hazards: list(t.hazards), atmosphere: list(t.atmosphere), danger: t.danger }, b.key);
+      add({ ...b, kind, status: e.status ?? undefined, placeType: t.location_type, scale: scaleOf(t.location_type, e.name), pos: e.mapX != null && e.mapY != null ? { x: e.mapX, y: e.mapY } : undefined, routes: (t.routes ?? []).flatMap((r) => { const to = entityKey(r.to); return to ? [{ to, kind: r.kind, ...(r.miles ? { miles: r.miles } : {}) }] : []; }), hazards: list(t.hazards), atmosphere: list(t.atmosphere), danger: t.danger }, b.key);
     } else if (kind === "faction") {
       const clock = String(t.clock ?? "").match(/(\d+)\s*(?:of|\/)\s*(\d+)/);
       add({ ...b, kind, status: e.status ?? undefined, stance: e.attitude != null ? STANCE[e.attitude] : undefined, goal: t.faction_goal, plan: t.plan, clock: clock ? { filled: Number(clock[1]), of: Number(clock[2]) } : undefined, aims: (t.aims ?? []).map(goalNode), interplayOverrides: overrides(t), aggression: t.aggression, alert: t.alert }, b.key);

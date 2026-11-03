@@ -1,6 +1,6 @@
 import type { SelectedThread } from "./retrieval";
 import { momentumOf, offeredLately, paceOf, ruleUsesOf } from "./world/derived";
-import { activityOf, heat, presenceOf, type View } from "./world/engine";
+import { activityOf, canArriveNow, heat, presenceOf, travelWords, type View } from "./world/engine";
 import { interplaysOf, type Interplay } from "./world/interplays";
 import { propertyOf } from "./world/properties";
 import { THREAD_ROLES } from "./world/links";
@@ -25,6 +25,7 @@ export interface CastMember {
   can: "act" | "arrive" | "away"; // here and able to act; nearby: arrives or sends word; further away: sends word, or only a sign of them shows
   part: "lead" | "support"; // in the move's threads, or here and quiet enough to lend a line
   busy?: boolean; // very active lately: kept brief, and leads fewer moves
+  eta?: string; // how far off they are on the map ("2.6 miles, about 55 minutes on foot"), when pinned
 }
 
 export interface Move {
@@ -117,7 +118,7 @@ export function findMoves(
       if (p.node.kind === "character" && p.node.side === "pc") continue;
       const pr = presenceOf(v, p.node.key as NodeKey, memo);
       if (pr.role === "here") out.push({ name: p.node.name, can: "act", part: "lead", busy: busy(p.node.name) || undefined });
-      else if (pr.role === "reachable" && p.node.kind !== "item") out.push({ name: p.node.name, can: pr.where === "nearby" || p.node.kind === "faction" || (!v.party && pr.where === "unknown") ? "arrive" : "away", part: "lead", busy: busy(p.node.name) || undefined });
+      else if (pr.role === "reachable" && p.node.kind !== "item") out.push({ name: p.node.name, can: canArriveNow(pr) || p.node.kind === "faction" || (!v.party && pr.where === "unknown") ? "arrive" : "away", part: "lead", busy: busy(p.node.name) || undefined, eta: pr.travel ? travelWords(pr.travel) : undefined });
     }
     return out;
   };
@@ -366,7 +367,7 @@ export function movesBlock(moves: Move[], titleOf: Map<number, string>) {
     .map((m) => {
       const leads = m.cast.filter((c) => c.part === "lead");
       const support = m.cast.filter((c) => c.part === "support");
-      const cast = leads.length ? leads.map((c) => `${c.name} (${c.can === "act" ? "here" : c.can === "arrive" ? "nearby: can arrive or send word" : "not nearby: never seen in person; only word from them, or an unnamed sign of them with a notice roll"}${c.busy ? "; very active lately, keep brief" : ""})`).join(", ") : "nobody named: use walk-ons";
+      const cast = leads.length ? leads.map((c) => `${c.name} (${c.can === "act" ? "here" : c.can === "arrive" ? (c.eta ? `${c.eta} away: can arrive later this scene, or send word` : "nearby: can arrive or send word") : c.eta ? `${c.eta} away: never seen in person now; word from them takes that long to come, or they could arrive in that time (say when), or an unnamed sign of them with a notice roll` : "not nearby: never seen in person; only word from them, or an unnamed sign of them with a notice roll"}${c.busy ? "; very active lately, keep brief" : ""})`).join(", ") : "nobody named: use walk-ons";
       return [
         `${m.id} ${m.kind}: ${m.threads.map((t) => `T${t} "${titleOf.get(t) ?? ""}"`).join(" + ")} · cast: ${cast}`,
         support.length && `support (here, one line at most): ${support.map((c) => c.name).join(", ")}`,

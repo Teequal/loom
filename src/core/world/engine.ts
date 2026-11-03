@@ -134,8 +134,76 @@ export function milesBetween(v: View, a: NodeKey, b: NodeKey) {
   const q = posOf(v, b);
   return p && q ? Math.hypot(p.x - q.x, p.y - q.y) : null;
 }
+// Travel time over the map: the fastest way between two pinned places, along roads, paths and
+// rivers where the GM has drawn them, and across country otherwise. 5e's normal pace is 3 miles an
+// hour on a road; across country, the straight line and its detours come to about 2.4 an hour; a
+// river by boat about 4. A closed way can't be crossed directly.
+const SPEED = { road: 3, path: 2.5, river: 4 } as const;
+const ACROSS_COUNTRY = 2.4;
+export interface Travel {
+  miles: number;
+  hours: number;
+  by: "road" | "path" | "river" | "country"; // how most of the way goes
+}
+export function travelOf(v: View, from: NodeKey, to: NodeKey): Travel | null {
+  const a = pinOf(v, from);
+  const b = pinOf(v, to);
+  if (!a || !b) return null;
+  if (a.key === b.key) return { miles: 0, hours: 0, by: "country" };
+  const pins = [...v.g.nodes.values()].filter((n) => n.kind === "place" && n.pos) as Place[];
+  const at = new Map(pins.map((p) => [p.key as NodeKey, p.pos!]));
+  // Every way out of each pinned place: its routes, and the routes others drew to it.
+  const ways = new Map<NodeKey, { to: NodeKey; kind: "road" | "path" | "river" | "closed"; miles?: number }[]>();
+  const addWay = (x: NodeKey, w: { to: NodeKey; kind: "road" | "path" | "river" | "closed"; miles?: number }) => ways.set(x, [...(ways.get(x) ?? []), w]);
+  for (const p of pins) for (const r of p.routes ?? []) {
+    if (!at.has(r.to as NodeKey)) continue;
+    addWay(p.key as NodeKey, { ...r, to: r.to as NodeKey });
+    addWay(r.to as NodeKey, { ...r, to: p.key as NodeKey });
+  }
+  const dist = (x: NodeKey, y: NodeKey) => Math.hypot(at.get(x)!.x - at.get(y)!.x, at.get(x)!.y - at.get(y)!.y);
+  // A blocked way between two places blocks everything inside them too (the tavern is in the city).
+  const blocked = new Set<string>();
+  for (const [x, ws] of ways) for (const w of ws) if (w.kind === "closed") blocked.add(`${x}|${w.to}`);
+  const chain = new Map<NodeKey, NodeKey[]>();
+  const up = (k: NodeKey) => chain.get(k) ?? (chain.set(k, placeChain(v, k)), chain.get(k)!);
+  const isBlocked = (x: NodeKey, y: NodeKey) => up(x).some((p) => up(y).some((q) => blocked.has(`${p}|${q}`)));
+  // Dijkstra on hours, over a handful of pins.
+  const best = new Map<NodeKey, { hours: number; miles: number; byRoute: number }>([[a.key, { hours: 0, miles: 0, byRoute: 0 }]]);
+  const kindOf = new Map<NodeKey, Travel["by"]>();
+  const done = new Set<NodeKey>();
+  while (true) {
+    let u: NodeKey | null = null;
+    for (const [k, c] of best) if (!done.has(k) && (u == null || c.hours < best.get(u)!.hours)) u = k;
+    if (u == null || u === b.key) break;
+    done.add(u);
+    const cur = best.get(u)!;
+    const step = (w: NodeKey, miles: number, hours: number, by: Travel["by"]) => {
+      const prev = best.get(w);
+      if (prev && prev.hours <= cur.hours + hours) return;
+      best.set(w, { hours: cur.hours + hours, miles: cur.miles + miles, byRoute: cur.byRoute + (by === "country" ? 0 : miles) });
+      kindOf.set(w, by === "country" ? (kindOf.get(u!) ?? "country") : by);
+    };
+    for (const w of at.keys()) if (w !== u && !isBlocked(u, w)) step(w, dist(u, w), dist(u, w) / ACROSS_COUNTRY, "country");
+    for (const r of ways.get(u) ?? []) if (r.kind !== "closed") step(r.to, r.miles ?? dist(u, r.to), (r.miles ?? dist(u, r.to)) / SPEED[r.kind], r.kind);
+  }
+  const end = best.get(b.key);
+  if (!end) return null;
+  return { miles: end.miles, hours: end.hours, by: end.byRoute >= end.miles / 2 ? (kindOf.get(b.key) ?? "road") : "country" };
+}
+export function travelWords(t: Travel) {
+  const h = t.hours;
+  const days = Math.round((h / 8) * 2) / 2; // a day's travel is about 8 hours on the move
+  const time = h < 1 ? `${Math.max(5, Math.round((h * 60) / 5) * 5)} minutes` : h < 8 ? `${Math.round(h)} hour${Math.round(h) === 1 ? "" : "s"}` : `${days} day${days > 1 ? "s" : ""}`;
+  return `${t.miles < 10 ? t.miles.toFixed(1) : Math.round(t.miles)} miles, about ${time} ${t.by === "country" ? "on foot" : t.by === "river" ? "by river" : `by ${t.by}`}`;
+}
+
 // How far that is, the way a GM would say it: 5e travel pace on foot, about 3 miles an hour.
 export const ON_HAND_MILES = 0.5;
+/** Within this many hours' travel, someone can still arrive during the scene. */
+export const WITHIN_THE_SCENE_HOURS = 1;
+/** Whether someone not here could still turn up during the scene: on hand, or within the hour. */
+export const canArriveNow = (p: Presence) => p.where === "nearby" || (p.travel != null && p.travel.hours <= WITHIN_THE_SCENE_HOURS);
+
 export function farWords(miles: number) {
   if (miles <= ON_HAND_MILES) return "close by";
   const hours = miles / 3;
@@ -222,6 +290,7 @@ function isCompanion(v: View, c: Character) {
 export interface Presence {
   role: Role;
   where: Where;
+  travel?: Travel; // how far they are from the party on the map, when both are pinned
   standing: string; // in words: "lost, last seen at the River Morrow"
   why: string; // for chips and messages
 }
@@ -264,7 +333,8 @@ export function presenceOf(v: View, key: NodeKey, memo = new Map<NodeKey, Presen
       const miles = Math.hypot(a.pos.x - b.pos.x, a.pos.y - b.pos.y);
       const precise = !broadPin(v, a.key) && !broadPin(v, b.key);
       if (precise && miles <= ON_HAND_MILES) return set({ role: "reachable", where: "nearby", standing: `close by (${place.name}), not with the party`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : "on the map, close by" });
-      if (precise || miles > 2) return set({ role: "reachable", where: "elsewhere", standing: `at ${place.name}, ${farWords(miles)}`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : `on the map, ${farWords(miles)}` });
+      const travel = travelOf(v, keyOfNode(place), keyOfNode(v.party!));
+      if (travel && (precise || miles > 2)) return set({ role: "reachable", where: "elsewhere", travel, standing: `at ${place.name}, ${travelWords(travel)}`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : `on the map, ${travelWords(travel)}` });
     }
     if (place && v.party && onHand(v, place, v.party)) return set({ role: "reachable", where: "nearby", standing: `somewhere around here (${place.name}), not with the party`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : "recorded around here, not with the party" });
     if (place && v.party && near(v, keyOfNode(place), keyOfNode(v.party))) return set({ role: "reachable", where: "elsewhere", standing: place.name === v.party.name ? `somewhere in ${place.name}, not on hand` : `at ${place.name}, not on hand`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : `recorded in ${place.name}, not set up to be on hand` });

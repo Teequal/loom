@@ -232,7 +232,7 @@ async function entityNode(campaignId: number, id: number) {
     partOf: e.type !== "location" ? L.entRef(e.parentId) : null,
     contains: L.entities.filter((x) => x.parentId === id || x.lastKnownLocationId === id || x.actualLocationId === id).map((x) => L.entRef(x.id)!).slice(0, 30),
     details: Object.entries(traits)
-      .filter(([, v]) => hasTrait(v))
+      .filter(([k, v]) => hasTrait(v) && k !== "routes")
       .map(([k, v]) => ({ key: k.replace(/_/g, " "), value: traitText(k, v), secret: secret(`traits.${k}`) })),
     ties,
     // Ties that ended with nothing in their place ("once allied with Zara").

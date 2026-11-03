@@ -16,9 +16,13 @@ interface Place {
   y: number | null;
   kind: string;
   status: string | null;
+  routes: { to: number; kind: RouteKind; miles?: number }[];
 }
+type RouteKind = "road" | "path" | "river" | "closed";
+const ROUTE_WORDS: Record<RouteKind, string> = { road: "Road", path: "Path", river: "River", closed: "Blocked" };
 interface MapData {
   party: number | null;
+  travel: Record<number, string>; // how far each place is from the party, by the engine's reckoning
   places: Place[];
   people: { id: number; name: string; placeId: number }[];
 }
@@ -36,6 +40,58 @@ export function MapView() {
         </LoomProvider>
       )}
     </main>
+  );
+}
+
+// The ways out of a place: roads, paths, rivers and blocked ways, which travel time follows.
+function Ways({ sel, places, ways, name, send }: { sel: Place; places: Place[]; ways: { from: number; to: number; kind: RouteKind }[]; name: (id: number) => string; send: (b: object) => Promise<unknown> }) {
+  const [to, setTo] = useState<number | "">("");
+  const [kind, setKind] = useState<RouteKind>("road");
+  return (
+    <div className="mt-3 border-t border-line pt-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted">Ways from here</p>
+      {ways.length > 0 && (
+        <ul className="mt-1 space-y-0.5 text-[13px]">
+          {ways.map((w) => {
+            const other = w.from === sel.id ? w.to : w.from;
+            return (
+              <li key={`${w.from}-${w.to}`} className="flex items-baseline justify-between gap-2">
+                <span>
+                  {ROUTE_WORDS[w.kind]} to {name(other)}
+                </span>
+                <button type="button" className="btn-tertiary text-xs" onClick={() => void send({ route: { from: w.from, to: w.to, kind: null } })}>
+                  Remove
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {places.length > 0 && (
+        <form
+          className="mt-1.5 flex flex-wrap items-center gap-2 text-[13px]"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (to !== "") void send({ route: { from: sel.id, to, kind } }).then(() => setTo(""));
+          }}
+        >
+          <select aria-label="Kind of way" className="quiet" value={kind} onChange={(e) => setKind(e.target.value as RouteKind)}>
+            {(Object.keys(ROUTE_WORDS) as RouteKind[]).map((k) => (
+              <option key={k} value={k}>{ROUTE_WORDS[k]}</option>
+            ))}
+          </select>
+          <span className="text-muted">to</span>
+          <select aria-label="Where it goes" className="quiet" value={to} onChange={(e) => setTo(e.target.value ? Number(e.target.value) : "")}>
+            <option value="">a place on the map…</option>
+            {places.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <button disabled={to === ""} className="btn-secondary text-xs">Add</button>
+        </form>
+      )}
+      <p className="mt-1 text-[12px] text-muted">Travel time follows the ways you draw: a road is quicker than going across country, a river quicker still by boat, and a blocked way can&apos;t be crossed.</p>
+    </div>
   );
 }
 
@@ -150,6 +206,8 @@ function CampaignMap({ campaignId }: { campaignId: number }) {
   for (let y = Math.ceil(top / step) * step; y < top + (h / w) * view.span; y += step) lines.push({ y });
 
   const pinned = data.places.filter((p) => p.x != null && p.y != null);
+  // Every way drawn, once per pair, between places that are on the map.
+  const ways = data.places.flatMap((p) => p.routes.map((r) => ({ from: p.id, ...r }))).filter((w) => posOf(w.from) && posOf(w.to));
   const loose = data.places.filter((p) => p.x == null || p.y == null);
   const party = data.party;
   const sel = selected != null ? byId.get(selected) : null;
@@ -223,6 +281,22 @@ function CampaignMap({ campaignId }: { campaignId: number }) {
               <line key={`y${i}`} y1={toPx({ x: 0, y: l.y! }).py} y2={toPx({ x: 0, y: l.y! }).py} x1={0} x2={w} className="stroke-line" strokeWidth={1} />
             ),
           )}
+          {ways.map((w) => {
+            const a = toPx(posOf(w.from)!);
+            const b = toPx(posOf(w.to)!);
+            return (
+              <line
+                key={`${w.from}-${w.to}`}
+                x1={a.px}
+                y1={a.py}
+                x2={b.px}
+                y2={b.py}
+                strokeWidth={w.kind === "road" ? 2.5 : 1.75}
+                strokeDasharray={w.kind === "path" ? "6 4" : w.kind === "closed" ? "2 5" : undefined}
+                className={w.kind === "river" ? "stroke-thread/70" : w.kind === "closed" ? "stroke-danger/70" : "stroke-foreground/40"}
+              />
+            );
+          })}
           {/* What's close enough to walk in on the party: half a mile around it. */}
           {posOf(party) && <circle cx={toPx(posOf(party)!).px} cy={toPx(posOf(party)!).py} r={Math.max(4, (0.5 / view.span) * w)} className="fill-thread/10 stroke-thread/40" strokeDasharray="3 3" />}
           {pinned.map((p) => {
@@ -262,10 +336,11 @@ function CampaignMap({ campaignId }: { campaignId: number }) {
             )}
           </div>
           <p className="mt-1 text-[13px] text-muted">
-            {sel.id === party ? "The party is here." : distanceTo(sel.id) != null ? `From the party: ${farWords(distanceTo(sel.id)!)}.` : posOf(party) ? "" : "Pin the party's place to see how far it is."}
+            {sel.id === party ? "The party is here." : data.travel[sel.id] ? `From the party: ${data.travel[sel.id]}.` : distanceTo(sel.id) != null ? `From the party: ${farWords(distanceTo(sel.id)!)}.` : posOf(party) ? "" : "Pin the party's place to see how far it is."}
             {sel.x == null && sel.parentId != null && posOf(sel.id) ? ` Shares the pin of ${byId.get(sel.parentId)?.name}.` : ""}
           </p>
           {here(sel.id).length > 0 && <p className="mt-1 text-[13px]"><span className="text-muted">Recorded here:</span> {here(sel.id).map((p) => p.name).join(", ")}</p>}
+          {posOf(sel.id) && <Ways sel={sel} places={data.places.filter((p) => p.id !== sel.id && posOf(p.id))} ways={ways.filter((w) => w.from === sel.id || w.to === sel.id)} name={(id) => byId.get(id)?.name ?? ""} send={send} />}
         </div>
       )}
 

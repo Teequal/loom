@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 import { db, schema } from "./db/client";
 import type { EffectInPlay } from "./effects";
 import { readMoment, type MomentReading } from "./moment-reading";
-import { holdersOf, liveRules, placeChain, presenceOf, profileLine, profileOf, viewOf, type Role, type View } from "./world/engine";
+import { holdersOf, liveRules, placeChain, presenceOf, profileLine, profileOf, viewOf, type Presence as EnginePresence, type Role, type View } from "./world/engine";
 import { loadGraph, type Graph } from "./world/load";
 
 // The scene model: what is true right now, decided by code. Built once per moment from the
@@ -88,6 +88,7 @@ export interface Situation {
   pcs: Entity[];
   party: Entity | null; // where the party is for this moment
   presence: (e: Entity) => Presence;
+  reach: (e: Entity) => EnginePresence; // the engine's whole answer: where, why, and how far on the map
   why: (e: Entity) => string; // why they're where they are, for the chips and the prompt
   profiles: Map<string, SceneProfile>;
   here: Set<string>; // NPCs, factions and items that may act directly (role "here")
@@ -165,6 +166,7 @@ export function buildSituation(world: World, moment: string, overrides: Override
     pcs,
     party,
     presence: (e) => presenceOfRow(e).where,
+    reach: (e) => presenceOfRow(e),
     why: (e) => presenceOfRow(e).why,
     profiles,
     here,
