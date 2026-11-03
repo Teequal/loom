@@ -11,7 +11,7 @@ import { THREAD_ROLES } from "./world/links";
 // The engine's moves are built from these. Manual and read-from-notes values are equal citizens:
 // the DM's always stand, and reading only fills what's still blank.
 
-type Source = "dm" | "inferred";
+type Source = "dm" | "inferred" | "table";
 interface WriteOpts {
   source: Source;
   batch?: string;
@@ -43,8 +43,32 @@ export async function setThreadStakes(threadId: number, level: number | null, op
   return true;
 }
 
-/** Undo for the two writes above. */
+/**
+ * How soon a thread bites (0–3). The DM's value stands; anything else may raise or lower it from
+ * where it is (the table, after a roll that went against the players).
+ */
+export async function setThreadUrgency(threadId: number, level: number, opts: WriteOpts) {
+  const [t] = await db.select().from(schema.threads).where(eq(schema.threads.id, threadId));
+  if (!t) throw new Error("That isn't in the loom any more.");
+  if (opts.source !== "dm" && t.fieldMeta.urgency?.source === "dm") return false;
+  const next = Math.max(0, Math.min(3, level));
+  if ((t.urgency ?? 0) === next) return false;
+  await db.update(schema.threads).set({ urgency: next, fieldMeta: { ...t.fieldMeta, urgency: { source: opts.source, at: new Date().toISOString() } } }).where(eq(schema.threads.id, threadId));
+  await logChanges([{ campaignId: t.campaignId, subject: t.title, threadId, kind: "thread-detail", field: "urgency", before: { field: "urgency", urgency: t.urgency, meta: t.fieldMeta.urgency ?? null }, after: { urgency: next }, source: opts.source, batch: opts.batch, note: opts.note }]);
+  return true;
+}
+
+/** Undo for the writes above. */
 export async function reverseThreadDetail(threadId: number, before: Record<string, unknown>) {
+  if (before.field === "urgency") {
+    const [t] = await db.select().from(schema.threads).where(eq(schema.threads.id, threadId));
+    if (!t) return;
+    const fieldMeta = { ...t.fieldMeta };
+    if (before.meta) fieldMeta.urgency = before.meta as (typeof fieldMeta)[string];
+    else delete fieldMeta.urgency;
+    await db.update(schema.threads).set({ urgency: (before.urgency as number | null) ?? null, fieldMeta }).where(eq(schema.threads.id, threadId));
+    return;
+  }
   if (before.entityId != null) {
     await db.update(schema.threadEntities).set({ role: String(before.role), roleSource: (before.roleSource as string | null) ?? null }).where(and(eq(schema.threadEntities.threadId, threadId), eq(schema.threadEntities.entityId, Number(before.entityId))));
     return;

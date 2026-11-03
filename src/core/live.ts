@@ -8,6 +8,8 @@ import type { RolledResult } from "./db/schema";
 import { applyProposal, numberItems, proposeRecapChanges, type Proposal, type ProposalFile } from "./recap";
 import { reviewProposal, splitRisky } from "./review";
 import { undoBatch } from "./undo";
+import { resultThreadChanges } from "./result-threads";
+import { setThreadUrgency } from "./thread-parts";
 
 // The session in progress, as it happens at the table. Every moment asked about is logged; when
 // the GM uses an option (or writes their own), that choice is extracted straight away, so the
@@ -317,6 +319,10 @@ async function runExtraction(e: Entry) {
       proposal.sub_properties = [...proposal.sub_properties, ...n.subs];
       proposal.pair_weights = [...proposal.pair_weights, ...n.weights];
     }
+    // A result moves the thread its choice was about (result-threads.ts): ours replaces whatever the
+    // reading said about that thread, so it isn't moved twice.
+    const moved = settles && e.choiceKind === "result" && !sideTaken ? resultThreadChanges(settles, e.choiceLabel, clip(e.choice, 110)) : null;
+    if (moved?.updates.length) proposal.thread_updates = [...proposal.thread_updates.filter((u) => !moved.updates.some((m) => m.thread === u.thread)), ...moved.updates];
     const file: ProposalFile = await splitRisky({ kind: "live", campaignId: e.campaignId, sessionNumber: e.sessionNumber, recap: text, proposal });
     mkdirSync("data/proposals", { recursive: true });
     writeFileSync(proposalPath(e), JSON.stringify(file, null, 2));
@@ -330,6 +336,11 @@ async function runExtraction(e: Entry) {
     const confirmed = new Set(auto ? reviewed.filter((r) => r.tier === "must").map((r) => r.item.n) : []);
     started = batch;
     if (applied.length) await applyProposal(file, new Set(must.map((r) => r.item.n)), batch, confirmed);
+    const raised: string[] = [];
+    if (moved?.urgency) {
+      const [t] = await db.select({ title: schema.threads.title, urgency: schema.threads.urgency }).from(schema.threads).where(eq(schema.threads.id, moved.urgency.threadId));
+      if (t && (await setThreadUrgency(moved.urgency.threadId, (t.urgency ?? 0) + moved.urgency.by, { source: "table", batch, note: moved.urgency.note }))) raised.push(`More urgent: ${t.title} (${moved.urgency.note})`);
+    }
     await db
       .update(schema.liveEntries)
       .set({
@@ -337,7 +348,7 @@ async function runExtraction(e: Entry) {
         claimedAt: null,
         batch,
         // "Threads" items already say which thread; details need to say whose.
-        summary: applied.map((r) => `${r.group === "Threads" ? "" : `${r.group}: `}${r.summary}${confirmed.has(r.item.n) ? " (auto-approved)" : ""}`),
+        summary: [...applied.map((r) => `${r.group === "Threads" ? "" : `${r.group}: `}${r.summary}${confirmed.has(r.item.n) ? " (auto-approved)" : ""}`), ...raised],
         questions: must.map((r) => ({ n: r.item.n, group: r.group, summary: r.summary, reasons: r.reasons, evidence: r.evidence, answer: null })),
       })
       .where(eq(schema.liveEntries.id, e.id));

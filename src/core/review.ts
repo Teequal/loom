@@ -159,7 +159,10 @@ export async function reviewProposal(file: ProposalFile): Promise<Reviewed[]> {
         const it = i.item;
         evidence = it.evidence ?? "";
         group = "Threads";
-        summary = `${it.change === "resolved" ? "Resolved" : "Moved on"}: ${title(it.thread)}. ${it.note}`;
+        // A title that ends in its own question mark doesn't get a full stop as well.
+        const t = title(it.thread);
+        const note = it.note.trim().replace(/^./, (c) => c.toUpperCase());
+        summary = `${it.change === "resolved" ? "Resolved" : "Moved on"}: ${t}${/[.?!]$/.test(t) ? "" : "."}${note ? ` ${note}` : ""}`;
         if (it.change === "resolved") must("closes a thread for good");
         break;
       }
