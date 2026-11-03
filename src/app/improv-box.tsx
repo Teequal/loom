@@ -33,7 +33,9 @@ interface Card {
   pillar: string | null;
   surprise?: string | null; // built on the session's surprise: why it's explicable
   latent?: string | null; // a link nobody has made yet: the GM's to keep
+  choices?: { to?: { current: string; options: string[] }; lead?: { current: string; options: string[] } }; // what the GM can change
 }
+type Push = { threadId: number; kind: string; with?: number[]; title: string; label: string };
 interface RecordFix {
   say: string;
   apply: string;
@@ -388,19 +390,41 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
     box.current?.focus({ preventScroll: true });
   }, []);
   const live: Live = { campaignId, entries, reload, model, tone, focusBox, reopen, center };
+  // A thread pushed from its "What could happen next" (here, or from another page by its address).
+  const askRef = useRef(ask);
+  askRef.current = ask;
+  useEffect(() => {
+    const on = (e: Event) => void askRef.current({ push: (e as CustomEvent<Push>).detail });
+    window.addEventListener("loom:push", on);
+    const q = new URLSearchParams(window.location.search);
+    if (q.get("push")) {
+      const push = { threadId: Number(q.get("push")), kind: q.get("kind") ?? "", with: (q.get("with") ?? "").split(",").filter(Boolean).map(Number), title: q.get("title") ?? "this thread", label: q.get("label") ?? "push it" };
+      window.history.replaceState(null, "", "/");
+      setTimeout(() => void askRef.current({ push }), 300);
+    }
+    return () => window.removeEventListener("loom:push", on);
+  }, []);
+  // An option's choices: Loom rewrites that option for who it's for, or who acts.
+  async function retarget(i: number, patch: { to?: string; lead?: string }) {
+    if (!current) throw new Error("Wait a moment: Loom is still finishing.");
+    const r = await post<{ option: Card }>("/api/improv/retarget", { entryId: current.id, index: i, ...patch, model, tone });
+    setCards((cs) => cs.map((c, j) => (j === i ? r.option : c)));
+  }
 
-  async function ask(again?: { steer: string }) {
-    // A steer re-weaves the same moment (with the same corrections); otherwise it's whatever is in the box.
-    const text = again ? asked : moment.trim();
+  async function ask(again?: { steer?: string; push?: Push }) {
+    // A steer re-weaves the same moment (with the same corrections); a pushed thread asks about that
+    // thread's move; otherwise it's whatever is in the box.
+    const push = again?.push;
+    const text = push ? `Push “${push.title}”: ${push.label.toLowerCase()}` : again ? asked : moment.trim();
     if (!text || status === "running") return;
-    const corrections = again ? askedOverrides : overrides;
+    const corrections = again && !push ? askedOverrides : push ? {} : overrides;
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
     setAsked(text);
     setAskedOverrides(corrections);
-    if (!again) {
-      setMoment("");
+    if (!again || push) {
+      if (!push) setMoment("");
       setOverrides({});
     }
     release();
@@ -426,7 +450,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
       const res = await fetch("/api/improv", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaignId, moment: text, model, tone, mix, steer: again?.steer, overrides: corrections, surprises: prefs.surprises }),
+        body: JSON.stringify({ campaignId, moment: text, model, tone, mix, steer: again?.steer, overrides: corrections, surprises: prefs.surprises, push: push ? { threadId: push.threadId, kind: push.kind, with: push.with } : undefined }),
         signal: controller.signal,
       });
       if (!res.ok || !res.body) {
@@ -782,6 +806,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                   saved={state === "used" ? current?.developments : undefined}
                   result={state === "used" ? entries.find((e) => e.parentId === current?.id && e.choiceKind === "result") : undefined}
                   votable={current ? { entryId: current.id, n: i, vote: current.votes?.[i] } : undefined}
+                  onRetarget={current && !current.choiceKind ? (patch) => retarget(i, patch) : undefined}
                 />
               );
             })}
@@ -1500,6 +1525,51 @@ function Headline({ card, n, onOpen, leaving, settled = false }: { card: Card; n
   );
 }
 
+// What the GM can change on an option before using it: who it's for, and who acts. Changing one
+// rewrites that option on the same thread and move.
+function Choices({ choices, onChange }: { choices: Card["choices"]; onChange: (patch: { to?: string; lead?: string }) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (!choices?.to && !choices?.lead) return null;
+  const pick = async (patch: { to?: string; lead?: string }) => {
+    setBusy(true);
+    setError("");
+    try {
+      await onChange(patch);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't rewrite it.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-muted">
+      {choices.to && (
+        <label className="flex items-center gap-1.5">
+          For
+          <select className="quiet text-foreground" disabled={busy} value={choices.to.current} onChange={(e) => pick({ to: e.target.value, lead: choices.lead?.current })}>
+            {choices.to.options.map((o) => (
+              <option key={o} value={o}>{o === "table" ? "everyone" : o}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {choices.lead && (
+        <label className="flex items-center gap-1.5">
+          Who acts
+          <select className="quiet text-foreground" disabled={busy} value={choices.lead.current} onChange={(e) => pick({ lead: e.target.value, to: choices.to?.current })}>
+            {choices.lead.options.map((o) => (
+              <option key={o} value={o}>{o}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      {busy && <span className="text-thread">Rewriting this one…</span>}
+      {error && <span className="text-danger">{error}</span>}
+    </div>
+  );
+}
+
 // A link nobody has made is only a hint until the GM keeps it; kept, it's one of their secrets.
 function KeepLink({ text: raw }: { text: string }) {
   const loom = useLoom();
@@ -1532,6 +1602,7 @@ function OptionCard({
   saved,
   result,
   votable,
+  onRetarget,
 }: {
   card: Card;
   n: number;
@@ -1545,6 +1616,7 @@ function OptionCard({
   saved?: unknown[];
   result?: Entry; // how its roll, fight or choice turned out, once recorded
   votable?: { entryId: number; n: number; vote?: VoteValue };
+  onRetarget?: (patch: { to?: string; lead?: string }) => Promise<void>;
 }) {
   const [copied, setCopied] = useState(false);
   const showWhy = usePrefs().why;
@@ -1588,6 +1660,7 @@ function OptionCard({
         </p>
       )}
       {card.latent && <KeepLink text={card.latent} />}
+      {onRetarget && state !== "used" && <Choices choices={card.choices} onChange={onRetarget} />}
       {card.why && showWhy && !card.surprise && !card.latent && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
       {result && (
         <p className="mt-3 flex flex-wrap items-baseline gap-2 text-[13px]">

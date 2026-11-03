@@ -240,6 +240,7 @@ export interface ImprovOption {
   scaffold: ScaffoldOption; // kept for the flavour pass
   surprise?: string | null; // built on the surprise move: why it's explicable
   latent?: string | null; // built on a link nobody has made: the GM's to keep
+  choices?: OptionChoices; // what the GM can change on it: who it's for, who acts
 }
 
 // How names go in and what a scaffold is: shared by improv options and Develop's chain steps.
@@ -799,6 +800,17 @@ export interface ImprovOptions {
   beatPlans?: boolean | "soft"; // true: the engine plans each beat; "soft": an anchor per option (beat-plans.ts); default from LOOM_BEAT_PLANS
   onTrace?: (stage: "prompt" | "raw", data: unknown) => void; // for a step-by-step view of one call (debugging, explainers)
   onReading?: (r: MomentRead) => void; // what Loom picked out before writing, for the page to show while it writes
+  // The GM chose a thread and a move for it (a thread's "What could happen next"): every option is
+  // built on that move.
+  push?: { threadId: number; kind?: string; with?: number[] }; // with: the other threads the move joins (a collision's partner)
+  // The GM chose who an option is for, or who acts in it (an option card's choices).
+  force?: { to?: string; lead?: string };
+}
+
+/** What the GM can change on an option, with the choices the engine allows. */
+export interface OptionChoices {
+  to?: { current: string; options: string[] }; // who it's handed to: a PC, or "table"
+  lead?: { current: string; options: string[] }; // the NPC who acts in it
 }
 
 /** What Loom picked out of the moment and the records before the model writes: names only. */
@@ -834,6 +846,7 @@ export function completedOptions(text: string, key = "options", from = 0): strin
 
 export interface PrepareOptions {
   mode?: "ranked" | "all";
+  include?: number[]; // threads the GM chose: always in play, the first at the top
   overrides?: Overrides;
   focused?: boolean;
   threads?: number;
@@ -872,6 +885,11 @@ export async function prepareMoment(campaignId: number, moment: string, opts: Pr
     mode === "all"
       ? allThreads.map((t) => ({ ...t, score: 0, reasons: [] as string[], detail: "full" as const, guaranteed: false }))
       : selectThreads(await retrieveThreads(campaignId, moment, Number.POSITIVE_INFINITY, meaning), mentioned, { ...budget.threads, exact: opts.threads });
+  for (const id of [...(opts.include ?? [])].reverse()) {
+    const at = threads.findIndex((t) => t.id === id);
+    const t = at >= 0 ? threads.splice(at, 1)[0] : allThreads.find((x) => x.id === id);
+    if (t) threads.unshift({ ...t, score: Math.max(threads[0]?.score ?? 1, "score" in t ? (t.score as number) : 0), reasons: ["the GM chose it"], detail: "full", guaranteed: true });
+  }
   if (threads.length === 0) throw new Error("This campaign has no open threads yet.");
 
   const storyConditions = new Map(
@@ -1123,14 +1141,32 @@ export function fitToMove(o: ScaffoldOption, moves: Move[], c: CheckContext, dro
 
 // mode "ranked" selects threads adaptively; "all" sends every open thread (baseline for comparison).
 export async function improv(campaignId: number, moment: string, mode: "ranked" | "all" = "ranked", model?: string, opts: ImprovOptions = {}) {
-  const P = await prepareMoment(campaignId, moment, { ...opts, mode });
+  const P = await prepareMoment(campaignId, moment, { ...opts, mode, include: opts.push ? [opts.push.threadId, ...(opts.push.with ?? [])] : undefined });
+  // Handing every option to one PC replaces the quiet-player line.
+  if (opts.force?.to) P.tableBlock = "";
   const { threads, scene, lists, seats, lines, callbacks, titleOf, mentioned, meaning, meaningNote, provider, base, sessionNumber } = P;
   // The engine's moves for this moment: what could happen, on which threads, with whom (moves.ts).
   // A surprise now and then (the GM's setting), seeded by the moment and how far the session has
   // got, so asking the same thing again gives the same answer.
   const surprise = { chance: SURPRISE_CHANCE[opts.surprises ?? "rare"], seed: `${campaignId}|${moment}|${scene.situation.view.g.log.length}|${opts.steer ?? ""}` };
-  const latent = latentMoves(scene.situation.view, threads, P.meaning?.facets ?? [], surprise.seed);
-  const moves = findMoves(scene.situation.view, threads, { callbacks, liveRules: liveRulesOf(scene), surprise, taste: P.taste, latent });
+  const latent = opts.push ? [] : latentMoves(scene.situation.view, threads, P.meaning?.facets ?? [], surprise.seed);
+  let moves = findMoves(scene.situation.view, threads, { callbacks, liveRules: liveRulesOf(scene), surprise: opts.push ? undefined : surprise, taste: P.taste, latent, limit: opts.push ? 40 : undefined });
+  // The GM's chosen move is the only one: every option is a different take on it.
+  if (opts.push) {
+    const { threadId, kind, with: partners = [] } = opts.push;
+    const same = (m: Move) => [threadId, ...partners].every((t) => m.threads.includes(t));
+    const pick = moves.find((m) => m.kind === kind && same(m)) ?? moves.find((m) => m.threads[0] === threadId && (!kind || m.kind === kind)) ?? moves.find((m) => m.threads.includes(threadId) && m.kind !== "wildcard") ?? moves.find((m) => m.threads.includes(threadId));
+    if (pick) moves = [{ ...pick, id: "M1" }];
+  }
+  // The GM's chosen lead acts in it; whoever else led lends a line at most.
+  if (opts.force?.lead) {
+    const lead = opts.force.lead;
+    moves = moves.map((m) => {
+      const cast = m.cast.map((c) => (c.name === lead ? { ...c, part: "lead" as const } : c.part === "lead" && c.can === "act" ? { ...c, part: "support" as const } : c));
+      if (!cast.some((c) => c.name === lead)) cast.unshift({ name: lead, can: lists.check.present.has(lead) ? "act" : "arrive", part: "lead" });
+      return { ...m, cast };
+    });
+  }
   const places = placeContext(scene.situation);
   {
     const s = scene.situation;
@@ -1160,7 +1196,7 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   let OptionsSchema = optionsSchema(stableFormat(campaignId) ? stableLists(P, momentLists) : momentLists);
   const prompt = `${contextPrompt(P, moves)}${planIds.length ? `${plansBlock(scene.situation.view, plans)}\nPLANNED BEATS\n${PLAN_TEXT}\n` : ""}${anchorIds.length ? `${anchorsBlock(anchors, [])}\nSOFT PLAN\n${SOFT_TEXT}\n` : ""}
 ${lengthFor(moment, P.taste.length)}
-MIX: ${MIXES[opts.mix ?? "mix"]}${
+MIX: ${MIXES[opts.mix ?? "mix"]}${opts.push ? "\nPUSH (the GM chose this move): build every option on M1, each a different take on it." : ""}${opts.force?.to ? `\nHAND EVERY OPTION TO: ${opts.force.to === "table" ? "the table" : opts.force.to}.` : ""}${opts.force?.lead ? `\nWHO ACTS (the GM chose): ${opts.force.lead} acts in every option.` : ""}${
     opts.steer
       ? /^bring in /i.test(opts.steer)
         ? `\nSTEER (the GM asked for this; follow it): every option brings in ${opts.steer.replace(/^bring in /i, "")}, as kind "arrival" or "remote" if they aren't here, tied to their threads.`
@@ -1209,7 +1245,23 @@ ${moment}`;
     // Built on the surprise move: say so, with why it's explicable.
     surprise: moves.find((m) => m.id === o.move)?.surprise ?? null,
     latent: moves.find((m) => m.id === o.move)?.latent ?? null,
+    choices: choicesFor(o),
   });
+  // What the GM may change on an option: who it's for (any PC who can act, or the table), and who
+  // acts in it (the move's NPCs and those here). Only offered when there's more than one choice.
+  const choicesFor = (o: ScaffoldOption): OptionChoices => {
+    const out: OptionChoices = {};
+    const pcs = lists.handOff;
+    if (pcs.length > 1) out.to = { current: o.hand_off.to, options: [...pcs, "table"] };
+    const move = moves.find((m) => m.id === o.move);
+    const npc = (n: string) => P.typeOf.get(n) === "npc";
+    const actors = o.setup.map((b) => (b as { actor?: string }).actor).filter((a): a is string => !!a && npc(a));
+    const leads = move?.cast.filter((c) => c.part === "lead" && npc(c.name)).map((c) => c.name) ?? [];
+    const current = actors[0] ?? leads[0];
+    const options = [...new Set([...(current ? [current] : []), ...leads, ...(move?.cast.filter((c) => npc(c.name)).map((c) => c.name) ?? []), ...[...lists.check.present].filter(npc)])];
+    if (current && options.length > 1) out.lead = { current, options: options.slice(0, 8) };
+    return out;
+  };
 
   // Ask once; if fewer than two options survive the checks, ask once more. Each option is checked
   // as soon as it's complete in the stream, and shown straight away when it passes (no safety lines).
@@ -1301,7 +1353,9 @@ ${moment}`;
     // Someone who keeps being asked gives way to the others.
     0.3 * (offeredLately(scene.situation.view).to.get(o.hand_off.to) ?? 0) +
     // A rule the moment set off comes up: the GM rolls it every time.
-    (moves.find((m) => m.id === o.move)?.rule?.used ? 3 : 0);
+    (moves.find((m) => m.id === o.move)?.rule?.used ? 3 : 0) +
+    // What the GM chose comes first.
+    (opts.force?.to && o.hand_off.to === opts.force.to ? 6 : 0) + (opts.force?.lead && o.setup.some((b) => (b as { actor?: string }).actor === opts.force!.lead) ? 4 : 0);
   let kept = [...shown, ...accepted.filter((o) => !shown.includes(o)).sort((a, b) => score(b) - score(a))].slice(0, 3);
   const safety = await safetyCheck(lines, kept.map((o) => renderOption(o, lists.tagger)));
   if (safety.call) calls.push(safety.call);

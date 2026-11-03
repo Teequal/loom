@@ -26,6 +26,7 @@ export function entryView(e: Entry, titleOf = new Map<number, string>()) {
       pillar: o.pillar ?? null,
       surprise: o.surprise ?? null,
       latent: o.latent ?? null,
+      choices: o.choices ?? {},
     })),
     votes: e.votes ?? {},
     choiceKind: e.choiceKind,

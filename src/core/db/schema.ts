@@ -361,6 +361,7 @@ export interface LiveOption {
   scaffold?: unknown; // the engine's scaffold for it (ScaffoldOption): what it changes, and the turn it ends on
   surprise?: string | null; // built on a surprise move: why it's explicable
   latent?: string | null; // built on a link nobody has made: the GM's to keep
+  choices?: { to?: { current: string; options: string[] }; lead?: { current: string; options: string[] } }; // what the GM can change on it
 }
 export interface RolledResult {
   name: string;

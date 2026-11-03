@@ -3,6 +3,7 @@
 import { GmTools } from "./gm-tools";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useRouter } from "next/navigation";
 import { batchLabel, post } from "./shell";
 import { Icon, type IconName } from "./icons";
 import { Steps, Switch } from "./controls";
@@ -39,6 +40,7 @@ interface LoomCtx {
   open: (r: Ref) => void;
   trail: Ref[];
   reload: () => void;
+  close: () => void;
   linker: Linker | null;
 }
 type Linker = { re: RegExp; of: Map<string, IndexNode> };
@@ -76,7 +78,7 @@ export function LoomProvider({ campaignId, children }: { campaignId: number; chi
     });
   }, []);
   const value = useMemo<LoomCtx>(
-    () => ({ campaignId, index, find: (k, id) => byKey.get(`${k}:${id}`), open, trail, reload: () => setVersion((v) => v + 1), linker }),
+    () => ({ campaignId, index, find: (k, id) => byKey.get(`${k}:${id}`), open, trail, reload: () => setVersion((v) => v + 1), close: () => setTrail([]), linker }),
     [campaignId, index, byKey, open, trail, linker],
   );
   // Jump anywhere: ⌘K / Ctrl+K, or the search button in the header (which sends "loom:search").
@@ -954,6 +956,7 @@ function ThreadView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
       </div>
       {editError && <p className="mt-1 text-xs text-danger">{editError}</p>}
       <Properties items={n.properties} />
+      {n.status !== "resolved" && <NextMoves threadId={n.id} title={n.name} />}
       <Section title="Involves" items={n.involves} initial={8} render={(r: Ref & { role: string; roleMine: boolean }) => <li key={r.id}><RefLink r={r} /> <select aria-label={`${r.name}'s part`} className="quiet text-xs" value={r.role} onChange={(e) => edit({ action: "part", entityId: r.id, role: e.target.value })}>{n.roles.map((x: { id: string; says: string }) => <option key={x.id} value={x.id} title={x.says}>{roleWord(x.id)}</option>)}</select> <span className="text-xs text-muted">{r.sub}{r.status && !["alive", "intact"].includes(r.status) ? ` · ${r.status}` : ""}</span></li>} />
       <Section title="Connected threads" items={n.linked} render={(r: any) => <li key={r.id}><RefLink r={r} />{r.note && <span className="text-xs text-muted">: {r.note}</span>}</li>} />
       <Section
@@ -973,6 +976,51 @@ function ThreadView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
       />
       <Section title="Key moments" items={n.moments} render={(r: Ref) => <li key={r.id}><RefLink r={r} /></li>} />
     </ThreadScope>
+  );
+}
+
+// What could happen next on a thread: the engine's moves for it (no model call). Tapping one asks
+// Loom, at the table, for options built on that move.
+type NextMove = { kind: string; label: string; because: string; with: number[]; cast: { name: string; here: boolean }[] };
+export function pushThread(push: { threadId: number; kind: string; with: number[]; title: string; label: string }, go: (url: string) => void) {
+  if (window.location.pathname === "/") window.dispatchEvent(new CustomEvent("loom:push", { detail: push }));
+  else go(`/?${new URLSearchParams({ push: String(push.threadId), kind: push.kind, with: push.with.join(","), title: push.title, label: push.label })}`);
+}
+function NextMoves({ threadId, title }: { threadId: number; title: string }) {
+  const loom = useLoom()!;
+  const router = useRouter();
+  const [moves, setMoves] = useState<NextMove[] | null>(null);
+  useEffect(() => {
+    post<{ moves: NextMove[] }>("/api/thread/next", { campaignId: loom.campaignId, threadId })
+      .then((r) => setMoves(r.moves))
+      .catch(() => setMoves([]));
+  }, [loom.campaignId, threadId]);
+  if (!moves?.length) return null;
+  return (
+    <section className="mt-5">
+      <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted">What could happen next</h3>
+      <ul className="space-y-1">
+        {moves.map((m) => (
+          <li key={`${m.kind}:${m.with.join("+")}`}>
+            <button
+              type="button"
+              onClick={() => {
+                pushThread({ threadId, kind: m.kind, with: m.with, title, label: m.label }, router.push);
+                loom.close();
+              }}
+              className="group w-full rounded-lg border border-line px-3 py-2 text-left transition-colors hover:border-thread/60 hover:bg-thread-soft/30"
+            >
+              <span className="flex items-baseline justify-between gap-2">
+                <span className="font-medium text-foreground">{m.label}</span>
+                <span className="shrink-0 text-[11px] text-thread opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100">Ask Loom</span>
+              </span>
+              <span className="mt-0.5 block text-[12px] leading-snug text-muted">{cap(m.because)}</span>
+              {m.cast.length > 0 && <span className="mt-0.5 block text-[12px] text-muted">{m.cast.map((c) => `${c.name}${c.here ? "" : " (could arrive)"}`).join(", ")}</span>}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

@@ -2,7 +2,8 @@ import { and, desc, eq, like } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/core/db/client";
 import { resolveModel } from "@/core/llm";
-import { improv, type ImprovOption } from "@/core/improv";
+import { improv } from "@/core/improv";
+import { card, logged } from "@/server/improv-card";
 import { SURPRISES } from "@/core/moves";
 import { beginSession, logAsk } from "@/core/live";
 import { loadThreadContexts } from "@/core/retrieval";
@@ -20,26 +21,9 @@ const Body = z.object({
   mix: z.enum(["mix", "fights", "mystery", "light", "character"]).optional(),
   steer: z.string().trim().max(80).optional(),
   surprises: z.enum(SURPRISES).optional(),
+  // A thread the GM chose to push, and which of its moves (a thread's "What could happen next").
+  push: z.object({ threadId: z.number().int().positive(), kind: z.string().trim().max(40).optional(), with: z.array(z.number().int().positive()).max(3).optional() }).optional(),
 });
-
-// What the page gets for each option: the readable text and the threads it ties back to.
-// The scaffold stays on the server.
-function card(o: ImprovOption, titleOf: Map<number, string>) {
-  return {
-    headline: o.headline,
-    flavour: o.flavour,
-    label: o.label,
-    text: o.option,
-    why: o.why,
-    threads: [o.thread_id, ...o.also_ties_to].filter((id) => titleOf.has(id)).map((id) => ({ id, title: titleOf.get(id)! })),
-    callback: o.callback,
-    // A roll or a fight waits for its result once used.
-    needs: (o.scaffold.pillar === "combat" ? "fight" : o.scaffold.hand_off.kind === "roll" ? "roll" : null) as "roll" | "fight" | null,
-    pillar: o.scaffold.pillar ?? null,
-    surprise: o.surprise ?? null,
-    latent: o.latent ?? null,
-  };
-}
 
 // How long the first option usually takes on this model, from its recent improv calls, so the page
 // can pace what it shows while Loom writes.
@@ -63,7 +47,7 @@ async function expectedFirstMs(model?: string) {
 export async function POST(request: Request) {
   const parsed = Body.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Type what the players just did." }, { status: 400 });
-  const { campaignId, moment, model, tone, mix, steer, overrides, surprises } = parsed.data;
+  const { campaignId, moment, model, tone, mix, steer, overrides, surprises, push } = parsed.data;
   await dbReady();
   const who = await whoIs(request);
   if (!who) return NEEDS_INVITE();
@@ -86,17 +70,13 @@ export async function POST(request: Request) {
         }
       };
       try {
-        const result = await asWho(who, () => improv(campaignId, moment, "ranked", model, { tone, mix, steer, overrides, surprises, onReading: (r) => send({ type: "reading", reading: { ...r, expectMs } }), onOption: (o) => send({ type: "option", option: card(o, titleOf) }) }));
+        const result = await asWho(who, () => improv(campaignId, moment, "ranked", model, { tone, mix, steer, overrides, surprises, push, onReading: (r) => send({ type: "reading", reading: { ...r, expectMs } }), onOption: (o) => send({ type: "option", option: card(o, titleOf) }) }));
         // Every moment asked about goes in the session log; using an option is a separate step.
         const entry = await logAsk(
           campaignId,
           moment,
           // Kept as the page showed them, so they can be shown again after a reload.
-          result.options.map((o) => {
-            const { threads: _t, ...shown } = card(o, titleOf);
-            void _t;
-            return { ...shown, threadIds: [o.thread_id, ...o.also_ties_to], scaffold: o.scaffold };
-          }),
+          result.options.map((o) => logged(o, titleOf)),
         );
         send({
           type: "done",

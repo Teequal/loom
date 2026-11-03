@@ -52,6 +52,7 @@ const KEYS: Record<string, keyof typeof CAMPAIGN_OF> = {
   itemId: "entity",
   fromEntityId: "entity",
   toEntityId: "entity",
+  threadId: "thread",
 };
 
 /**
