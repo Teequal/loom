@@ -109,6 +109,18 @@ export function placeChain(v: View, key: NodeKey | null | undefined): NodeKey[] 
 const within = (v: View, inner: NodeKey | null | undefined, outer: NodeKey | null | undefined) => !!inner && !!outer && placeChain(v, inner).includes(outer);
 const near = (v: View, a: NodeKey | null | undefined, b: NodeKey | null | undefined) => within(v, a, b) || within(v, b, a);
 
+// Close enough to walk in on the party: the same small place (a district, building, room or site),
+// or somewhere inside the one the party is in, or the small place the party is inside. Being in the
+// same city or region isn't: someone recorded "in Duradan" hasn't been set up to be on hand.
+const SMALL = new Set(["district", "building", "room", "site"]);
+function onHand(v: View, place: Place, party: Place) {
+  const p = keyOfNode(place);
+  const q = keyOfNode(party);
+  if (p === q) return SMALL.has(party.scale ?? "");
+  if (within(v, p, q)) return SMALL.has(party.scale ?? "");
+  return within(v, q, p) && SMALL.has(place.scale ?? "");
+}
+
 /** Where something is: an actual place over a last-seen one. */
 export function whereIs(v: View, key: NodeKey): Place | null {
   const ls = v.g.linksOf(key, { type: "located_at", dir: "out" });
@@ -208,7 +220,8 @@ export function presenceOf(v: View, key: NodeKey, memo = new Map<NodeKey, Presen
     if (said || reading.broughtIn.has(n.name)) return set({ role: "here", where: "here", standing: "here: the moment brings them in", why: said ? "you said they're here" : "the moment brings them in" });
     if (reading.contacted.has(n.name)) return set({ role: "reachable", where: "elsewhere", standing: placeName ? `at ${placeName}; the players reach them from afar` : "reached from afar", why: "the players reach them from afar" });
     if (isCompanion(v, n) && place && near(v, keyOfNode(place), v.recordedParty && keyOfNode(v.recordedParty))) return set({ role: "here", where: "with-party", standing: "travelling with the party", why: "travelling with the party" });
-    if (place && v.party && near(v, keyOfNode(place), keyOfNode(v.party))) return set({ role: "reachable", where: "nearby", standing: `somewhere around here (${place.name}), not with the party`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : "recorded around here, not with the party" });
+    if (place && v.party && onHand(v, place, v.party)) return set({ role: "reachable", where: "nearby", standing: `somewhere around here (${place.name}), not with the party`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : "recorded around here, not with the party" });
+    if (place && v.party && near(v, keyOfNode(place), keyOfNode(v.party))) return set({ role: "reachable", where: "elsewhere", standing: place.name === v.party.name ? `somewhere in ${place.name}, not on hand` : `at ${place.name}, not on hand`, why: reading.referred.has(n.name) ? "only mentioned in the moment" : `recorded in ${place.name}, not set up to be on hand` });
     return set({ role: "reachable", where: place ? "elsewhere" : "unknown", standing: place ? `last seen at ${place.name}` : "whereabouts unknown", why: reading.referred.has(n.name) ? "only mentioned in the moment" : place ? "recorded elsewhere" : "whereabouts unknown" });
   }
 

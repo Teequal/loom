@@ -241,6 +241,7 @@ export interface ImprovOption {
   surprise?: string | null; // built on the surprise move: why it's explicable
   latent?: string | null; // built on a link nobody has made: the GM's to keep
   choices?: OptionChoices; // what the GM can change on it: who it's for, who acts
+  unseen?: string | null; // who's behind the sign the option shows (not near enough to be seen)
 }
 
 // How names go in and what a scaffold is: shared by improv options and Develop's chain steps.
@@ -719,6 +720,10 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
   const remoteOk = s.contacted;
   const outcomePcs = s.acting;
   const absentNpcs = scene.entities.filter((e) => e.type === "npc" && e.status !== "dead" && !present.has(e.name)).map((e) => e.name);
+  // Who could walk in: those recorded around the party's place. Others send word or leave a sign.
+  // With no place recorded for the party there's nothing to measure against, so anyone whose
+  // whereabouts are unknown may still arrive (a campaign that hasn't set up its places yet).
+  const nearby = new Set(scene.entities.filter((e) => e.type === "npc" && !present.has(e.name) && (s.presence(e) === "nearby" || (!s.party && s.presence(e) === "unknown"))).map((e) => e.name));
   const possession: Possession = { holders: s.holders, parentOf: s.parentOf, lost: s.lost };
   // A check, contest or attack is for a PC acting on what their player declared; the whole table
   // when the moment is about the whole party.
@@ -732,7 +737,7 @@ export function buildLists(scene: Scene, moment: string, mentioned: Set<string>,
     notes: [...s.notes],
     fixes: [...s.fixes],
     stated: s.stated,
-    check: { scene, tagger, present, remoteOk, outcomePcs, checkTo, possession, declaredSkills: declaredSkills(moment) ?? new Set<string>() } satisfies CheckContext,
+    check: { scene, tagger, present, remoteOk, nearby, outcomePcs, checkTo, possession, declaredSkills: declaredSkills(moment) ?? new Set<string>() } satisfies CheckContext,
     // Who each kind of beat may name, within reach of the moment (and anyone it names). The answer
     // format offers each kind only its own list, so an absent NPC can't be written acting here and a
     // PC can't be written as an NPC: the model can't choose them, rather than code catching it.
@@ -1004,7 +1009,8 @@ export function contextPrompt(p: Prepared, moves: Move[], unit = "option") {
 
 WHO MAY ACT
 - Here now (kind "npc"): ${[...p.lists.check.present].filter((n) => p.typeOf.get(n) === "npc").join(", ") || "nobody named; use walk-ons"}
-- Not here (only kind "arrival" or "remote"): ${p.lists.actors.filter((n) => p.typeOf.get(n) === "npc" && !p.lists.check.present.has(n)).join(", ") || "nobody"}. Bring one in only when it pays off their thread, at most one per option; otherwise use walk-ons.
+- Not here but nearby (may arrive, kind "arrival", or send word, kind "remote"): ${p.lists.actors.filter((n) => p.typeOf.get(n) === "npc" && !p.lists.check.present.has(n) && p.lists.check.nearby?.has(n)).join(", ") || "nobody"}. Bring one in only when it pays off their thread, at most one per option; otherwise use walk-ons.
+- Not nearby (never seen in person; they may only send word, kind "remote", or be hinted at by an unnamed sign: a rustle in the shadows, a shape at the window, a token left behind, with a notice roll to catch it): ${p.lists.actors.filter((n) => p.typeOf.get(n) === "npc" && !p.lists.check.present.has(n) && !p.lists.check.nearby?.has(n) && !p.lists.check.remoteOk.has(n)).join(", ") || "nobody"}.
 - Acting in this moment (what they declared is settled by the hand and the world's response, never narrated): ${p.lists.outcomeActors.join(", ") || "no PC in particular"}
 ${p.lists.stated.length ? `- As of this moment: ${p.lists.stated.join("; ")}\n` : ""}${p.lists.check.remoteOk.size ? `- The players reached out to: ${[...p.lists.check.remoteOk].join(", ")} (they may answer remotely)\n` : ""}${p.lists.check.possession.holders.size ? `- Who holds what: ${[...p.lists.check.possession.holders].map(([item, who]) => `${item} (${[...who].join(", ")})`).join("; ")}. Only a holder can use or carry an item, unless a beat hands it over first ("tosses the {X} to {Y}"). A rule tied to an item reaches whoever holds it.\n` : ""}
 ${rollsBlock(p)}
@@ -1128,6 +1134,7 @@ export function fitToMove(o: ScaffoldOption, moves: Move[], c: CheckContext, dro
     const member = move.cast.find((x) => x.name === b.actor);
     if (!member) return move.resting.includes(b.actor) ? `${b.actor} is resting in this move (very active lately)` : `${b.actor} isn't in this move's cast`;
     if (b.kind === "npc" && member.can !== "act") return `${b.actor} isn't here; in this move they can only arrive or send word`;
+    if (b.kind === "arrival" && member.can === "away") return `${b.actor} isn't near the party: they can send word, or the scene shows a sign of them`;
     if (member.part === "support" && ++supportLines > 1) return `${b.actor} is support in this move: one line at most`;
     return null;
   };
@@ -1246,6 +1253,13 @@ ${moment}`;
     surprise: moves.find((m) => m.id === o.move)?.surprise ?? null,
     latent: moves.find((m) => m.id === o.move)?.latent ?? null,
     choices: choicesFor(o),
+    // Someone not near the party is behind this move: the scene shows only a sign of them, so the
+    // GM is told who it is.
+    unseen: (() => {
+      const away = moves.find((m) => m.id === o.move)?.cast.filter((c) => c.can === "away").map((c) => c.name) ?? [];
+      const named = new Set(o.setup.map((b) => (b as { actor?: string }).actor));
+      return away.filter((n) => !named.has(n) && !renderOption(o, lists.tagger).includes(n)).join(", ") || null;
+    })(),
   });
   // What the GM may change on an option: who it's for (any PC who can act, or the table), and who
   // acts in it (the move's NPCs and those here). Only offered when there's more than one choice.

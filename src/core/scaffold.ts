@@ -150,6 +150,9 @@ export interface CheckContext {
   tagger: Tagger;
   present: Set<string>; // NPCs, factions and items that may act directly
   remoteOk: Set<string>; // absent NPCs the moment itself put in contact
+  // Absent NPCs near enough to walk in (recorded around the party's place). Anyone further away
+  // can send word, or be shown only as a sign of them (a rustle, a shape); never seen in person.
+  nearby?: Set<string>;
   outcomePcs: Set<string>; // PCs whose declared action this moment is about
   checkTo: string[]; // who a check, contest or attack may go to: those PCs, or "table" for the whole party
   possession: Possession;
@@ -322,6 +325,9 @@ export function checkBeat(b: ScaffoldBeat, c: CheckContext): string | null {
       // A captive only reaches out or turns up by getting free, or by getting word out.
       if (actor.status === "captured" && !/\b(?:escap|freed|break\w* free|broke free|broken free|smuggl|brib|slips? (?:a|the) (?:note|message)|through (?:the )?bars|guard (?:passes|carries))/i.test(c.tagger.render(does))) {
         return `${actor.name} is captured, so can't ${b.kind === "remote" ? "reach out" : "arrive"} without escaping or getting word out`;
+      }
+      if (b.kind === "arrival" && c.nearby && !c.nearby.has(actor.name) && !c.remoteOk.has(actor.name)) {
+        return `${actor.name} isn't anywhere near the party, so they can't walk in: they can send word, or the scene shows only a sign of them`;
       }
       {
         const r = b.kind === "arrival" ? capabilityProblem(actor, c.tagger.render(does)) : null;

@@ -67,7 +67,7 @@ export function latentMoves(v: View, threads: SelectedThread[], facets: Hit[], s
     if (t == null) continue;
     out.push({
       kind: "echo", threads: [t], score: 2 + h.sim,
-      cast: n.kind === "item" ? [] : [{ name: n.name, can: "arrive", part: "lead" }],
+      cast: n.kind === "item" ? [] : [{ name: n.name, can: presenceOf(v, n.key as NodeKey, memo).where === "nearby" || (!v.party && presenceOf(v, n.key as NodeKey, memo).where === "unknown") ? "arrive" : "away", part: "lead" }],
       because: `this could be ${n.name}'s doing, unseen: the records say "${h.text}", and nothing has tied that to this moment yet. Show only the trace; the players may catch it`,
       offers: ["a Wisdom (Perception) or Wisdom (Insight) notice roll to catch the link"],
       source,
@@ -97,7 +97,7 @@ export function latentMoves(v: View, threads: SelectedThread[], facets: Hit[], s
         if (connected(v, g, who) || recent.has(source)) continue;
         pairs.push({
           kind: "tie", threads: [t.id], score: 2,
-          cast: [{ name: who.name, can: presence === "here" ? "act" : "arrive", part: "lead" }],
+          cast: [{ name: who.name, can: presence === "here" ? "act" : presenceOf(v, who.key as NodeKey, memo).where === "nearby" || (!v.party && presenceOf(v, who.key as NodeKey, memo).where === "unknown") ? "arrive" : "away", part: "lead" }],
           because: `never connected: ${g.name} (${g.summary}) and ${who.name}, the ${l.role} in "${t.title}". Perhaps that's why: a friend, a debt, an old grudge. Let one small detail suggest it; never state it, and ${g.name} stays gone`,
           source,
           latent: `${who.name} may be tied to ${g.name}: a friend, a debt or a grudge from then`,

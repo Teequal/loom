@@ -28,6 +28,6 @@ export async function threadMoves(campaignId: number, threadId: number) {
     moves: moves
       .filter((m) => { const k = `${m.kind}:${m.threads.join("+")}`; return !seen.has(k) && !!seen.add(k); })
       .slice(0, 6)
-      .map((m) => ({ kind: m.kind, label: m.kind === "collision" ? `Collide it with “${all.find((x) => x.id === m.threads.find((y) => y !== t.id))?.title ?? "another thread"}”` : (SAY[m.kind] ?? m.kind), because: m.because.replace(/^the moment touches (".*")$/, "$1 can pay off now").replace(/\s*\([^()]*\)$/, ""), with: m.threads.filter((x) => x !== t.id), cast: m.cast.filter((c) => c.part === "lead").map((c) => ({ name: c.name, here: c.can === "act" })) })),
+      .map((m) => ({ kind: m.kind, label: m.kind === "collision" ? `Collide it with “${all.find((x) => x.id === m.threads.find((y) => y !== t.id))?.title ?? "another thread"}”` : (SAY[m.kind] ?? m.kind), because: m.because.replace(/^the moment touches (".*")$/, "$1 can pay off now").replace(/\s*\([^()]*\)$/, ""), with: m.threads.filter((x) => x !== t.id), cast: m.cast.filter((c) => c.part === "lead").map((c) => ({ name: c.name, here: c.can === "act", near: c.can === "arrive" })) })),
   };
 }

@@ -363,6 +363,7 @@ export interface LiveOption {
   surprise?: string | null; // built on a surprise move: why it's explicable
   latent?: string | null; // built on a link nobody has made: the GM's to keep
   choices?: { to?: { current: string; options: string[] }; lead?: { current: string; options: string[] } }; // what the GM can change on it
+  unseen?: string | null; // who's behind a sign the option shows, not near enough to be seen
 }
 export interface RolledResult {
   name: string;

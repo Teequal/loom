@@ -22,7 +22,7 @@ export type MoveKind =
 
 export interface CastMember {
   name: string;
-  can: "act" | "arrive"; // here and able to act, or not here: arrives or sends word
+  can: "act" | "arrive" | "away"; // here and able to act; nearby: arrives or sends word; further away: sends word, or only a sign of them shows
   part: "lead" | "support"; // in the move's threads, or here and quiet enough to lend a line
   busy?: boolean; // very active lately: kept brief, and leads fewer moves
 }
@@ -117,7 +117,7 @@ export function findMoves(
       if (p.node.kind === "character" && p.node.side === "pc") continue;
       const pr = presenceOf(v, p.node.key as NodeKey, memo);
       if (pr.role === "here") out.push({ name: p.node.name, can: "act", part: "lead", busy: busy(p.node.name) || undefined });
-      else if (pr.role === "reachable" && p.node.kind !== "item") out.push({ name: p.node.name, can: "arrive", part: "lead", busy: busy(p.node.name) || undefined });
+      else if (pr.role === "reachable" && p.node.kind !== "item") out.push({ name: p.node.name, can: pr.where === "nearby" || p.node.kind === "faction" || (!v.party && pr.where === "unknown") ? "arrive" : "away", part: "lead", busy: busy(p.node.name) || undefined });
     }
     return out;
   };
@@ -140,9 +140,10 @@ export function findMoves(
       add({ kind: "complication", threads: [t.id], cast, because: tn.stakes.ifIgnored ? `if "${t.title}" is ignored, ${tn.stakes.ifIgnored}` : tn.deadline ? `"${t.title}" has a deadline: ${tn.deadline.text}` : `a lot rides on "${t.title}"`, score: base + WEIGHT.complication });
     }
     for (const p of parts.filter((x) => ARRIVING_ROLES.has(x.role))) {
-      const c = cast.find((x) => x.name === p.node.name && x.can === "arrive");
+      const c = cast.find((x) => x.name === p.node.name && (x.can === "arrive" || x.can === "away"));
       if (!c) continue;
-      add({ kind: "arrival", threads: [t.id], cast: [c, ...cast.filter((x) => x.can === "act")], because: `${p.node.name}, the ${THREAD_ROLES[p.role] ? p.role : "one involved"} in "${t.title}", isn't here: they could arrive or send word`, score: base + WEIGHT.arrival });
+      const role = THREAD_ROLES[p.role] ? p.role : "one involved";
+      add({ kind: "arrival", threads: [t.id], cast: [c, ...cast.filter((x) => x.can === "act")], because: c.can === "arrive" ? `${p.node.name}, the ${role} in "${t.title}", is nearby: they could arrive or send word` : `${p.node.name}, the ${role} in "${t.title}", isn't anywhere near: a sign of them (never them in person), or word from them`, score: base + WEIGHT.arrival });
       break;
     }
     const hinting = parts.filter((p) => HINT_ROLES.has(p.role) || p.secret);
@@ -365,7 +366,7 @@ export function movesBlock(moves: Move[], titleOf: Map<number, string>) {
     .map((m) => {
       const leads = m.cast.filter((c) => c.part === "lead");
       const support = m.cast.filter((c) => c.part === "support");
-      const cast = leads.length ? leads.map((c) => `${c.name} (${c.can === "act" ? "here" : "can arrive or send word"}${c.busy ? "; very active lately, keep brief" : ""})`).join(", ") : "nobody named: use walk-ons";
+      const cast = leads.length ? leads.map((c) => `${c.name} (${c.can === "act" ? "here" : c.can === "arrive" ? "nearby: can arrive or send word" : "not nearby: never seen in person; only word from them, or an unnamed sign of them with a notice roll"}${c.busy ? "; very active lately, keep brief" : ""})`).join(", ") : "nobody named: use walk-ons";
       return [
         `${m.id} ${m.kind}: ${m.threads.map((t) => `T${t} "${titleOf.get(t) ?? ""}"`).join(" + ")} · cast: ${cast}`,
         support.length && `support (here, one line at most): ${support.map((c) => c.name).join(", ")}`,

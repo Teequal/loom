@@ -23,7 +23,7 @@ const DCS = [10, 12, 15, 18, 20];
  * what each player got. With a DC, each roll is marked made or missed by itself; without, a tap
  * says how it went. Recorded per character, so momentum and nudges know who it was.
  */
-export function RollPanel({ entryId, label, plan, onDone, count }: { entryId: number; label: string; plan: RollPlan; onDone: () => Promise<unknown> | void; count?: string }) {
+export function RollPanel({ entryId, label, plan, onDone, count, onNext }: { entryId: number; label: string; plan: RollPlan; onDone: () => Promise<unknown> | void; count?: string; onNext?: (moment: string) => void }) {
   const [secret, setSecret] = useState(plan.secret);
   const [dc, setDc] = useState<number | null>(null);
   const [rows, setRows] = useState(plan.rollers.map((r) => ({ name: r.name, bonus: r.bonus == null ? "" : String(r.bonus), bonusFrom: r.bonusFrom, die: null as number | null, total: "", tapped: null as Outcome | null })));
@@ -49,7 +49,19 @@ export function RollPanel({ entryId, label, plan, onDone, count }: { entryId: nu
       setBusy(false);
     }
   };
-  const record = () => send({ dc, detail, rolls: rows.map((r) => ({ name: r.name, total: /^-?\d+$/.test(r.total) ? Number(r.total) : null, outcome: outcomeOf(r)! })) });
+  const rolls = () => rows.map((r) => ({ name: r.name, total: /^-?\d+$/.test(r.total) ? Number(r.total) : null, outcome: outcomeOf(r)! }));
+  const record = (next = false) => {
+    const rs = rolls();
+    return send({ dc, detail, rolls: rs }).then(() => {
+      if (!next || !onNext) return;
+      // What the roll did, as the next moment, so Loom's options carry on from it.
+      const WORD = { success: "made", failure: "missed", partial: "partly made" } as const;
+      const each = rs.map((r) => `${r.name} ${WORD[r.outcome]} it${r.total != null ? ` (${r.total}${dc ? ` against DC ${dc}` : ""})` : ""}`).join("; ");
+      const failed = rs.some((r) => r.outcome === "failure");
+      const cost = failed ? plan.onFail || plan.rule?.onFail : rs.every((r) => r.outcome === "success") ? plan.rule?.onSuccess : "";
+      onNext(`${label.replace(/[.:]\s.*$/, "")}. ${plan.what}: ${each}.${cost ? ` So: ${cost.replace(/\.$/, "")}.` : ""}${detail.trim() ? ` ${detail.trim()}` : ""}`);
+    });
+  };
   const MARK: Record<Outcome, string> = { success: "Made it", failure: "Missed", partial: "Partly" };
   return (
     <div className="rise rounded-xl border-2 border-thread/70 bg-thread-soft/60 p-3 text-sm" role="alert">
@@ -117,12 +129,17 @@ export function RollPanel({ entryId, label, plan, onDone, count }: { entryId: nu
         className="mt-2 flex gap-2"
         onSubmit={(e) => {
           e.preventDefault();
-          if (ready) record();
+          if (ready) record(!!onNext);
         }}
       >
         <input value={detail} onChange={(e) => setDetail(e.target.value)} placeholder="Anything to add? (optional)" className="min-w-0 flex-1 rounded-lg border border-line bg-surface px-3 py-1 text-[13px] outline-none focus:border-thread/60" />
-        <button disabled={busy || !ready} className="btn-primary text-sm" title={ready ? "" : "Mark how each roll went, or set a DC and enter the totals"}>
-          Record
+        {onNext && (
+          <button type="button" disabled={busy || !ready} onClick={() => record(false)} className="btn-tertiary text-xs">
+            Just record
+          </button>
+        )}
+        <button disabled={busy || !ready} className="btn-primary text-sm" title={ready ? (onNext ? "Record it, then ask Loom what happens now" : "") : "Mark how each roll went, or set a DC and enter the totals"}>
+          {onNext ? "Record, then what happens?" : "Record"}
         </button>
       </form>
       {error && <p className="mt-1 text-[13px] text-danger">{error}</p>}

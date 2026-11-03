@@ -34,6 +34,7 @@ interface Card {
   surprise?: string | null; // built on the session's surprise: why it's explicable
   latent?: string | null; // a link nobody has made yet: the GM's to keep
   choices?: { to?: { current: string; options: string[] }; lead?: { current: string; options: string[] } }; // what the GM can change
+  unseen?: string | null; // who's behind the sign the option shows (not near enough to be seen)
 }
 type Push = { threadId: number; kind: string; with?: number[]; title: string; label: string };
 interface RecordFix {
@@ -411,20 +412,20 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
     setCards((cs) => cs.map((c, j) => (j === i ? r.option : c)));
   }
 
-  async function ask(again?: { steer?: string; push?: Push }) {
+  async function ask(again?: { steer?: string; push?: Push; text?: string }) {
     // A steer re-weaves the same moment (with the same corrections); a pushed thread asks about that
     // thread's move; otherwise it's whatever is in the box.
     const push = again?.push;
-    const text = push ? `Push “${push.title}”: ${push.label.toLowerCase()}` : again ? asked : moment.trim();
+    const text = push ? `Push “${push.title}”: ${push.label.toLowerCase()}` : again?.text ? again.text : again ? asked : moment.trim();
     if (!text || status === "running") return;
-    const corrections = again && !push ? askedOverrides : push ? {} : overrides;
+    const corrections = again?.text || push ? {} : again ? askedOverrides : overrides;
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
     setAsked(text);
     setAskedOverrides(corrections);
-    if (!again || push) {
-      if (!push) setMoment("");
+    if (!again || push || again.text) {
+      if (!push && !again?.text) setMoment("");
       setOverrides({});
     }
     release();
@@ -568,6 +569,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
                 label={waiting[0].choiceLabel ? `${waiting[0].choiceLabel}: ${waiting[0].choice}` : waiting[0].choice}
                 count={waiting.length > 1 ? `1 of ${waiting.length}` : undefined}
                 onDone={reload}
+                onNext={(text) => void ask({ text })}
               />
             ) : (
             <ResultPrompt
@@ -1660,6 +1662,11 @@ function OptionCard({
         </p>
       )}
       {card.latent && <KeepLink text={card.latent} />}
+      {card.unseen && (
+        <p className="mt-2 text-[13px] text-muted">
+          <span className="text-foreground/80">Behind it, unseen:</span> {card.unseen} <span className="italic">(not near enough to be here in person)</span>
+        </p>
+      )}
       {onRetarget && state !== "used" && <Choices choices={card.choices} onChange={onRetarget} />}
       {card.why && showWhy && !card.surprise && !card.latent && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
       {result && (

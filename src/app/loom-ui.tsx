@@ -1049,7 +1049,7 @@ function ThreadRolls({ rules }: { rules: { id: number; name: string; check: stri
 
 // What could happen next on a thread: the engine's moves for it (no model call). Tapping one asks
 // Loom, at the table, for options built on that move.
-type NextMove = { kind: string; label: string; because: string; with: number[]; cast: { name: string; here: boolean }[] };
+type NextMove = { kind: string; label: string; because: string; with: number[]; cast: { name: string; here: boolean; near?: boolean }[] };
 export function pushThread(push: { threadId: number; kind: string; with: number[]; title: string; label: string }, go: (url: string) => void) {
   if (window.location.pathname === "/") window.dispatchEvent(new CustomEvent("loom:push", { detail: push }));
   else go(`/?${new URLSearchParams({ push: String(push.threadId), kind: push.kind, with: push.with.join(","), title: push.title, label: push.label })}`);
@@ -1083,7 +1083,7 @@ function NextMoves({ threadId, title }: { threadId: number; title: string }) {
                 <span className="shrink-0 text-[11px] text-thread opacity-0 transition-opacity group-hover:opacity-100 group-focus:opacity-100">Ask Loom</span>
               </span>
               <span className="mt-0.5 block text-[12px] leading-snug text-muted">{cap(m.because)}</span>
-              {m.cast.length > 0 && <span className="mt-0.5 block text-[12px] text-muted">{m.cast.map((c) => `${c.name}${c.here ? "" : " (could arrive)"}`).join(", ")}</span>}
+              {m.cast.length > 0 && <span className="mt-0.5 block text-[12px] text-muted">{m.cast.map((c) => `${c.name}${c.here ? "" : c.near ? " (nearby, could arrive)" : " (far off: word from them, or a sign)"}`).join(", ")}</span>}
             </button>
           </li>
         ))}

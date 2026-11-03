@@ -17,6 +17,7 @@ export function card(o: ImprovOption, titleOf: Map<number, string>) {
     surprise: o.surprise ?? null,
     latent: o.latent ?? null,
     choices: o.choices ?? {},
+    unseen: o.unseen ?? null,
   };
 }
 
