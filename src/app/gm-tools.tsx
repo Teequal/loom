@@ -60,7 +60,7 @@ export function GmTools({ campaignId, onClose }: { campaignId: number; onClose: 
           <Icon name="close" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 text-sm">{tab === "rolls" ? <SecretRolls pcs={pcs} /> : tab === "rules" ? <RuleRolls pcs={pcs} rules={rules} /> : <Tables campaignId={campaignId} tables={tables} send={send} />}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 text-sm">{tab === "rolls" ? <SecretRolls pcs={pcs} /> : tab === "rules" ? <RuleRolls pcs={pcs} rules={rules} campaignId={campaignId} /> : <Tables campaignId={campaignId} tables={tables} send={send} />}</div>
     </aside>,
     document.body,
   );
@@ -112,11 +112,13 @@ function SecretRolls({ pcs }: { pcs: Pc[] }) {
 
 // A house rule's roll, by hand: pick the rule and who it's for, roll a d20 each, and see what a
 // failure costs. Rolled here, seen only by you.
-function RuleRolls({ pcs, rules }: { pcs: Pc[]; rules: Rule[] }) {
+export function RuleRolls({ pcs, rules, campaignId }: { pcs: Pc[]; rules: Rule[]; campaignId?: number }) {
   const [picked, setPicked] = useState<number | null>(rules[0]?.id ?? null);
   const [who, setWho] = useState<string[]>([]);
   const [dc, setDc] = useState("");
   const [rolls, setRolls] = useState<{ name: string; die: number }[]>([]);
+  const [logged, setLogged] = useState(false);
+  const [error, setError] = useState("");
   const rule = rules.find((r) => r.id === picked) ?? rules[0];
   const target = Number(dc) || null;
   if (!rules.length) return <p className="text-muted">No house rules on record yet. Add one on the campaign page, or with <code>rule draft</code>.</p>;
@@ -124,7 +126,7 @@ function RuleRolls({ pcs, rules }: { pcs: Pc[]; rules: Rule[] }) {
   return (
     <div className="space-y-3">
       <ul className="space-y-1">
-        {rules.map((r) => (
+        {rules.length > 1 && rules.map((r) => (
           <li key={r.id}>
             <button type="button" aria-pressed={rule?.id === r.id} onClick={() => { setPicked(r.id); setRolls([]); }} className={`w-full rounded-lg border px-3 py-1.5 text-left ${rule?.id === r.id ? "border-thread/70 bg-thread-soft/40" : "border-line hover:border-thread/50"}`}>
               <span className="font-medium">{r.name}</span>
@@ -148,7 +150,7 @@ function RuleRolls({ pcs, rules }: { pcs: Pc[]; rules: Rule[] }) {
               <input value={dc} inputMode="numeric" onChange={(e) => setDc(e.target.value.replace(/\D/g, "").slice(0, 2))} className="w-8 border-b border-line bg-transparent text-center text-foreground outline-none focus:border-thread/60" />
             </label>
           </div>
-          <button type="button" disabled={!pcs.length} onClick={() => setRolls((who.length ? who : pcs.map((p) => p.name)).map((name) => ({ name, die: roll(20) })))} className="btn-primary text-sm">
+          <button type="button" disabled={!pcs.length} onClick={() => { setRolls((who.length ? who : pcs.map((p) => p.name)).map((name) => ({ name, die: roll(20) }))); setLogged(false); }} className="btn-primary text-sm">
             {who.length ? `Roll for ${who.length === 1 ? who[0] : `${who.length} of them`}` : "Roll for everyone"}
           </button>
           {!!rolls.length && (
@@ -167,6 +169,25 @@ function RuleRolls({ pcs, rules }: { pcs: Pc[]; rules: Rule[] }) {
           )}
           {rule.onFail && <p className="text-[13px] text-muted"><span className="text-foreground/80">On a failure:</span> {rule.onFail}</p>}
           {rule.onSuccess && <p className="text-[13px] text-muted"><span className="text-foreground/80">On a success:</span> {rule.onSuccess}</p>}
+          {/* Into the log, so the loom hears how it went (read like any note). */}
+          {campaignId && rolls.length > 0 && (
+            <button
+              type="button"
+              disabled={logged}
+              onClick={() =>
+                post("/api/live/note", { campaignId, text: `${rule.name} roll: ${rolls.map((r) => `${r.name} ${r.die}${target != null ? (r.die >= target ? " (resists)" : " (fails)") : ""}`).join(", ")}${target != null ? ` against DC ${target}` : ""}.` })
+                  .then(() => {
+                    setLogged(true);
+                    window.dispatchEvent(new Event("loom:reload"));
+                  })
+                  .catch((e) => setError(e.message))
+              }
+              className="btn-tertiary text-[13px]"
+            >
+              {logged ? "It's in the log" : "It happened: add it to the log"}
+            </button>
+          )}
+          {error && <p className="text-danger">{error}</p>}
         </>
       )}
     </div>

@@ -58,7 +58,8 @@ function threadLine(t: ThreadContext, typeOf: Map<string, string>, latestSession
 }
 
 export async function suggest(campaignId: number, model?: string) {
-  const threads = await loadThreadContexts(campaignId);
+  // Threads the GM set aside stay out of prep ideas until they're brought back.
+  const threads = (await loadThreadContexts(campaignId)).filter((t) => !t.parked);
   if (threads.length === 0) throw new Error("This campaign has no open threads yet.");
   const entities = await db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId));
   const typeOf = new Map(entities.map((e) => [e.name, e.type]));

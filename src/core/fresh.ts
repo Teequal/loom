@@ -38,7 +38,7 @@ New material must fit the world, tone and direction, and must not contradict est
 Pronouns: use the ones the records give. Where they give none, use the character's name or "they"; never guess from a name.`;
 
 export async function freshIdeas(campaignId: number) {
-  const threads = await loadThreadContexts(campaignId);
+  const threads = (await loadThreadContexts(campaignId)).filter((t) => !t.parked);
   const scene = await buildScene(campaignId, { mentioned: new Set(), threadEntities: threads.flatMap((t) => t.entities) });
   const [camp] = await db.select().from(schema.campaigns).where(eq(schema.campaigns.id, campaignId));
   const pcs = scene.pcs.map((p) => ({ name: p.name, aliases: p.aliases }));

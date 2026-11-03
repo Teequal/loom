@@ -263,13 +263,19 @@ async function threadNode(campaignId: number, id: number) {
   const L = await lookups(campaignId);
   const t = L.thr.get(id);
   if (!t) throw new Error("That isn't in the loom any more.");
-  const [links, tlinks, events, moments] = await Promise.all([
+  const [links, tlinks, events, moments, effects] = await Promise.all([
     db.select().from(schema.threadEntities).where(eq(schema.threadEntities.threadId, id)),
     db.select().from(schema.threadLinks),
     db.select().from(schema.threadEvents).where(eq(schema.threadEvents.threadId, id)).orderBy(desc(schema.threadEvents.id)),
     db.select().from(schema.keyMoments).where(eq(schema.keyMoments.campaignId, campaignId)),
+    db.select().from(schema.effects).where(eq(schema.effects.campaignId, campaignId)),
   ]);
   const meta = (f: string) => !!t.fieldMeta[f]?.secret;
+  // The house rules this thread can set off: its own, or those of someone or something in it.
+  const inIt = new Set(links.map((l) => l.entityId));
+  const rules = effects
+    .filter((r) => r.sourceThreadId === id || (r.sourceEntityId != null && inIt.has(r.sourceEntityId)))
+    .map((r) => ({ id: r.id, name: r.name, check: r.check, onFail: r.onFail, onSuccess: r.onSuccess, rule: r.rule, secret: r.secret }));
   const properties = propertiesView(viewOf(await loadGraph(campaignId), readMoment([], "")), `thread:${t.id}` as NodeKey);
   return {
     kind: "thread" as const,
@@ -290,6 +296,9 @@ async function threadNode(campaignId: number, id: number) {
     roles: Object.entries(THREAD_ROLES).map(([id, d]) => ({ id, says: d.says })),
     stakesLevel: t.stakesLevel,
     stakesMine: t.fieldMeta.stakesLevel?.source === "dm",
+    parked: t.parked,
+    deadlineText: t.deadline ?? "",
+    rules,
     // A link recorded both ways shows once, with both notes.
     linked: [
       ...tlinks

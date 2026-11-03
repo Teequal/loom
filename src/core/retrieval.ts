@@ -17,6 +17,7 @@ export interface ThreadContext {
   latestNote: string;
   links: { threadId: number; note: string }[];
   lastTouchedSession: number | null;
+  parked?: boolean; // set aside by the GM: only comes up when the moment names someone in it
 }
 
 export interface ScoredThread extends ThreadContext {
@@ -86,6 +87,7 @@ export async function loadThreadContexts(campaignId: number): Promise<ThreadCont
           : [],
     ),
     lastTouchedSession: t.lastTouchedSessionId ? (sessionNumber.get(t.lastTouchedSessionId) ?? null) : null,
+    parked: t.parked,
   }));
 }
 
@@ -122,10 +124,12 @@ export interface SelectedThread extends ScoredThread {
 // Threads tied directly to anything the moment names are always kept, whatever their rank
 // (Khayiulad's heresy bounty when Khayiulad is named). The strongest few go in full; the rest as
 // one-liners, which cost almost nothing (latency is output-bound).
-export function selectThreads(ranked: ScoredThread[], named: Set<string>, sel: ThreadSelection): SelectedThread[] {
+export function selectThreads(all: ScoredThread[], named: Set<string>, sel: ThreadSelection): SelectedThread[] {
+  const guaranteed = new Set(all.filter((t) => t.entities.some((n) => named.has(n))).map((t) => t.id));
+  // A thread the GM set aside comes up only when the moment names someone in it.
+  const ranked = all.filter((t) => !t.parked || guaranteed.has(t.id));
   if (!ranked.length) return [];
   const top = ranked[0].score;
-  const guaranteed = new Set(ranked.filter((t) => t.entities.some((n) => named.has(n))).map((t) => t.id));
   const picked: ScoredThread[] = [];
   const add = (t: ScoredThread) => {
     if (!picked.includes(t)) picked.push(t);

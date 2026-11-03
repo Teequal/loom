@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { PAIR_WEIGHTS } from "@/core/db/schema";
-import { removeRelation, setPairWeights, setRelation, setSubProperty, updateEntity } from "@/core/entities";
+import { removeRelation, setPairWeights, setRelation, setSubProperty, updateEntity, updateThread } from "@/core/entities";
 import { HEALTH } from "@/core/entity-fields";
 import { setThreadPart, setThreadStakes } from "@/core/thread-parts";
 import { recordInterplayChanges } from "@/core/interplay-history";
@@ -18,6 +18,8 @@ const Body = z.discriminatedUnion("action", [
   z.object({ action: z.literal("holder"), campaignId, entityId: z.number().int(), holderId: z.number().int().nullable() }),
   z.object({ action: z.literal("part"), campaignId, threadId: z.number().int(), entityId: z.number().int(), role: z.string().max(30) }),
   z.object({ action: z.literal("stakes"), campaignId, threadId: z.number().int(), level: z.number().int().min(1).max(5).nullable() }),
+  // The thread itself: resolve or reopen it, set it aside or bring it back, give it a deadline.
+  z.object({ action: z.literal("thread"), campaignId, threadId: z.number().int(), status: z.enum(["open", "resolved"]).optional(), parked: z.boolean().optional(), deadline: z.string().trim().max(200).optional() }),
   z.object({ action: z.literal("sub"), campaignId, entityId: z.number().int(), path: z.string().max(80), value: z.union([z.number().int().min(-3).max(3), z.boolean(), z.null()]) }),
   z.object({ action: z.literal("pair"), campaignId, entityId: z.number().int(), from: z.number().int(), to: z.number().int(), weight: z.enum(PAIR_WEIGHTS), value: z.number().int().min(-3).max(3).nullable() }),
   z.object({ action: z.literal("interplay"), campaignId, entityId: z.number().int(), id: z.string().max(40), state: z.enum(["on", "off", "auto"]), other: z.number().int().optional() }),
@@ -30,6 +32,14 @@ const batchNow = () => {
 };
 
 export const POST = jsonRoute(Body, async (b) => {
+  if (b.action === "thread") {
+    const [t] = await db.select().from(schema.threads).where(and(eq(schema.threads.id, b.threadId), eq(schema.threads.campaignId, b.campaignId)));
+    if (!t) throw new Error("That isn't in this campaign.");
+    const opts = { source: "dm" as const, batch: batchNow() };
+    await updateThread(t.id, { ...(b.status ? { status: b.status } : {}), ...(b.parked != null ? { parked: b.parked } : {}), ...(b.deadline != null ? { deadline: b.deadline } : {}) }, opts);
+    await recordInterplayChanges(b.campaignId, opts.batch).catch(() => {});
+    return loomNode(b.campaignId, "thread", t.id);
+  }
   if (b.action === "part" || b.action === "stakes") {
     const [t] = await db.select().from(schema.threads).where(and(eq(schema.threads.id, b.threadId), eq(schema.threads.campaignId, b.campaignId)));
     if (!t) throw new Error("That isn't in this campaign.");

@@ -1,0 +1,1 @@
+ALTER TABLE `threads` ADD `parked` integer DEFAULT false NOT NULL;

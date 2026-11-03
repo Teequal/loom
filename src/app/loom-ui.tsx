@@ -1,6 +1,6 @@
 "use client";
 
-import { GmTools } from "./gm-tools";
+import { GmTools, RuleRolls } from "./gm-tools";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
@@ -935,7 +935,7 @@ function ThreadView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
       .catch((e) => setEditError(e.message));
   return (
     <ThreadScope ids={[n.id]}>
-      <Head n={n} chips={[n.firstSeen && `since s${n.firstSeen}`, n.lastTouched && n.lastTouched !== n.firstSeen && `last s${n.lastTouched}`, n.secret && "GM only"]} />
+      <Head n={n} chips={[n.firstSeen && `since s${n.firstSeen}`, n.lastTouched && n.lastTouched !== n.firstSeen && `last s${n.lastTouched}`, n.secret && "GM only", n.parked && "set aside"]} />
       <p className="story leading-relaxed">
         <Linked text={n.summary} />
       </p>
@@ -951,12 +951,15 @@ function ThreadView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
           {n.deadline.secret && <Lock />}
         </p>
       )}
+      {/* Keyed by the saved deadline, so the field starts from what's saved. */}
+      <ThreadActions key={`${n.id}:${n.deadlineText ?? ""}`} n={n} edit={edit} />
       <div className="mt-3">
         <Steps label="How much it matters" steps={STAKES} value={n.stakesLevel ?? 0} onChange={(i) => edit({ action: "stakes", level: i || null })} />
       </div>
       {editError && <p className="mt-1 text-xs text-danger">{editError}</p>}
       <Properties items={n.properties} />
-      {n.status !== "resolved" && <NextMoves threadId={n.id} title={n.name} />}
+      {n.status !== "resolved" && !n.parked && <NextMoves threadId={n.id} title={n.name} />}
+      {n.status !== "resolved" && n.rules?.length > 0 && <ThreadRolls rules={n.rules} />}
       <Section title="Involves" items={n.involves} initial={8} render={(r: Ref & { role: string; roleMine: boolean }) => <li key={r.id}><RefLink r={r} /> <select aria-label={`${r.name}'s part`} className="quiet text-xs" value={r.role} onChange={(e) => edit({ action: "part", entityId: r.id, role: e.target.value })}>{n.roles.map((x: { id: string; says: string }) => <option key={x.id} value={x.id} title={x.says}>{roleWord(x.id)}</option>)}</select> <span className="text-xs text-muted">{r.sub}{r.status && !["alive", "intact"].includes(r.status) ? ` · ${r.status}` : ""}</span></li>} />
       <Section title="Connected threads" items={n.linked} render={(r: any) => <li key={r.id}><RefLink r={r} />{r.note && <span className="text-xs text-muted">: {r.note}</span>}</li>} />
       <Section
@@ -976,6 +979,71 @@ function ThreadView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
       />
       <Section title="Key moments" items={n.moments} render={(r: Ref) => <li key={r.id}><RefLink r={r} /></li>} />
     </ThreadScope>
+  );
+}
+
+// What the GM can do with a thread in one tap: resolve or reopen it, set it aside (it won't come up
+// until brought back) or bring it back, and give it a deadline. Each is the opposite's undo, and all
+// are in Recent changes.
+function ThreadActions({ n, edit }: { n: Node; edit: (body: object) => Promise<void> }) {
+  const [deadline, setDeadline] = useState<string>(n.deadlineText ?? "");
+  const [busy, setBusy] = useState(false);
+  const run = (body: object) => {
+    setBusy(true);
+    edit({ action: "thread", ...body }).finally(() => setBusy(false));
+  };
+  const resolved = n.status === "resolved";
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-2 text-[13px]">
+      <button type="button" disabled={busy} onClick={() => run({ status: resolved ? "open" : "resolved" })} className="btn-secondary text-xs">
+        {resolved ? "Reopen" : "Resolve"}
+      </button>
+      {!resolved && (
+        <button type="button" disabled={busy} onClick={() => run({ parked: !n.parked })} className="btn-secondary text-xs" title={n.parked ? "" : "It won't come up in suggestions until you bring it back"}>
+          {n.parked ? "Bring it back" : "Set aside"}
+        </button>
+      )}
+      {!resolved && (
+        <form
+          className="flex min-w-[12rem] flex-1 items-center gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (deadline.trim() !== (n.deadlineText ?? "")) run({ deadline: deadline.trim() });
+          }}
+        >
+          <label htmlFor={`deadline-${n.id}`} className="text-muted">Deadline</label>
+          <input
+            id={`deadline-${n.id}`}
+            value={deadline}
+            onChange={(e) => setDeadline(e.target.value)}
+            onBlur={() => deadline.trim() !== (n.deadlineText ?? "") && run({ deadline: deadline.trim() })}
+            placeholder="by dawn, before the festival…"
+            maxLength={200}
+            className="min-w-0 flex-1 border-b border-line bg-transparent py-0.5 outline-none focus:border-thread/60"
+          />
+        </form>
+      )}
+    </div>
+  );
+}
+
+// A thread's own house rules, to roll from here without asking Loom (the same as Tools' tab).
+function ThreadRolls({ rules }: { rules: { id: number; name: string; check: string; onFail: string; onSuccess: string; rule: string; secret: boolean }[] }) {
+  const loom = useLoom()!;
+  const [open, setOpen] = useState(false);
+  const pcs = loom.index.filter((x) => x.kind === "entity" && x.sub === "Player character" && x.status !== "dead").map((x) => ({ name: x.name, perception: null, insight: null }));
+  return (
+    <section className="mt-5">
+      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-baseline justify-between gap-2 text-left">
+        <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted">Its rolls</h3>
+        <span className="text-[12px] text-muted">{rules.map((r) => r.name).join(", ")}</span>
+      </button>
+      {open && (
+        <div className="mt-2 rounded-lg border border-line p-3 text-sm">
+          <RuleRolls pcs={pcs} rules={rules} campaignId={loom.campaignId} />
+        </div>
+      )}
+    </section>
   );
 }
 

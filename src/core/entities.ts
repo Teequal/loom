@@ -380,6 +380,8 @@ export interface ThreadPatch {
   deadline?: string;
   stakes?: string;
   secret?: boolean;
+  status?: "open" | "progressing" | "resolved";
+  parked?: boolean;
 }
 
 export async function updateThread(threadId: number, patch: ThreadPatch, opts: WriteOptions): Promise<WriteResult> {
@@ -390,11 +392,12 @@ export async function updateThread(threadId: number, patch: ThreadPatch, opts: W
     await db.update(schema.threads).set({ ...apply, fieldMeta: nextMeta }).where(eq(schema.threads.id, threadId));
     const current = thread as Record<string, unknown>;
     await logChanges(Object.keys(apply).map((field) => ({ campaignId: thread.campaignId, sessionId: opts.sessionId, subject: thread.title, threadId, kind: "field" as const, field, before: current[field] ?? null, after: apply[field] ?? null, source: opts.source, batch: opts.batch })));
+    const resolved = patch.status === "resolved" && thread.status !== "resolved";
     await db.insert(schema.threadEvents).values({
       threadId,
       sessionId: opts.sessionId ?? null,
-      change: "edited",
-      note: `${opts.source === "dm" ? "GM" : "Extraction"} set ${result.written.join(", ")}`,
+      change: resolved ? "resolved" : "edited",
+      note: resolved ? "Resolved by the GM" : patch.status && thread.status === "resolved" ? "Reopened by the GM" : patch.parked != null ? (patch.parked ? "Set aside by the GM" : "Brought back by the GM") : `${opts.source === "dm" ? "GM" : "Extraction"} set ${result.written.join(", ")}`,
     });
   }
   return result;

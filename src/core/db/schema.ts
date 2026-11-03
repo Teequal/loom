@@ -246,6 +246,7 @@ export const threads = sqliteTable("threads", {
   stakesLevel: integer("stakes_level"), // 1 (a loose end) … 5 (the campaign turns on it)
   urgency: integer("urgency"), // 0–3: how soon it bites, for the GM to set when there's no hard deadline
   secret: integer("secret", { mode: "boolean" }).notNull().default(false), // GM-only thread
+  parked: integer("parked", { mode: "boolean" }).notNull().default(false), // the GM set it aside: it doesn't come up until brought back
   fieldMeta: fieldMeta(),
   createdAt: createdAt(),
 });
