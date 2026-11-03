@@ -33,22 +33,75 @@ const threadSub = (t: { kind: string; status: string }) => `${t.kind} thread${t.
 
 // Names to link inside text: every entity name and alias, every thread title.
 export async function loomIndex(campaignId: number) {
-  const [entities, threads, moments, sessions] = await Promise.all([
+  const [entities, threads, moments, sessions, relations] = await Promise.all([
     db.select().from(schema.entities).where(eq(schema.entities.campaignId, campaignId)),
     db.select().from(schema.threads).where(eq(schema.threads.campaignId, campaignId)),
     db.select().from(schema.keyMoments).where(and(eq(schema.keyMoments.campaignId, campaignId), inArray(schema.keyMoments.status, ["key", "suggested"]))),
     db.select().from(schema.sessions).where(eq(schema.sessions.campaignId, campaignId)),
+    db.select().from(schema.entityRelations).where(and(eq(schema.entityRelations.campaignId, campaignId), eq(schema.entityRelations.secret, false))),
   ]);
+  const links = threads.length ? (await db.select().from(schema.threadEntities).where(inArray(schema.threadEntities.threadId, threads.map((t) => t.id)))).filter((l) => !l.secret) : [];
+  const facts = hoverFacts(entities, threads, relations, links, sessions);
   return {
     nodes: [
-      ...entities.map((e) => ({ kind: "entity" as const, id: e.id, name: e.name, aliases: e.aliases, sub: TYPE_LABEL[e.type] ?? e.type, status: e.status, line: e.description })),
-      ...threads.map((t) => ({ kind: "thread" as const, id: t.id, name: t.title, aliases: [], sub: threadSub(t), status: t.status, line: t.summary })),
+      ...entities.map((e) => ({ kind: "entity" as const, id: e.id, name: e.name, aliases: e.aliases, sub: TYPE_LABEL[e.type] ?? e.type, status: e.status, line: e.description, facts: facts.entity.get(e.id) ?? [] })),
+      ...threads.map((t) => ({ kind: "thread" as const, id: t.id, name: t.title, aliases: [], sub: threadSub(t), status: t.status, line: t.summary, facts: facts.thread.get(t.id) ?? [], parts: links.filter((l) => l.threadId === t.id).map((l) => ({ id: l.entityId, role: l.role })) })),
       ...moments.map((m) => ({ kind: "moment" as const, id: m.id, name: m.title, aliases: [], sub: m.status === "key" ? "Key moment" : "Suggested moment", status: m.status, line: m.description })),
       ...sessions
         .filter((x) => x.recap.trim())
         .map((x) => ({ kind: "session" as const, id: x.number, name: `Session ${x.number}`, aliases: [], sub: "Session", status: null, line: x.recap.replace(/\s+/g, " ").slice(0, 160) })),
     ],
   };
+}
+
+// The few facts a hover card shows, most useful first; GM-only values stay in the inspector, since
+// a hover can happen on a shared screen.
+function hoverFacts(
+  entities: (typeof schema.entities.$inferSelect)[],
+  threads: (typeof schema.threads.$inferSelect)[],
+  relations: (typeof schema.entityRelations.$inferSelect)[],
+  links: (typeof schema.threadEntities.$inferSelect)[],
+  sessions: (typeof schema.sessions.$inferSelect)[],
+) {
+  const name = new Map(entities.map((e) => [e.id, e.name]));
+  const sessionNo = new Map(sessions.map((s) => [s.id, s.number]));
+  const entity = new Map<number, string[]>();
+  for (const e of entities) {
+    const t = e.traits as EntityTraits;
+    const open = (m: string) => !e.fieldMeta[m]?.secret;
+    const out: string[] = [];
+    const who = [t.race, t.occupation, t.level ? `level ${t.level}` : ""].filter((x, i) => x && open(`traits.${["race", "occupation", "level"][i]}`)).join(", ");
+    if (who) out.push(who);
+    const where = name.get(e.lastKnownLocationId ?? e.parentLocationId ?? -1);
+    if (where) out.push(`At ${where}`);
+    const held = relations.find((r) => r.type === "holds" && r.toEntityId === e.id);
+    if (held) out.push(`Held by ${name.get(held.fromEntityId)}`);
+    if (t.health && open("traits.health")) out.push(`Health: ${t.health}`);
+    const mood = typeof t.mood === "number" ? ({ "-3": "despairing", "-2": "grim", "-1": "low", "1": "good", "2": "bright", "3": "elated" } as Record<string, string>)[String(t.mood)] : t.mood;
+    if (mood && open("traits.mood")) out.push(`Mood: ${mood}`);
+    if (t.conditions?.length && open("traits.conditions")) out.push(`Conditions: ${t.conditions.join(", ")}`);
+    const goal = t.goals?.find((g) => !g.secret)?.text ?? (open("traits.goal") ? t.goal : undefined);
+    if (goal) out.push(`Wants to ${goal.replace(/^to\s+/i, "")}`);
+    const holds = relations.filter((r) => r.type === "holds" && r.fromEntityId === e.id).map((r) => name.get(r.toEntityId));
+    if (holds.length) out.push(`Holds ${holds.join(", ")}`);
+    const ties = relations.filter((r) => r.fromEntityId === e.id && !["holds", "located_at", "lives_at"].includes(r.type)).slice(0, 3).map((r) => `${r.type.replace(/_/g, " ")} ${name.get(r.toEntityId)}`);
+    if (ties.length) out.push(ties.join(" · "));
+    const inThreads = links.filter((l) => l.entityId === e.id).map((l) => threads.find((x) => x.id === l.threadId)).filter((x) => x && x.status !== "resolved");
+    if (inThreads.length) out.push(`In ${inThreads.length} open thread${inThreads.length === 1 ? "" : "s"}`);
+    entity.set(e.id, out);
+  }
+  const thread = new Map<number, string[]>();
+  for (const t of threads) {
+    const out: string[] = [];
+    if (t.stakes && !t.fieldMeta.stakes?.secret) out.push(`Stakes: ${t.stakes}`);
+    if (t.deadline && !t.fieldMeta.deadline?.secret) out.push(`Deadline: ${t.deadline}`);
+    const who = links.filter((l) => l.threadId === t.id).map((l) => `${name.get(l.entityId)}${l.role === "involved" ? "" : ` (${l.role})`}`);
+    if (who.length) out.push(who.join(", "));
+    const last = t.lastTouchedSessionId ? sessionNo.get(t.lastTouchedSessionId) : null;
+    if (last != null) out.push(`Last moved in session ${last}`);
+    thread.set(t.id, out);
+  }
+  return { entity, thread };
 }
 
 export async function loomNode(campaignId: number, kind: NodeKind, id: number) {

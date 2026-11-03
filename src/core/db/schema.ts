@@ -198,7 +198,7 @@ export const embeddings = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
-    ownerType: text("owner_type", { enum: ["thread", "entity", "moment", "scene"] }).notNull(),
+    ownerType: text("owner_type", { enum: ["thread", "entity", "moment", "scene", "facet"] }).notNull(),
     ownerId: integer("owner_id").notNull(), // thread, entity or moment id; for scenes, the session id
     chunk: integer("chunk").notNull().default(0), // scenes: which part of the recap
     model: text("model").notNull(),
@@ -360,6 +360,7 @@ export interface LiveOption {
   pillar?: string | null;
   scaffold?: unknown; // the engine's scaffold for it (ScaffoldOption): what it changes, and the turn it ends on
   surprise?: string | null; // built on a surprise move: why it's explicable
+  latent?: string | null; // built on a link nobody has made: the GM's to keep
 }
 export const liveEntries = sqliteTable("live_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),

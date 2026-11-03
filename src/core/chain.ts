@@ -7,6 +7,7 @@ import { db, schema } from "./db/client";
 import { PILLARS } from "./db/schema";
 import { deltasOf, taggedNames, untag } from "./deltas";
 import { SURPRISE_CHANCE, type Surprises } from "./moves";
+import { latentMoves } from "./latent";
 import { findMoves, moveKey, type Move, type Steer } from "./moves";
 import { planSlips } from "./plan-agency";
 import { fillSlots, pcOpensClause } from "./slots";
@@ -441,7 +442,7 @@ export async function developChain(campaignId: number, input: ChainInput) {
   const refine = input.refine;
   const count = refine ? 1 : Math.max(1, Math.min(3, input.count ?? 1));
   const steer = input.steer ?? null;
-  let moves = findMoves(p.scene.situation.view, p.threads, { callbacks: p.callbacks, liveRules: liveRulesOf(p.scene), taste: p.taste, steer: steer ?? undefined, toward: steer === "story" ? towardDirection(p) : undefined, exclude: input.exclude, limit: Math.max(4, count + 2), surprise: refine ? undefined : { chance: SURPRISE_CHANCE[input.surprises ?? "rare"], seed: `${campaignId}|${input.text}|${steer ?? input.words ?? ""}|${p.scene.situation.view.g.log.length}` } });
+  let moves = findMoves(p.scene.situation.view, p.threads, { callbacks: p.callbacks, liveRules: liveRulesOf(p.scene), taste: p.taste, latent: refine ? undefined : latentMoves(p.scene.situation.view, p.threads, p.meaning?.facets ?? [], `${campaignId}|${input.text}|${p.scene.situation.view.g.log.length}`), steer: steer ?? undefined, toward: steer === "story" ? towardDirection(p) : undefined, exclude: input.exclude, limit: Math.max(4, count + 2), surprise: refine ? undefined : { chance: SURPRISE_CHANCE[input.surprises ?? "rare"], seed: `${campaignId}|${input.text}|${steer ?? input.words ?? ""}|${p.scene.situation.view.g.log.length}` } });
   // A rework stays on the chain's move; "bring in X" puts X in its cast, to arrive if they aren't here.
   const bring = refine && /^bring in /i.test(refine.how) ? refine.how.replace(/^bring in /i, "").trim() : null;
   if (refine) {

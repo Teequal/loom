@@ -144,3 +144,29 @@ export function derivedLines(v: View): string[] {
   }
   return lines;
 }
+
+
+// What Loom has been offering lately, asks fading by a fifth each: the engine leans away from it,
+// so the same thread, person or question doesn't keep coming back.
+export const RECENT_ASKS = 8;
+export function offeredLately(v: View) {
+  // LOOM_OFFERED=off leaves it out, for A/B runs.
+  const entries = process.env.LOOM_OFFERED === "off" ? [] : [...new Set(v.g.offered.map((o) => o.entry))].slice(-RECENT_ASKS);
+  const thread = new Map<number, number>();
+  const lead = new Map<string, number>();
+  const to = new Map<string, number>();
+  const sources = new Set<string>();
+  const add = <K,>(m: Map<K, number>, k: K, w: number) => m.set(k, (m.get(k) ?? 0) + w);
+  for (const o of v.g.offered) {
+    const at = entries.indexOf(o.entry);
+    if (at < 0) continue;
+    const w = 0.8 ** (entries.length - 1 - at);
+    if (o.thread != null) add(thread, o.thread, w);
+    for (const l of o.leads) add(lead, l, w);
+    if (o.to) add(to, o.to, w);
+    if (o.source) sources.add(o.source);
+  }
+  const lastAsks = new Set(entries.slice(-4));
+  const lines = v.g.offered.filter((o) => lastAsks.has(o.entry)).map((o) => [o.line, o.hand].filter(Boolean).join(" / "));
+  return { thread, lead, to, sources, lines: [...new Set(lines)].slice(-8) };
+}

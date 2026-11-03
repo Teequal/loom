@@ -13,6 +13,8 @@ import { planSlips } from "./plan-agency";
 import { listMoments, momentLine } from "./moments";
 import { personalLines, spotlightScore, tableSeats } from "./players";
 import { buildScene, type Scene } from "./scene";
+import { echoIds, latentMoves, withoutParty } from "./latent";
+import { offeredLately } from "./world/derived";
 import { findMoves, movesBlock, SURPRISE_CHANCE, type Move, type Surprises } from "./moves";
 import { loadTaste, tasteBlock } from "./taste";
 import { derivedLines, ruleCostLine } from "./world/derived";
@@ -237,6 +239,7 @@ export interface ImprovOption {
   callback: { id: number; title: string } | null;
   scaffold: ScaffoldOption; // kept for the flavour pass
   surprise?: string | null; // built on the surprise move: why it's explicable
+  latent?: string | null; // built on a link nobody has made: the GM's to keep
 }
 
 // How names go in and what a scaffold is: shared by improv options and Develop's chain steps.
@@ -859,7 +862,8 @@ export async function prepareMoment(campaignId: number, moment: string, opts: Pr
   if (provider && mode !== "all") {
     try {
       await ensureEmbeddings(campaignId, provider);
-      meaning = await searchByMeaning(campaignId, provider, moment);
+      const pcs = base.entities.filter((e) => e.type === "pc").flatMap((e) => [e.name, ...e.aliases]);
+      meaning = await searchByMeaning(campaignId, provider, moment, withoutParty(moment, pcs));
     } catch (err) {
       meaningNote = `Meaning search skipped (${err instanceof Error ? err.message : String(err)})`;
     }
@@ -882,6 +886,7 @@ export async function prepareMoment(campaignId: number, moment: string, opts: Pr
     ...threads.slice(0, 2).flatMap((t) => t.entities.map((n) => nameToId.get(n))),
     // Up to three characters, places or things unusually close in meaning.
     ...(meaning?.entities.filter((h) => h.z >= 1.5).slice(0, 3).map((h) => h.ownerId) ?? []),
+    ...echoIds(meaning?.facets ?? []),
   ].filter((id): id is number => id != null);
   const distances = await distancesFrom(campaignId, seeds, budget.depth);
   const scene = await buildScene(campaignId, { mentioned, threadEntities: threads.flatMap((t) => t.entities), storyConditions, distances, budget, situation: base.situation });
@@ -890,8 +895,10 @@ export async function prepareMoment(campaignId: number, moment: string, opts: Pr
 
   // The player layer: who has been quiet and what their players enjoy (ranking only).
   const seats = await tableSeats(campaignId);
+  // Not someone who's just been asked, or the quiet player gets the same question every time.
+  const handed = offeredLately(scene.situation.view).to;
   const quietest = seats
-    .filter((x) => x.quietFor >= 2 && x.pc.status !== "dead" && capabilitiesOf(x.pc).act)
+    .filter((x) => x.quietFor >= 2 && x.pc.status !== "dead" && capabilitiesOf(x.pc).act && (handed.get(x.pc.name) ?? 0) < 1.2)
     .sort((a, b) => b.quietFor - a.quietFor)[0];
   // The table notes rank options in code; the model only hears which PC to give one option to.
   const tableBlock = quietest ? `HAND ONE OPTION TO: ${quietest.pc.name}, if the moment allows; the others go to whoever the moment is about.` : "";
@@ -992,7 +999,10 @@ ${standingBlock(p, moves, unit)}${(() => {
     const lately = derivedLines(p.scene.situation.view);
     return lately.length ? `\nLATELY (worked out from this session, not recorded)\n${lately.map((l) => `- ${l}`).join("\n")}\n` : "";
   })()}${p.sceneBlock}${p.callbacks.length ? `\nKEY MOMENTS YOU COULD CALL BACK\n${p.callbacks.map(momentLine).join("\n")}\n` : ""}${p.tableBlock ? `\n${p.tableBlock}\n` : ""}
-${tasteBlock(p.taste)}${p.direction ? `\nWHERE THE GM WANTS THE STORY TO GO\n${p.direction}\n` : ""}${p.soFar ? `\nTHIS SESSION SO FAR (what already happened at the table, oldest first)\n${p.soFar}\n` : ""}`;
+${(() => {
+    const lines = offeredLately(p.scene.situation.view).lines;
+    return lines.length ? `ALREADY OFFERED (the last few asks; don't reuse their idea, image or question unless the moment demands it)\n${lines.map((l) => `- ${l}`).join("\n")}\n` : "";
+  })()}${tasteBlock(p.taste)}${p.direction ? `\nWHERE THE GM WANTS THE STORY TO GO\n${p.direction}\n` : ""}${p.soFar ? `\nTHIS SESSION SO FAR (what already happened at the table, oldest first)\n${p.soFar}\n` : ""}`;
 }
 
 /**
@@ -1119,7 +1129,8 @@ export async function improv(campaignId: number, moment: string, mode: "ranked" 
   // A surprise now and then (the GM's setting), seeded by the moment and how far the session has
   // got, so asking the same thing again gives the same answer.
   const surprise = { chance: SURPRISE_CHANCE[opts.surprises ?? "rare"], seed: `${campaignId}|${moment}|${scene.situation.view.g.log.length}|${opts.steer ?? ""}` };
-  const moves = findMoves(scene.situation.view, threads, { callbacks, liveRules: liveRulesOf(scene), surprise, taste: P.taste });
+  const latent = latentMoves(scene.situation.view, threads, P.meaning?.facets ?? [], surprise.seed);
+  const moves = findMoves(scene.situation.view, threads, { callbacks, liveRules: liveRulesOf(scene), surprise, taste: P.taste, latent });
   const places = placeContext(scene.situation);
   {
     const s = scene.situation;
@@ -1197,6 +1208,7 @@ ${moment}`;
     scaffold: o,
     // Built on the surprise move: say so, with why it's explicable.
     surprise: moves.find((m) => m.id === o.move)?.surprise ?? null,
+    latent: moves.find((m) => m.id === o.move)?.latent ?? null,
   });
 
   // Ask once; if fewer than two options survive the checks, ask once more. Each option is checked
@@ -1285,7 +1297,9 @@ ${moment}`;
   const score = (o: ScaffoldOption) =>
     spotlightScore(seats, o.hand_off.to, o.pillar ?? "drama") + (mentioned.has(o.hand_off.to) ? 0.7 : 0) + (wanted.length && o.flavour && wanted.includes(o.flavour) ? 2 : 0) + (o.flavour ? (P.taste.flavour[o.flavour] ?? 0) : 0) +
     // An option on the surprise move is shown when it's written: the GM asked for surprises.
-    (moves.find((m) => m.id === o.move)?.surprise ? 5 : 0) +
+    (moves.find((m) => m.id === o.move)?.surprise ? 5 : 0) + (moves.find((m) => m.id === o.move)?.latent ? 4 : 0) -
+    // Someone who keeps being asked gives way to the others.
+    0.3 * (offeredLately(scene.situation.view).to.get(o.hand_off.to) ?? 0) +
     // A rule the moment set off comes up: the GM rolls it every time.
     (moves.find((m) => m.id === o.move)?.rule?.used ? 3 : 0);
   let kept = [...shown, ...accepted.filter((o) => !shown.includes(o)).sort((a, b) => score(b) - score(a))].slice(0, 3);

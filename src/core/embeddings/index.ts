@@ -10,7 +10,7 @@ export { cosine, embeddingProvider, localProvider, voyageProvider, type Embeddin
 // Embeddings as a derived property: what text represents each thread, entity, key moment and
 // recap scene; keeping vectors fresh (only re-embedding what changed); and searching by meaning.
 
-type OwnerType = "thread" | "entity" | "moment" | "scene";
+type OwnerType = "thread" | "entity" | "moment" | "scene" | "facet";
 interface Doc {
   ownerType: OwnerType;
   ownerId: number;
@@ -35,6 +35,20 @@ function scenes(recap: string) {
   }
   if (cur.trim()) parts.push(cur);
   return parts;
+}
+
+// The details of a character, thing, group or place, one per facet. GM-only values stay out: these
+// surface as hints at the table, from what's openly recorded.
+export function facetTexts(e: { description: string; traits: unknown; fieldMeta: Record<string, { secret?: boolean } | undefined> }) {
+  const t = e.traits as EntityTraits;
+  // What someone is, not what the party did with them: narrative clauses match any moment.
+  const out = e.description.split(/(?<=[.!?;])\s+/).map((x) => x.trim()).filter((x) => x.length > 8 && /^[A-Z]/.test(x) && !/\b(?:party|found|later)\b/i.test(x));
+  for (const k of ["occupation", "abilities", "gear", "background", "personality_traits", "known_properties", "hazards", "atmosphere"] as const) {
+    const v = t[k as keyof EntityTraits];
+    if (e.fieldMeta[`traits.${k}`]?.secret) continue;
+    for (const x of Array.isArray(v) ? v : typeof v === "string" ? [v] : []) if (typeof x === "string" && x.trim().length > 3) out.push(x.trim());
+  }
+  return [...new Set(out)].slice(0, 8);
 }
 
 async function documents(campaignId: number): Promise<Doc[]> {
@@ -64,6 +78,9 @@ async function documents(campaignId: number): Promise<Doc[]> {
       text: `${e.name} (${e.type})${e.aliases.length ? `, also called ${e.aliases.join(", ")}` : ""}. ${e.description} ${traitText}${rels.length ? `. ${rels.join("; ")}` : ""}`,
     });
   }
+
+  // Facets: each thing someone is, short enough for a single detail to match a moment ("minstrel").
+  for (const e of entities) if (e.type !== "pc") facetTexts(e).forEach((text, i) => docs.push({ ownerType: "facet", ownerId: e.id, chunk: i, text }));
 
   const moments = await db
     .select()
@@ -115,15 +132,17 @@ export interface Hit {
 
 // Searches by meaning. Scores are compared within each kind (threads with threads…), so "z" says
 // how unusually close a match is, which works across models without hand-tuned thresholds.
-export async function searchByMeaning(campaignId: number, provider: EmbeddingProvider, query: string) {
-  const [q] = await provider.embed([query], "query");
+// Facets are searched with the moment's own subject matter (`facetQuery`: the PCs left out), since a
+// PC's name matches every detail that mentions them.
+export async function searchByMeaning(campaignId: number, provider: EmbeddingProvider, query: string, facetQuery = query) {
+  const [q, fq] = await provider.embed([query, facetQuery], "query");
   const rows = await db
     .select()
     .from(schema.embeddings)
     .where(and(eq(schema.embeddings.campaignId, campaignId), eq(schema.embeddings.model, provider.model)));
   const byType = new Map<OwnerType, Hit[]>();
   for (const r of rows) {
-    const hit: Hit = { ownerType: r.ownerType, ownerId: r.ownerId, chunk: r.chunk, text: r.text, sim: cosine(q, fromBuffer(r.vector as Buffer)), z: 0 };
+    const hit: Hit = { ownerType: r.ownerType, ownerId: r.ownerId, chunk: r.chunk, text: r.text, sim: cosine(r.ownerType === "facet" ? fq : q, fromBuffer(r.vector as Buffer)), z: 0 };
     byType.set(r.ownerType, [...(byType.get(r.ownerType) ?? []), hit]);
   }
   for (const hits of byType.values()) {
@@ -137,6 +156,7 @@ export async function searchByMeaning(campaignId: number, provider: EmbeddingPro
     entities: byType.get("entity") ?? [],
     moments: byType.get("moment") ?? [],
     scenes: byType.get("scene") ?? [],
+    facets: byType.get("facet") ?? [],
   };
 }
 export type MeaningSearch = Awaited<ReturnType<typeof searchByMeaning>>;

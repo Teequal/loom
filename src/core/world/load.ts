@@ -26,6 +26,8 @@ export interface Graph {
   record: { session: number; text: string; weight: number }[];
   /** The live log as events, oldest first: what was used, who rolled what, how it turned out. */
   log: LogEvent[];
+  /** What Loom offered at the table, oldest first, so it doesn't keep offering the same. */
+  offered: Offered[];
   /** How A stands toward B, as recorded weights with their provenance, by "fromKey|toKey". */
   pairs: Map<string, { weights: Partial<Record<PairWeight, number>>; meta: Partial<Record<PairWeight, FieldMeta>> }>;
 }
@@ -46,6 +48,16 @@ export interface LogEvent {
   outcome: "success" | "failure" | "partial" | "won" | "lost" | "fled" | "talked" | null; // results only
   failText?: string; // what its failure would cost, as written, for a rule to go further next time
   payloads: string[]; // what a used option or step delivered (beat plans), so it isn't made twice
+}
+export interface Offered {
+  entry: number;
+  thread: number | null;
+  move: string | null; // its kind
+  source: string | null; // the pull or link it came from
+  leads: string[];
+  to: string | null; // the PC it was handed to
+  line: string; // the headline, or the option's start
+  hand: string; // the question or roll, as written
 }
 type Scaffoldish = { owedRule?: string; hand?: { kind?: string; to?: string; mechanic?: string }; hand_off?: { to?: string; kind?: string; mechanic?: string }; setup?: { payload?: string }[]; on_fail?: { effect?: string } };
 export const OUTCOME: Record<string, LogEvent["outcome"]> = { succeeded: "success", success: "success", failed: "failure", failure: "failure", partly: "partial", partial: "partial", won: "won", lost: "lost", fled: "fled", "talked it out": "talked" };
@@ -364,6 +376,18 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     entityKey,
     problems,
     log: liveLog(live),
+    offered: live.flatMap((r) =>
+      (r.options as { text: string; headline?: string; scaffold?: { thread?: string; thread_id?: number; moveInfo?: { kind: string; source?: string; cast: { name: string; part?: string }[] }; hand_off?: { to?: string; text?: string } } }[]).map((o) => ({
+        entry: r.id,
+        thread: o.scaffold?.thread_id ?? (Number(/\d+/.exec(o.scaffold?.thread ?? "")?.[0]) || null),
+        move: o.scaffold?.moveInfo?.kind ?? null,
+        source: o.scaffold?.moveInfo?.source ?? null,
+        leads: (o.scaffold?.moveInfo?.cast ?? []).filter((c) => c.part === "lead").map((c) => c.name),
+        to: o.scaffold?.hand_off?.to ?? null,
+        line: o.headline ?? o.text.slice(0, 80),
+        hand: o.scaffold?.hand_off?.text ?? "",
+      })),
+    ),
     pairs: new Map(
       pairRows.flatMap((r) => {
         const from = entityKey(r.fromEntityId);

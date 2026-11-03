@@ -11,7 +11,7 @@ import { Develop } from "./develop";
 import { Icon } from "./icons";
 import { Aftermath, type Encounter, FightPanel } from "./fight";
 import { ResultPrompt, SidePrompt } from "./results";
-import { Linked, LoomProvider, RefChips, RefLink, useLoom } from "./loom-ui";
+import { Linked, LoomProvider, RefChips, RefLink, ThreadScope, useLoom } from "./loom-ui";
 import { setPref, usePrefs } from "./prefs";
 import { type Overrides, SceneChips } from "./scene-chips";
 import { Header, Note, post, stream, useCampaigns, useElapsed } from "./shell";
@@ -32,6 +32,7 @@ interface Card {
   needs: "roll" | "fight" | null;
   pillar: string | null;
   surprise?: string | null; // built on the session's surprise: why it's explicable
+  latent?: string | null; // a link nobody has made yet: the GM's to keep
 }
 interface RecordFix {
   say: string;
@@ -1479,10 +1480,30 @@ function Headline({ card, n, onOpen, leaving, settled = false }: { card: Card; n
         {/* Tags sit in a place of their own, the same width as while the row was being written. */}
         <span className="mt-0.5 flex min-w-[5rem] shrink-0 justify-end gap-1.5">
           {card.surprise && <span className="rounded-full border border-thread/50 px-2 py-0.5 text-[11px] text-thread" title={card.surprise}>Surprise</span>}
+          {card.latent && <span className="rounded-full border border-thread/50 px-2 py-0.5 text-[11px] text-thread" title={card.latent}>New link</span>}
           {card.flavour && <span className="rounded-full bg-thread-soft px-2 py-0.5 text-[11px] text-thread">{FLAVOUR_LABEL[card.flavour] ?? card.flavour}</span>}
         </span>
       </button>
     </li>
+  );
+}
+
+// A link nobody has made is only a hint until the GM keeps it; kept, it's one of their secrets.
+function KeepLink({ text: raw }: { text: string }) {
+  const loom = useLoom();
+  const text = raw.replace(/[.!?\s]+$/, "");
+  const [kept, setKept] = useState(false);
+  return (
+    <p className="mt-2 text-[13px] text-thread">
+      <span className="font-medium">A new link.</span> <span className="italic text-muted">{text}.</span>{" "}
+      {kept ? (
+        <span className="text-muted">Kept in your secrets.</span>
+      ) : (
+        <button type="button" className="btn-tertiary" disabled={!loom} onClick={() => loom && post("/api/notes", { campaignId: loom.campaignId, add: `Possible link: ${text}.` }).then(() => setKept(true)).catch(() => {})}>
+          Keep this link
+        </button>
+      )}
+    </p>
   );
 }
 
@@ -1544,7 +1565,9 @@ function OptionCard({
         </button>
       </div>
       <p className="story leading-relaxed">
-        <Linked text={card.text} />
+        <ThreadScope ids={card.threads.map((t) => t.id)}>
+          <Linked text={card.text} />
+        </ThreadScope>
       </p>
       <RefChips refs={[...threadRefs(card.threads), ...(card.callback ? [{ kind: "moment" as const, id: card.callback.id, name: `Callback: ${card.callback.title}` }] : [])]} />
       {card.surprise && (
@@ -1552,7 +1575,8 @@ function OptionCard({
           <span className="font-medium">A surprise.</span> <span className="italic text-muted">{card.surprise.replace(/^a lesser goal surfaces: /, "")}</span>
         </p>
       )}
-      {card.why && showWhy && !card.surprise && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
+      {card.latent && <KeepLink text={card.latent} />}
+      {card.why && showWhy && !card.surprise && !card.latent && <p className="mt-2 text-[13px] italic text-muted">{card.why}</p>}
       {result && (
         <p className="mt-3 flex flex-wrap items-baseline gap-2 text-[13px]">
           <span className={`rounded-full px-2 py-0.5 text-[12px] font-medium ${/fail|lost|fled/i.test(result.choiceLabel) ? "bg-danger/10 text-danger" : "bg-thread-soft text-thread"}`}>{result.choiceLabel}</span>

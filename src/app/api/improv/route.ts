@@ -37,6 +37,7 @@ function card(o: ImprovOption, titleOf: Map<number, string>) {
     needs: (o.scaffold.pillar === "combat" ? "fight" : o.scaffold.hand_off.kind === "roll" ? "roll" : null) as "roll" | "fight" | null,
     pillar: o.scaffold.pillar ?? null,
     surprise: o.surprise ?? null,
+    latent: o.latent ?? null,
   };
 }
 

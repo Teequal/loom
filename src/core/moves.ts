@@ -1,5 +1,5 @@
 import type { SelectedThread } from "./retrieval";
-import { momentumOf, paceOf, ruleUsesOf } from "./world/derived";
+import { momentumOf, offeredLately, paceOf, ruleUsesOf } from "./world/derived";
 import { activityOf, heat, presenceOf, type View } from "./world/engine";
 import { interplaysOf, type Interplay } from "./world/interplays";
 import { propertyOf } from "./world/properties";
@@ -15,6 +15,8 @@ import type { AnyNode, NodeKey, Thread } from "./world/nodes";
 
 export type MoveKind =
   | "payoff" | "complication" | "arrival" | "hint" | "collision" | "rule" | "callback" | "wildcard"
+  // A connection nobody has made yet (latent.ts).
+  | "echo" | "tie"
   // From the property model: what an interplay or a notable property makes likely (§7.3).
   | "waver" | "strain" | "bargain" | "lash out" | "confide" | "comply" | "defect" | "choose a side" | "use it" | "infighting" | "character";
 
@@ -36,6 +38,7 @@ export interface Move {
   callback?: number; // a key moment's id, for callback moves
   source?: string; // the interplay or property it comes from ("conflicted", "candour")
   offers?: string[]; // hand-offs it can offer the players ("Iresia makes a Charisma check to hold the charm")
+  latent?: string; // a link nobody has made: the GM's to keep
   surprise?: string; // set when this is the session's surprise: why it's explicable
   rule?: { name: string; to: string[]; onFail: string; used: boolean; all?: boolean; words: string[] }; // the house rule a rule move ends on
 }
@@ -44,7 +47,7 @@ const endKey = (e: { kind: string; id: number }) => `${e.kind}:${e.id}` as NodeK
 const ARRIVING_ROLES = new Set(["seeker", "rival", "cause", "creditor", "informant", "promisee", "debtor", "ally", "witness", "guardian"]);
 const HINT_ROLES = new Set(["clue", "informant", "witness", "carrier", "source"]);
 const WEIGHT: Record<MoveKind, number> = {
-  collision: 1, rule: 0.9, payoff: 0.8, arrival: 0.6, callback: 0.5, complication: 0.5, hint: 0.4, wildcard: 0,
+  collision: 1, rule: 0.9, payoff: 0.8, echo: 1, tie: 1, arrival: 0.6, callback: 0.5, complication: 0.5, hint: 0.4, wildcard: 0,
   strain: 0.9, waver: 0.8, "choose a side": 0.8, defect: 0.7, confide: 0.7, comply: 0.7, bargain: 0.6, "lash out": 0.6, "use it": 0.6, infighting: 0.5, character: 0.5,
 };
 // An interplay's move names, as move kinds.
@@ -94,6 +97,7 @@ export function findMoves(
     toward?: Set<number>; // threads closest to where the GM wants the story to go
     exclude?: string[]; // moves already used ("kind:thread"), for another take
     taste?: { move: Record<string, number> }; // what this GM tends to use (taste.ts)
+    latent?: Omit<Move, "id" | "resting">[]; // connections nobody has made (latent.ts)
   },
 ): Move[] {
   const memo = new Map();
@@ -259,6 +263,16 @@ export function findMoves(
     if (bands.has("rattled") && (m.kind === "callback" || m.kind === "payoff")) m.score += 0.3;
     if (bands.has("on a roll") && m.kind === "complication") m.score += 0.3;
   }
+  // What's been offered lately gives way, so the same thread and the same people don't keep coming
+  // back. A thread the moment itself touches gives way less; a rule the moment set off, not at all.
+  const lately = offeredLately(v);
+  const tired = (m: Omit<Move, "id">) => {
+    if (m.rule?.used) return 0;
+    const guaranteed = threads.find((t) => t.id === m.threads[0])?.guaranteed;
+    const lead = Math.max(0, ...m.cast.filter((c) => c.part === "lead").map((c) => lately.lead.get(c.name) ?? 0));
+    return Math.min(2.5, 0.45 * (lately.thread.get(m.threads[0]) ?? 0) * (guaranteed ? 0.5 : 1) + 0.2 * lead);
+  };
+  for (const m of moves) m.score -= tired(m);
   if (opts.exclude?.length) for (let i = moves.length - 1; i >= 0; i--) if (opts.exclude.includes(moveKey(moves[i]))) moves.splice(i, 1);
   // Pick a varied set: each pick costs the rest a little for sharing its kind, main thread or cast.
   const limit = opts.limit ?? 5;
@@ -288,10 +302,17 @@ export function findMoves(
     const pick = pool[Math.floor(seeded(`${opts.surprise.seed}|pick`) * Math.min(3, pool.length))];
     if (pick && picked.length) picked[picked.length - 1] = { ...pick, resting: [], surprise: pick.because };
   }
-  // Always one open move, for the model's own idea, on the strongest thread with whoever's here.
+  // A connection nobody has made takes a place of its own, unless the moment owes a rule's roll there.
+  const link = opts.latent?.find((m) => !opts.exclude?.includes(moveKey(m)));
+  if (link) {
+    const room = picked.length < limit ? picked.length : picked.findLastIndex((m) => !m.rule?.used);
+    if (room >= 0) picked[room] = { ...link, resting: [] };
+  }
+  // Always one open move, for the model's own idea, on the threads least worn with whoever's here.
   if (threads[0]) {
-    const here = [...new Map([...threads.slice(0, 3).flatMap((t) => castOf(partsOf(t)).filter((c) => c.can === "act"))].map((c) => [c.name, c])).values()];
-    picked.push({ kind: "wildcard", threads: threads.slice(0, 3).map((t) => t.id), cast: here, because: "your own idea, on the threads most in play", score: 0, resting: [] });
+    const fresh = [...threads].sort((a, b) => (lately.thread.get(a.id) ?? 0) - (lately.thread.get(b.id) ?? 0));
+    const here = [...new Map([...fresh.slice(0, 3).flatMap((t) => castOf(partsOf(t)).filter((c) => c.can === "act"))].map((c) => [c.name, c])).values()];
+    picked.push({ kind: "wildcard", threads: fresh.slice(0, 3).map((t) => t.id), cast: here, because: "your own idea, on the threads most in play", score: 0, resting: [] });
   }
   return picked.map((m, i) => {
     const inCast = new Set(m.cast.map((c) => c.name));
@@ -352,6 +373,7 @@ export function movesBlock(moves: Move[], titleOf: Map<number, string>) {
         m.rule?.used && "the moment set this rule off: one option must build on this move",
         `because: ${m.because}`,
         m.offers?.length && `could offer: ${m.offers.join("; ")}`,
+        m.latent && "NEW LINK: build exactly one option on this move; it hints at the link and never confirms it",
         m.surprise && "SURPRISE: the GM asked for one now and then; build exactly one option on this move, and keep it explicable",
       ]
         .filter(Boolean)

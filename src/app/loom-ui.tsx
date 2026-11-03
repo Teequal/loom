@@ -21,6 +21,8 @@ interface IndexNode {
   sub: string;
   status: string | null;
   line: string;
+  facts?: string[];
+  parts?: { id: number; role: string }[]; // threads: who plays which part
 }
 interface Ref {
   kind: Kind;
@@ -51,6 +53,9 @@ function buildLinker(index: IndexNode[]): Linker | null {
   return { re: new RegExp(`\\b(${names.map(([a]) => escape(a)).join("|")})(?![\\w'’])`, "g"), of: new Map(names) };
 }
 const Ctx = createContext<LoomCtx | null>(null);
+// The threads this text belongs to: a hover card inside says what part someone plays in them.
+const InThreads = createContext<number[]>([]);
+export const ThreadScope = ({ ids, children }: { ids: number[]; children: React.ReactNode }) => <InThreads.Provider value={ids}>{children}</InThreads.Provider>;
 export const useLoom = () => useContext(Ctx);
 
 export function LoomProvider({ campaignId, children }: { campaignId: number; children: React.ReactNode }) {
@@ -333,12 +338,17 @@ export function RefLink({ r, chip = false, mid = false, children }: { r: Ref; ch
   // Mid-sentence, "The humming crate" reads "the humming crate".
   const label = children ?? (mid ? r.name.replace(/^The\s/, "the ") : r.name);
   if (!loom) return chip ? <span className="rounded-full bg-thread-soft px-2.5 py-0.5 text-xs text-thread">{label}</span> : <>{label}</>;
+  const wait = () => {
+    if (timer.current) clearTimeout(timer.current);
+  };
   const show = () => {
+    wait();
     timer.current = setTimeout(() => el.current && setPreview(el.current.getBoundingClientRect()), 350);
   };
+  // A moment's grace, so the pointer can cross onto the card and stay there.
   const hide = () => {
-    if (timer.current) clearTimeout(timer.current);
-    setPreview(null);
+    wait();
+    timer.current = setTimeout(() => setPreview(null), 180);
   };
   return (
     <>
@@ -353,7 +363,8 @@ export function RefLink({ r, chip = false, mid = false, children }: { r: Ref; ch
           // Inside a fold-out (a session's summary row) the link opens the inspector, not the fold.
           e.preventDefault();
           e.stopPropagation();
-          hide();
+          wait();
+          setPreview(null);
           loom.open(r);
         }}
         className={
@@ -364,28 +375,63 @@ export function RefLink({ r, chip = false, mid = false, children }: { r: Ref; ch
       >
         {label}
       </button>
-      {preview && <Preview r={r} at={preview} />}
+      {preview && <Preview r={r} at={preview} onEnter={wait} onLeave={hide} onOpen={() => { wait(); setPreview(null); loom.open(r); }} />}
     </>
   );
 }
 
-function Preview({ r, at }: { r: Ref; at: DOMRect }) {
+function Preview({ r, at, onEnter, onLeave, onOpen }: { r: Ref; at: DOMRect; onEnter: () => void; onLeave: () => void; onOpen: () => void }) {
   const loom = useLoom();
+  const scope = useContext(InThreads);
+  const [more, setMore] = useState(false);
   const n = loom?.find(r.kind, r.id);
-  const below = at.bottom + 140 < window.innerHeight;
+  const below = at.bottom + 220 < window.innerHeight;
+  const facts = n?.facts ?? [];
+  // How it fits: its part in the threads this text is about.
+  const parts =
+    r.kind === "entity"
+      ? scope.flatMap((id) => {
+          const t = loom?.find("thread", id);
+          const role = t?.parts?.find((p) => p.id === r.id)?.role;
+          return t && role ? [{ title: t.name, role }] : [];
+        })
+      : [];
   return createPortal(
     <div
       role="tooltip"
-      style={{ left: Math.min(at.left, window.innerWidth - 300), top: below ? at.bottom + 6 : undefined, bottom: below ? undefined : window.innerHeight - at.top + 6 }}
-      className="rise pointer-events-none fixed z-50 w-72 rounded-lg border border-line bg-surface p-3 text-left text-[13px] shadow-lg"
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      style={{ left: Math.max(8, Math.min(at.left, window.innerWidth - 312)), top: below ? at.bottom + 6 : undefined, bottom: below ? undefined : window.innerHeight - at.top + 6 }}
+      className="rise fixed z-50 max-h-[60vh] w-76 overflow-y-auto rounded-lg border border-line bg-surface p-3 text-left text-[13px] shadow-lg"
     >
       <p className="font-medium text-foreground">{n?.name ?? r.name}</p>
       <p className="text-xs text-muted">
         {n?.sub ?? r.sub}
         {(n?.status ?? r.status) && !["alive", "intact", "open", "key"].includes((n?.status ?? r.status)!) ? ` · ${n?.status ?? r.status}` : ""}
       </p>
-      {n?.line && <p className="mt-1 line-clamp-3 text-foreground/80">{n.line}</p>}
-      <p className="mt-1.5 text-[11px] text-muted">Click to open</p>
+      {parts.map((p) => (
+        <p key={p.title} className="mt-1.5 text-thread">
+          {p.role === "involved" ? "Involved in" : `${cap(p.role)} in`} <span className="italic">{p.title}</span>
+        </p>
+      ))}
+      {n?.line && <p className={`mt-1 text-foreground/80 ${more ? "" : "line-clamp-3"}`}>{n.line}</p>}
+      {facts.length > 0 && (
+        <ul className="mt-1.5 space-y-0.5 text-xs text-muted">
+          {(more ? facts : facts.slice(0, 3)).map((f) => (
+            <li key={f}>{f}</li>
+          ))}
+        </ul>
+      )}
+      <p className="mt-2 flex gap-3 text-[11px]">
+        {(facts.length > 3 || (n?.line.length ?? 0) > 130) && (
+          <button type="button" className="text-muted underline decoration-dotted underline-offset-2 hover:text-thread" onClick={() => setMore((m) => !m)}>
+            {more ? "Less" : "More"}
+          </button>
+        )}
+        <button type="button" className="text-muted underline decoration-dotted underline-offset-2 hover:text-thread" onClick={onOpen}>
+          Open
+        </button>
+      </p>
     </div>,
     document.body,
   );
@@ -886,7 +932,7 @@ function ThreadView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
       })
       .catch((e) => setEditError(e.message));
   return (
-    <>
+    <ThreadScope ids={[n.id]}>
       <Head n={n} chips={[n.firstSeen && `since s${n.firstSeen}`, n.lastTouched && n.lastTouched !== n.firstSeen && `last s${n.lastTouched}`, n.secret && "GM only"]} />
       <p className="story leading-relaxed">
         <Linked text={n.summary} />
@@ -926,7 +972,7 @@ function ThreadView({ n, onChange }: { n: Node; onChange: (n: Node) => void }) {
         )}
       />
       <Section title="Key moments" items={n.moments} render={(r: Ref) => <li key={r.id}><RefLink r={r} /></li>} />
-    </>
+    </ThreadScope>
   );
 }
 
