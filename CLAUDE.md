@@ -932,6 +932,7 @@ If it passes: show it to a handful of newer/online DMs (DM communities online), 
   - **Measured (Haiku, enriched copy, the same 10 asks logged in a row, then deleted):** with the memory off, 14 threads across 28 options, the top thread 7 times, Iresia handed 11. On, 17 threads across 30 options, no thread more than 3 times, Iresia 8. ~10 s per ask on the "on" run (one "off" call stalled, so its average isn't usable). One run each.
   - **Seen:** an echo also brings the character into the scene's cast, so another option may use them openly ("Faelen walks in…"). Hover cards on touch screens still open the inspector, as before.
   - 452/452 crafted checks; engine tests pass. Tested in the browser on the enriched copy (hover card, New link, Keep; the test secret and ask were removed).
+  - **The glass never blurred** (Jacob: the floating box "carries with it some of the page above"). The CSS compiler keeps only the last of `backdrop-filter` and `-webkit-backdrop-filter`, and the `-webkit-` one came last, which current Chromium ignores. The standard one now comes last, so the pinned box, the inspector and Rules all blur. The pinned glass closes around its contents with the same 12px all round (the padding is the same flat or floating, so nothing moves), and What just happened has a dot for the moment (icons for what came of it) instead of the line on its left.
 
 ## Entity model build (docs/entity-model.md)
 

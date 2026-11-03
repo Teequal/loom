@@ -358,17 +358,16 @@ export function NowStrip({ lines }: { lines: NowLine[] }) {
   if (!lines.length) return null;
   const shown = open ? lines : lines.slice(-1);
   return (
-    <div className="mb-1.5 px-1" aria-label="What just happened">
-      <ol className="space-y-0.5 border-l-2 border-thread/50 pl-3">
+    <div className="mb-2 px-1.5" aria-label="What just happened">
+      <ol className="space-y-0.5">
         {shown.map((l, i) => {
           const newest = i === shown.length - 1;
           return (
             <li key={`${l.kind}-${l.id ?? "asked"}-${i}`} className={`story flex items-baseline gap-1.5 text-[14px] leading-snug ${newest ? "text-foreground" : "text-muted"}`}>
-              {l.kind !== "moment" && (
-                <span className="shrink-0 self-center text-thread">
-                  <Icon name={l.kind === "result" ? "diamond" : l.kind === "then" ? "branch" : "check"} size={11} />
-                </span>
-              )}
+              {/* A dot for the moment, an icon for what came of it: what each line is, at a glance. */}
+              <span className="grid w-3 shrink-0 place-items-center self-center text-thread">
+                {l.kind === "moment" ? <span className="h-1.5 w-1.5 rounded-full bg-thread/70" /> : <Icon name={l.kind === "result" ? "diamond" : l.kind === "then" ? "branch" : "check"} size={11} />}
+              </span>
               <span className={`min-w-0 flex-1 ${open ? "" : "block truncate"} ${l.kind === "moment" ? "italic" : ""}`}>
                 <Linked text={l.text} />
               </span>

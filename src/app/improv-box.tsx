@@ -527,7 +527,7 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
           questions sit right above it until they're answered. */}
       {/* Where the pinned area starts: once it's scrolled past, the area floats (glass). */}
       <div ref={pinMark} aria-hidden className="h-px" />
-      <div ref={pinned} className={`pinned sticky top-0 z-20 -mx-4 px-4 pb-2 pt-2 ${floating ? "floating" : ""}`}>
+      <div ref={pinned} className={`pinned sticky top-0 z-20 -mx-4 px-4 pb-3 pt-3 ${floating ? "floating" : ""}`}>
         {/* What just happened, in reading order: the last thing used or decided, then the box where
             you write what happened next. One line, so the pinned area never changes height on its own. */}
         <NowStrip lines={nowLines(entries, asked)} />
