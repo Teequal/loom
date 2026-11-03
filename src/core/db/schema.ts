@@ -31,6 +31,8 @@ export const campaigns = sqliteTable("campaigns", {
   // Where the party is now. NPC locations can only be checked against this.
   partyLocationId: integer("party_location_id").references((): AnySQLiteColumn => entities.id, { onDelete: "set null" }),
   inGameDate: text("in_game_date").notNull().default(""),
+  // The in-game clock: minutes since the start of day 1 (blank until the GM starts it).
+  clockMinutes: integer("clock_minutes"),
   tone: text("tone").notNull().default(""), // comedic / heroic / grim / horror …
   // Where the GM wants the story to go, in their words: improv, Develop and prep steer by it.
   direction: text("direction").notNull().default(""),

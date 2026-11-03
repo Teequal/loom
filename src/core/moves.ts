@@ -118,7 +118,7 @@ export function findMoves(
       if (p.node.kind === "character" && p.node.side === "pc") continue;
       const pr = presenceOf(v, p.node.key as NodeKey, memo);
       if (pr.role === "here") out.push({ name: p.node.name, can: "act", part: "lead", busy: busy(p.node.name) || undefined });
-      else if (pr.role === "reachable" && p.node.kind !== "item") out.push({ name: p.node.name, can: canArriveNow(pr) || p.node.kind === "faction" || (!v.party && pr.where === "unknown") ? "arrive" : "away", part: "lead", busy: busy(p.node.name) || undefined, eta: pr.travel ? travelWords(pr.travel) : undefined });
+      else if (pr.role === "reachable" && p.node.kind !== "item") out.push({ name: p.node.name, can: canArriveNow(pr) || p.node.kind === "faction" || (!v.party && pr.where === "unknown") ? "arrive" : "away", part: "lead", busy: busy(p.node.name) || undefined, eta: pr.why === "on the move" ? pr.standing : pr.travel ? travelWords(pr.travel) : undefined });
     }
     return out;
   };
@@ -185,6 +185,15 @@ export function findMoves(
   const focus = (k?: NodeKey) => (k && named.has(node(k)?.name ?? "") ? 1 : k && inPlay(k) ? 0.5 : 0);
   const threadFor = (keys: (NodeKey | undefined)[]) => threads.find((t) => partsOf(t).some((p) => keys.includes(p.node.key as NodeKey))) ?? threads[0];
   const minor: Omit<Move, "id" | "resting">[] = []; // explicable, but not the obvious read: surprise candidates
+  // Someone on their way to the party (by the clock and the map) is a move of their own: when they
+  // arrive is real, so the option can use it ("before the bells, Varek's riders reach the bridge").
+  for (const n of v.g.nodes.values()) {
+    if (n.kind !== "character" || n.side !== "npc" || !n.travel) continue;
+    const pr = presenceOf(v, n.key as NodeKey, memo);
+    const t = pr.why === "on the move" && pr.travel ? threadFor([n.key as NodeKey]) : undefined;
+    if (!t || !pr.travel) continue;
+    add({ kind: "arrival", threads: [t.id], cast: [{ name: n.name, can: canArriveNow(pr) ? "arrive" : "away", part: "lead", eta: pr.standing }], because: `${n.name} is ${pr.standing}${canArriveNow(pr) ? ": they could arrive this scene" : ": word could come ahead of them, or the arrival is something to set up"}`, score: 1.6 + WEIGHT.arrival });
+  }
   const propertyMoves = process.env.LOOM_PROPERTY_MOVES !== "off"; // for A/B runs
   for (const i of propertyMoves ? interplaysOf(v) : []) {
     if (!inPlay(i.subject) && !inPlay(i.other)) {

@@ -11,6 +11,7 @@ import { Develop } from "./develop";
 import { Icon } from "./icons";
 import { Aftermath, type Encounter, FightPanel } from "./fight";
 import { ResultPrompt, RollPanel, SidePrompt, type RollPlan } from "./results";
+import { ClockControl } from "./clock";
 import { Linked, LoomProvider, RefChips, RefLink, ThreadScope, useLoom } from "./loom-ui";
 import { setPref, usePrefs } from "./prefs";
 import { type Overrides, SceneChips } from "./scene-chips";
@@ -1267,6 +1268,7 @@ function Timeline({ session, live, open, setOpen, glowing }: { session: number; 
           Session {session}
           {entries.length > 0 && <span className="font-normal"> · {used} used</span>}
         </span>
+        <ClockControl campaignId={live.campaignId} />
         <ol ref={strip} className="flex min-w-0 flex-1 items-center overflow-x-auto py-1 [scrollbar-width:none]">
           {entries.length === 0 && <li className="text-xs text-muted/70">Nothing yet. What you use at the table lands here.</li>}
           {ordered.map(({ e, depth }, i) => (

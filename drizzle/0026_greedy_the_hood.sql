@@ -1,0 +1,1 @@
+ALTER TABLE `campaigns` ADD `clock_minutes` integer;

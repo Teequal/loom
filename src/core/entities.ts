@@ -356,6 +356,7 @@ export async function removeRelation(relationId: number, source: Source = "dm", 
 export interface CampaignPatch {
   partyLocationId?: number | null;
   inGameDate?: string;
+  clockMinutes?: number | null;
   tone?: string;
   direction?: string;
   mechanics?: CampaignMechanic[];

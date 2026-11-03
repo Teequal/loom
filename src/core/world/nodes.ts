@@ -62,6 +62,7 @@ export const Character = Base.extend({
   importance: z.enum(["major", "minor", "walk-on"]).optional(),
   stance: SCALE.optional(), // towards the party: -3 hostile … +3 devoted (from attitude)
   interplayOverrides: z.array(z.object({ id: z.string(), on: z.boolean(), other: z.string().optional() })).optional(), // the DM's word on an interplay
+  travel: z.object({ to: z.string(), from: z.string().optional(), left: z.number() }).optional(), // on the move: where to, from where, set out at (clock minutes)
   identity: z.object({
     race: z.string().optional(),
     occupation: z.string().optional(), // class for PCs
@@ -205,7 +206,7 @@ export const Session = Base.extend({ kind: z.literal("session"), number: z.numbe
 export type Session = z.infer<typeof Session>;
 
 // The party as one node: it's somewhere (a link), and the PCs belong to it (links).
-export const Party = Base.extend({ kind: z.literal("party"), inGameDate: z.string(), tone: z.string(), direction: z.string(), edition: z.string() });
+export const Party = Base.extend({ kind: z.literal("party"), inGameDate: z.string(), clock: z.number().optional(), tone: z.string(), direction: z.string(), edition: z.string() });
 export type Party = z.infer<typeof Party>;
 
 export const AnyNode = z.discriminatedUnion("kind", [Character, Item, Place, Faction, Other, Thread, Moment, Rule, Session, Party]);

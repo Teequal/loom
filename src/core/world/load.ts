@@ -191,6 +191,11 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
           importance: e.importance ?? undefined,
           stance: e.attitude != null ? STANCE[e.attitude] : undefined,
           interplayOverrides: overrides(t),
+          travel: (() => {
+            const to = t.travel ? entityKey(t.travel.to) : undefined;
+            const from = t.travel?.from != null ? entityKey(t.travel.from) : undefined;
+            return to ? { to, ...(from ? { from } : {}), left: t.travel!.left } : undefined;
+          })(),
           identity: {
             race: t.race, occupation: t.occupation, level: (() => { const l = num(t.level); return l && l >= 1 && l <= 20 ? l : undefined; })(), age: t.age, gender: t.gender,
             alignment: t.alignment, background: t.background, appearance: list(t.appearance), voice: t.voice, personality: list(t.personality_traits), languages: list(t.languages),
@@ -263,7 +268,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
     );
   }
   for (const s of sessions) add({ ...base({ id: s.id, name: `Session ${s.number}` }, "session", { summary: "" }), kind: "session", number: s.number, date: s.date }, `session:${s.id}`);
-  add({ ...base({ id: 0, name: "The party" }, "party", { meta: metaOf(campaign?.fieldMeta ?? {}) }), kind: "party", inGameDate: campaign?.inGameDate ?? "", tone: campaign?.tone ?? "", direction: campaign?.direction ?? "", edition: (campaign?.ruleToggles as Record<string, string> | undefined)?.edition ?? "2014" }, "party:0");
+  add({ ...base({ id: 0, name: "The party" }, "party", { meta: metaOf(campaign?.fieldMeta ?? {}) }), kind: "party", inGameDate: campaign?.inGameDate ?? "", clock: campaign?.clockMinutes ?? undefined, tone: campaign?.tone ?? "", direction: campaign?.direction ?? "", edition: (campaign?.ruleToggles as Record<string, string> | undefined)?.edition ?? "2014" }, "party:0");
 
   // ---------- Links ----------
   const push = (raw: Omit<Link, "campaignId">, at: string) => {

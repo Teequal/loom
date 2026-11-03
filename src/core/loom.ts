@@ -10,7 +10,7 @@ import { propertiesOf } from "./world/properties";
 import { interplaysFor } from "./world/interplays";
 import type { View } from "./world/engine";
 import type { NodeKey } from "./world/nodes";
-import { activityOf, viewOf } from "./world/engine";
+import { activityOf, journeyOf, presenceOf, viewOf } from "./world/engine";
 import { loadGraph } from "./world/load";
 import { readMoment } from "./moment-reading";
 import { editableOf } from "./editable";
@@ -222,6 +222,13 @@ async function entityNode(campaignId: number, id: number) {
     attitude: e.attitude,
     importance: e.importance,
     now: nowState(e, relations.filter((r) => r.type === "holds" && r.toEntityId === e.id), [...L.ent.values()]),
+    // On the move: where they're headed and how far along, by the clock and the map.
+    journey: (() => {
+      const nd = nodeKey ? view.g.nodes.get(nodeKey) : undefined;
+      const j = nd ? journeyOf(view, nd) : null;
+      return j && nodeKey ? { to: L.entRef(j.to.id), standing: presenceOf(view, nodeKey).standing } : null;
+    })(),
+    places: e.type === "npc" || e.type === "pc" ? L.entities.filter((x) => x.type === "location").map((x) => ({ id: x.id, name: x.name })) : null,
     activity: activity && { band: activity.band, lastSession: activity.lastSession },
     momentum: momentum?.band ? { band: momentum.band, because: momentum.because } : null,
     properties,
@@ -232,7 +239,7 @@ async function entityNode(campaignId: number, id: number) {
     partOf: e.type !== "location" ? L.entRef(e.parentId) : null,
     contains: L.entities.filter((x) => x.parentId === id || x.lastKnownLocationId === id || x.actualLocationId === id).map((x) => L.entRef(x.id)!).slice(0, 30),
     details: Object.entries(traits)
-      .filter(([k, v]) => hasTrait(v) && k !== "routes")
+      .filter(([k, v]) => hasTrait(v) && k !== "routes" && k !== "travel")
       .map(([k, v]) => ({ key: k.replace(/_/g, " "), value: traitText(k, v), secret: secret(`traits.${k}`) })),
     ties,
     // Ties that ended with nothing in their place ("once allied with Zara").

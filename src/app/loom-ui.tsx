@@ -703,6 +703,7 @@ function Glance({ items }: { items: { icon: IconName; label: React.ReactNode; to
 // The facts the engine checks first, changed by hand: saved as the DM's, undoable under Recent changes.
 function RightNow({ n, edit }: { n: Node; edit: (body: object) => Promise<void> }) {
   const [error, setError] = useState("");
+  const [goTo, setGoTo] = useState<number | "">("");
   const now = n.now;
   const set = (body: object) => edit(body).then(() => setError("")).catch((e) => setError(e.message));
   const rest = (now.conditionNames ?? []).filter((c: string) => !now.conditions?.includes(c));
@@ -710,6 +711,25 @@ function RightNow({ n, edit }: { n: Node; edit: (body: object) => Promise<void> 
     <details className="mt-3">
       <summary className="cursor-pointer select-none text-[11px] font-semibold uppercase tracking-wide text-muted">Change how {n.type === "item" ? "it is" : "they are"} now</summary>
       <div className="mt-2 grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5 text-[13px]">
+        {n.places && (
+          <>
+            <span className="text-muted">On the move</span>
+            {n.journey ? (
+              <span className="flex flex-wrap items-baseline gap-2">
+                <span>{cap(n.journey.standing)}</span>
+                <button type="button" className="btn-tertiary text-xs" onClick={() => set({ action: "travel", to: null })}>Stop the journey</button>
+              </span>
+            ) : (
+              <span className="flex flex-wrap items-center gap-1.5">
+                <select aria-label="Heading for" className="quiet" value={goTo} onChange={(e) => setGoTo(e.target.value ? Number(e.target.value) : "")}>
+                  <option value="">Heading for…</option>
+                  {n.places.map((p: { id: number; name: string }) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+                <button type="button" disabled={goTo === ""} className="btn-secondary text-xs" onClick={() => set({ action: "travel", to: goTo }).then(() => setGoTo(""))}>Set out now</button>
+              </span>
+            )}
+          </>
+        )}
         <span className="text-muted">Status</span>
         <select aria-label="Status" className="quiet" value={now.status} onChange={(e) => set({ action: "state", status: e.target.value })}>
           {now.statuses.map((s: string) => <option key={s} value={s}>{cap(s)}</option>)}

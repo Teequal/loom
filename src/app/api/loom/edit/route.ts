@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { PAIR_WEIGHTS } from "@/core/db/schema";
-import { removeRelation, setPairWeights, setRelation, setSubProperty, updateEntity, updateThread } from "@/core/entities";
+import { removeRelation, setPairWeights, setRelation, setSubProperty, updateCampaign, updateEntity, updateThread } from "@/core/entities";
 import { HEALTH } from "@/core/entity-fields";
 import { setThreadPart, setThreadStakes } from "@/core/thread-parts";
 import { recordInterplayChanges } from "@/core/interplay-history";
@@ -16,6 +16,8 @@ import { campaignId, jsonRoute } from "@/server/route";
 const Body = z.discriminatedUnion("action", [
   z.object({ action: z.literal("state"), campaignId, entityId: z.number().int(), status: z.string().max(30).optional(), health: z.enum(HEALTH).optional(), conditions: z.array(z.string().max(40)).max(20).optional() }),
   z.object({ action: z.literal("holder"), campaignId, entityId: z.number().int(), holderId: z.number().int().nullable() }),
+  // Set someone off for a place (from where they are, at the clock's time), or stop their journey.
+  z.object({ action: z.literal("travel"), campaignId, entityId: z.number().int(), to: z.number().int().nullable() }),
   z.object({ action: z.literal("part"), campaignId, threadId: z.number().int(), entityId: z.number().int(), role: z.string().max(30) }),
   z.object({ action: z.literal("stakes"), campaignId, threadId: z.number().int(), level: z.number().int().min(1).max(5).nullable() }),
   // The thread itself: resolve or reopen it, set it aside or bring it back, give it a deadline.
@@ -64,6 +66,17 @@ export const POST = jsonRoute(Body, async (b) => {
     const rows = await db.select().from(schema.entityRelations).where(and(eq(schema.entityRelations.toEntityId, e.id), eq(schema.entityRelations.type, "holds")));
     if (b.holderId == null) for (const r of rows) await removeRelation(r.id, "dm", opts.batch);
     else await setRelation(b.campaignId, { fromEntityId: b.holderId, toEntityId: e.id, type: "holds" }, opts);
+  }
+  if (b.action === "travel") {
+    if (e.type !== "npc" && e.type !== "pc") throw new Error("Only a character travels.");
+    if (b.to == null) await updateEntity(e.id, { traits: { travel: null } }, opts);
+    else {
+      const [camp] = await db.select({ clock: schema.campaigns.clockMinutes }).from(schema.campaigns).where(eq(schema.campaigns.id, b.campaignId));
+      // Setting someone off starts the clock if it isn't running (day 1, eight in the morning).
+      const clock = camp?.clock ?? 8 * 60;
+      if (camp?.clock == null) await updateCampaign(b.campaignId, { clockMinutes: clock }, opts);
+      await updateEntity(e.id, { traits: { travel: { to: b.to, from: e.actualLocationId ?? e.lastKnownLocationId ?? null, left: clock } } }, opts);
+    }
   }
   if (b.action === "sub") await setSubProperty(e.id, b.path, b.value, opts);
   if (b.action === "pair") {

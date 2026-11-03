@@ -190,17 +190,46 @@ export function travelOf(v: View, from: NodeKey, to: NodeKey): Travel | null {
   if (!end) return null;
   return { miles: end.miles, hours: end.hours, by: end.byRoute >= end.miles / 2 ? (kindOf.get(b.key) ?? "road") : "country" };
 }
-export function travelWords(t: Travel) {
-  const h = t.hours;
+/** A length of time on the move, as a GM would say it: "40 minutes", "3 hours", "1.5 days". */
+export function durationWords(h: number) {
   const days = Math.round((h / 8) * 2) / 2; // a day's travel is about 8 hours on the move
-  const time = h < 1 ? `${Math.max(5, Math.round((h * 60) / 5) * 5)} minutes` : h < 8 ? `${Math.round(h)} hour${Math.round(h) === 1 ? "" : "s"}` : `${days} day${days > 1 ? "s" : ""}`;
-  return `${t.miles < 10 ? t.miles.toFixed(1) : Math.round(t.miles)} miles, about ${time} ${t.by === "country" ? "on foot" : t.by === "river" ? "by river" : `by ${t.by}`}`;
+  return h < 1 ? `${Math.max(5, Math.round((h * 60) / 5) * 5)} minutes` : h < 8 ? `${Math.round(h)} hour${Math.round(h) === 1 ? "" : "s"}` : `${days} day${days > 1 ? "s" : ""}`;
+}
+export function travelWords(t: Travel) {
+  return `${t.miles < 10 ? t.miles.toFixed(1) : Math.round(t.miles)} miles, about ${durationWords(t.hours)} ${t.by === "country" ? "on foot" : t.by === "river" ? "by river" : `by ${t.by}`}`;
 }
 
 // How far that is, the way a GM would say it: 5e travel pace on foot, about 3 miles an hour.
 export const ON_HAND_MILES = 0.5;
 /** Within this many hours' travel, someone can still arrive during the scene. */
 export const WITHIN_THE_SCENE_HOURS = 1;
+// ---------- The clock and people on the move ----------
+
+/** The in-game clock in words: "Day 3, evening (19:30)". */
+export function clockWords(minutes: number) {
+  const day = Math.floor(minutes / 1440) + 1;
+  const m = ((minutes % 1440) + 1440) % 1440;
+  const h = Math.floor(m / 60);
+  const part = h < 5 ? "night" : h < 7 ? "dawn" : h < 12 ? "morning" : h < 17 ? "afternoon" : h < 21 ? "evening" : "night";
+  return `Day ${day}, ${part} (${String(h).padStart(2, "0")}:${String(m % 60).padStart(2, "0")})`;
+}
+
+/**
+ * Where someone on the move is by the clock: on the way (with how long until they get there), or
+ * arrived. Needs pins for the trip and a running clock; without them, only where they're headed.
+ */
+export function journeyOf(v: View, n: AnyNode): { to: Place; from: Place | null; hoursLeft: number | null; arrived: boolean } | null {
+  if (n.kind !== "character" || !n.travel) return null;
+  const to = v.g.nodes.get(n.travel.to as NodeKey) as Place | undefined;
+  if (!to) return null;
+  const from = n.travel.from ? ((v.g.nodes.get(n.travel.from as NodeKey) as Place | undefined) ?? null) : null;
+  const clock = v.g.nodes.get("party:0" as NodeKey)?.kind === "party" ? (v.g.nodes.get("party:0" as NodeKey) as { clock?: number }).clock : undefined;
+  const trip = from ? travelOf(v, keyOfNode(from), keyOfNode(to)) : null;
+  if (clock == null || !trip) return { to, from, hoursLeft: null, arrived: false };
+  const left = trip.hours - (clock - n.travel.left) / 60;
+  return { to, from, hoursLeft: Math.max(0, left), arrived: left <= 0 };
+}
+
 /** Whether someone not here could still turn up during the scene: on hand, or within the hour. */
 export const canArriveNow = (p: Presence) => p.where === "nearby" || (p.travel != null && p.travel.hours <= WITHIN_THE_SCENE_HOURS);
 
@@ -225,6 +254,10 @@ function onHand(v: View, place: Place, party: Place) {
 
 /** Where something is: an actual place over a last-seen one. */
 export function whereIs(v: View, key: NodeKey): Place | null {
+  // Someone whose journey is over by the clock is where they were going.
+  const n = v.g.nodes.get(key);
+  const j = n?.kind === "character" && n.travel ? journeyOf(v, n) : null;
+  if (j?.arrived) return j.to;
   const ls = v.g.linksOf(key, { type: "located_at", dir: "out" });
   const pick = ls.find((l) => l.certainty !== "last-seen") ?? ls[0];
   return pick ? ((v.g.nodes.get(endKey(pick.to)) as Place) ?? null) : null;
@@ -322,6 +355,15 @@ export function presenceOf(v: View, key: NodeKey, memo = new Map<NodeKey, Presen
     if (n.status === "missing") return set({ role: "reachable", where: "unknown", standing: "missing", why: "missing" });
     if (said || reading.broughtIn.has(n.name)) return set({ role: "here", where: "here", standing: "here: the moment brings them in", why: said ? "you said they're here" : "the moment brings them in" });
     if (reading.contacted.has(n.name)) return set({ role: "reachable", where: "elsewhere", standing: placeName ? `at ${placeName}; the players reach them from afar` : "reached from afar", why: "the players reach them from afar" });
+    // On the move: where they're headed and, with the clock and pins, how far along they are.
+    const j = journeyOf(v, n);
+    if (j && !j.arrived) {
+      const party = v.party && keyOfNode(v.party);
+      const comingHere = !!party && (keyOfNode(j.to) === party || within(v, party, keyOfNode(j.to)) || within(v, keyOfNode(j.to), party));
+      const eta = j.hoursLeft != null ? durationWords(j.hoursLeft) : null;
+      const travel = comingHere && j.hoursLeft != null ? { miles: 0, hours: j.hoursLeft, by: "road" as const } : undefined;
+      return set({ role: "reachable", where: "elsewhere", travel, standing: `on the way ${j.from ? `from ${j.from.name} ` : ""}to ${j.to.name}${comingHere ? " (where the party is)" : ""}${eta ? `, arriving in about ${eta}` : ""}`, why: "on the move" });
+    }
     if (isCompanion(v, n) && place && near(v, keyOfNode(place), v.recordedParty && keyOfNode(v.recordedParty))) return set({ role: "here", where: "with-party", standing: "travelling with the party", why: "travelling with the party" });
     // With pins on the map, distance decides: half a mile or less is on hand, anything further is
     // that far away (word from them, a sign of them, or a later arrival).
