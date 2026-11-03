@@ -10,7 +10,7 @@ import { Choice, Field, Steps, Switch, Tune } from "./controls";
 import { Develop } from "./develop";
 import { Icon } from "./icons";
 import { Aftermath, type Encounter, FightPanel } from "./fight";
-import { ResultPrompt, SidePrompt } from "./results";
+import { ResultPrompt, RollPanel, SidePrompt, type RollPlan } from "./results";
 import { Linked, LoomProvider, RefChips, RefLink, ThreadScope, useLoom } from "./loom-ui";
 import { setPref, usePrefs } from "./prefs";
 import { type Overrides, SceneChips } from "./scene-chips";
@@ -68,6 +68,7 @@ export interface Entry {
   questions: Question[];
   developments: unknown[]; // Develop results kept on this choice (chains; older plans read-only)
   awaiting: "roll" | "fight" | "choice" | null;
+  roll?: RollPlan | null; // a waiting roll: who rolls what, worked out by the server
   sides: string[];
   resultState: "pending" | "given" | "skipped" | null;
   encounter: unknown;
@@ -535,6 +536,16 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
         {/* Then any roll or fight still waiting for how it turned out (newest first). */}
         {!questions.length && waiting.length > 0 && (
           <div className="mb-2">
+            {waiting[0].awaiting === "roll" && waiting[0].roll ? (
+              <RollPanel
+                key={waiting[0].id}
+                entryId={waiting[0].id}
+                plan={waiting[0].roll}
+                label={waiting[0].choiceLabel ? `${waiting[0].choiceLabel}: ${waiting[0].choice}` : waiting[0].choice}
+                count={waiting.length > 1 ? `1 of ${waiting.length}` : undefined}
+                onDone={reload}
+              />
+            ) : (
             <ResultPrompt
               key={waiting[0].id}
               entryId={waiting[0].id}
@@ -542,8 +553,9 @@ function Table({ campaignId, name, trySample }: { campaignId: number; name: stri
               label={waiting[0].choiceLabel ? `${waiting[0].choiceLabel}: ${waiting[0].choice}` : waiting[0].choice}
               count={waiting.length > 1 ? `1 of ${waiting.length}` : undefined}
               onDone={reload}
-              folded={waiting[0].id === current?.id || waiting[0].parentId === current?.id}
+              folded={waiting[0].awaiting === "fight" && (waiting[0].id === current?.id || waiting[0].parentId === current?.id)}
             />
+            )}
           </div>
         )}
         {!questions.length && !waiting.length && sidePending && (

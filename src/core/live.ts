@@ -4,6 +4,7 @@ import { db, schema } from "./db/client";
 import { settleStates, tableNudges } from "./nudges";
 import { deltasOf, untag } from "./deltas";
 import type { ScaffoldOption } from "./improv";
+import type { RolledResult } from "./db/schema";
 import { applyProposal, numberItems, proposeRecapChanges, type Proposal, type ProposalFile } from "./recap";
 import { reviewProposal, splitRisky } from "./review";
 import { undoBatch } from "./undo";
@@ -174,7 +175,7 @@ export async function commitChoice(entryId: number, choice: { kind: "option" | "
 
 // How a roll or fight turned out: it joins the tree under the choice it settles, and is extracted
 // like any other choice, so deaths, captures and losses reach the loom.
-export async function recordResult(entryId: number, outcome: string, detail: string) {
+export async function recordResult(entryId: number, outcome: string, detail: string, rolls?: RolledResult[]) {
   const [parent] = await db.select().from(schema.liveEntries).where(eq(schema.liveEntries.id, entryId));
   if (!parent) throw new Error("That moment isn't in the log any more.");
   await db.update(schema.liveEntries).set({ resultState: "given" }).where(eq(schema.liveEntries.id, entryId));
@@ -188,6 +189,7 @@ export async function recordResult(entryId: number, outcome: string, detail: str
       choiceKind: "result",
       choiceLabel: outcome,
       choice: `${outcome}${detail.trim() ? `. ${detail.trim()}` : "."}`,
+      rolls: rolls?.length ? rolls : null,
       status: "extracting",
     })
     .returning();

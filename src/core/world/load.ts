@@ -120,6 +120,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
       kind: schema.liveEntries.choiceKind,
       label: schema.liveEntries.choiceLabel,
       options: schema.liveEntries.options,
+      rolls: schema.liveEntries.rolls,
       developments: schema.liveEntries.developments,
       awaiting: schema.liveEntries.awaiting,
       encounter: schema.liveEntries.encounter,
@@ -407,7 +408,7 @@ export async function loadGraph(campaignId: number): Promise<Graph> {
   };
 }
 
-type LiveRow = { id: number; parentId: number | null; session: number; moment: string; choice: string; kind: string | null; label: string; options: { text: string; scaffold?: unknown }[]; developments: unknown[]; awaiting: string | null; encounter: unknown };
+type LiveRow = { id: number; parentId: number | null; session: number; moment: string; choice: string; kind: string | null; label: string; rolls?: { name: string; outcome: string }[] | null; options: { text: string; scaffold?: unknown }[]; developments: unknown[]; awaiting: string | null; encounter: unknown };
 
 /** The live log as events: who rolled what (from each choice's scaffold) and how it went. */
 function liveLog(rows: LiveRow[]): LogEvent[] {
@@ -440,12 +441,14 @@ function liveLog(rows: LiveRow[]): LogEvent[] {
     const t = rollIn(r.choice);
     return t ? { ...t, mechanic: null } : { roller: null, rollKind: null, mechanic: null };
   };
-  return rows.map((r) => {
+  return rows.flatMap((r): LogEvent | LogEvent[] => {
     const kind = (r.kind ?? (r.moment.startsWith("(noted") ? "note" : "asked")) as LogEvent["kind"];
     if (kind === "result") {
       const parent = r.parentId != null ? byId.get(r.parentId) : undefined;
       const roll = parent ? rollOf(parent) : { roller: null, rollKind: null, mechanic: null };
       const fight = parent?.awaiting === "fight" || !!parent?.encounter;
+      // Each character's own roll, when the roll panel recorded them: momentum is theirs, not the table's.
+      if (r.rolls?.length) return r.rolls.map((x) => ({ id: r.id, session: r.session, kind, ...roll, roller: x.name, fight, outcome: OUTCOME[x.outcome] ?? null, payloads: [] }));
       return { id: r.id, session: r.session, kind, ...roll, fight, outcome: OUTCOME[r.label.trim().toLowerCase()] ?? null, payloads: [] };
     }
     const roll = kind === "asked" ? { roller: null, rollKind: null, mechanic: null } : rollOf(r);

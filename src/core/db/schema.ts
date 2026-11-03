@@ -362,6 +362,12 @@ export interface LiveOption {
   surprise?: string | null; // built on a surprise move: why it's explicable
   latent?: string | null; // built on a link nobody has made: the GM's to keep
 }
+export interface RolledResult {
+  name: string;
+  total: number | null;
+  outcome: "success" | "failure" | "partial";
+}
+
 export const liveEntries = sqliteTable("live_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   campaignId: integer("campaign_id").notNull().references(() => campaigns.id, { onDelete: "cascade" }),
@@ -386,6 +392,8 @@ export const liveEntries = sqliteTable("live_entries", {
   // "choice": the two sides offered (sides); which one was taken is asked quietly, never required.
   awaiting: text("awaiting", { enum: ["roll", "fight", "choice"] }),
   sides: text("sides", { mode: "json" }).$type<string[]>(),
+  // A result's rolls, one per character: what they got and how it went against the DC.
+  rolls: text("rolls", { mode: "json" }).$type<RolledResult[]>(),
   resultState: text("result_state", { enum: ["pending", "given", "skipped"] }),
   encounter: text("encounter", { mode: "json" }).$type<unknown>(), // the fight as set up, when there is one
   // Develop results for this choice, kept so the branches survive a reload (newest last).

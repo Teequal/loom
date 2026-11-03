@@ -23,6 +23,8 @@ export const POST = jsonRoute(
         return { name: p.name, perception: score(t.passive_perception), insight: score(t.passive_insight) };
       }),
       tables: await db.select().from(schema.gmTables).where(eq(schema.gmTables.campaignId, campaignId)),
+      // The campaign's own house rules, to roll for by hand when Loom didn't set one up.
+      rules: (await db.select().from(schema.effects).where(eq(schema.effects.campaignId, campaignId))).map((r) => ({ id: r.id, name: r.name, check: r.check, onFail: r.onFail, onSuccess: r.onSuccess, rule: r.rule, secret: r.secret })),
     };
   },
 );

@@ -3,6 +3,7 @@ import { db, schema } from "@/core/db/client";
 import { FIXTURE_NAME, SAMPLE_NAME } from "@/core/seed";
 import { liveEntries, liveSessionNumber, resumeExtractions } from "@/core/live";
 import { developmentView } from "./develop";
+import { rollPlans } from "./rolls";
 
 type Entry = typeof schema.liveEntries.$inferSelect;
 
@@ -53,7 +54,9 @@ export async function liveState(campaignId: number) {
   );
   await resumeExtractions(campaignId);
   const session = await liveSessionNumber(campaignId);
-  const entries = (await liveEntries(campaignId)).map((e) => entryView(e, titleOf));
+  const rows = await liveEntries(campaignId);
+  const plans = await rollPlans(campaignId, rows);
+  const entries = rows.map((e) => ({ ...entryView(e, titleOf), roll: plans.get(e.id) ?? null }));
   return {
     session,
     autoApprove: !!camp?.auto,

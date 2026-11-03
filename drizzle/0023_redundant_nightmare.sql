@@ -1,0 +1,1 @@
+ALTER TABLE `live_entries` ADD `rolls` text;

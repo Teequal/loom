@@ -14,6 +14,15 @@ interface Pc {
   perception: number | null;
   insight: number | null;
 }
+interface Rule {
+  id: number;
+  name: string;
+  check: string;
+  onFail: string;
+  onSuccess: string;
+  rule: string;
+  secret: boolean;
+}
 interface Table {
   id: number;
   name: string;
@@ -24,14 +33,16 @@ const CHECKS = ["Perception", "Insight", "Other"] as const;
 type Check = (typeof CHECKS)[number];
 
 export function GmTools({ campaignId, onClose }: { campaignId: number; onClose: () => void }) {
-  const [tab, setTab] = useState<"rolls" | "tables">("rolls");
+  const [tab, setTab] = useState<"rolls" | "rules" | "tables">("rolls");
   const [pcs, setPcs] = useState<Pc[]>([]);
   const [tables, setTables] = useState<Table[]>([]);
+  const [rules, setRules] = useState<Rule[]>([]);
   const send = useCallback(
     (body: object = {}) =>
-      post<{ pcs: Pc[]; tables: Table[] }>("/api/tools", { campaignId, ...body }).then((r) => {
+      post<{ pcs: Pc[]; tables: Table[]; rules: Rule[] }>("/api/tools", { campaignId, ...body }).then((r) => {
         setPcs(r.pcs);
         setTables(r.tables);
+        setRules(r.rules);
       }),
     [campaignId],
   );
@@ -44,12 +55,12 @@ export function GmTools({ campaignId, onClose }: { campaignId: number; onClose: 
   return createPortal(
     <aside aria-label="GM tools" className="glass-panel rise fixed inset-x-0 bottom-0 z-50 flex max-h-[80vh] flex-col rounded-t-3xl sm:inset-y-3 sm:left-auto sm:right-3 sm:max-h-none sm:w-[420px] sm:rounded-3xl">
       <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
-        <Choice value={tab} onChange={setTab} label="Tool" options={[{ id: "rolls", label: "Secret rolls" }, { id: "tables", label: "Tables" }]} />
+        <Choice value={tab} onChange={setTab} label="Tool" options={[{ id: "rolls", label: "Secret rolls" }, { id: "rules", label: "House rules" }, { id: "tables", label: "Tables" }]} />
         <button type="button" onClick={onClose} className="btn-tertiary" aria-label="Close tools">
           <Icon name="close" />
         </button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 text-sm">{tab === "rolls" ? <SecretRolls pcs={pcs} /> : <Tables campaignId={campaignId} tables={tables} send={send} />}</div>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3 text-sm">{tab === "rolls" ? <SecretRolls pcs={pcs} /> : tab === "rules" ? <RuleRolls pcs={pcs} rules={rules} /> : <Tables campaignId={campaignId} tables={tables} send={send} />}</div>
     </aside>,
     document.body,
   );
@@ -95,6 +106,69 @@ function SecretRolls({ pcs }: { pcs: Pc[] }) {
         </ul>
       )}
       {rolls.some((r) => r.total == null) && check !== "Other" && <p className="text-[13px] text-muted">Plain d20s where a passive score isn&apos;t on record, so add their bonus yourself.</p>}
+    </div>
+  );
+}
+
+// A house rule's roll, by hand: pick the rule and who it's for, roll a d20 each, and see what a
+// failure costs. Rolled here, seen only by you.
+function RuleRolls({ pcs, rules }: { pcs: Pc[]; rules: Rule[] }) {
+  const [picked, setPicked] = useState<number | null>(rules[0]?.id ?? null);
+  const [who, setWho] = useState<string[]>([]);
+  const [dc, setDc] = useState("");
+  const [rolls, setRolls] = useState<{ name: string; die: number }[]>([]);
+  const rule = rules.find((r) => r.id === picked) ?? rules[0];
+  const target = Number(dc) || null;
+  if (!rules.length) return <p className="text-muted">No house rules on record yet. Add one on the campaign page, or with <code>rule draft</code>.</p>;
+  const toggle = (n: string) => setWho((w) => (w.includes(n) ? w.filter((x) => x !== n) : [...w, n]));
+  return (
+    <div className="space-y-3">
+      <ul className="space-y-1">
+        {rules.map((r) => (
+          <li key={r.id}>
+            <button type="button" aria-pressed={rule?.id === r.id} onClick={() => { setPicked(r.id); setRolls([]); }} className={`w-full rounded-lg border px-3 py-1.5 text-left ${rule?.id === r.id ? "border-thread/70 bg-thread-soft/40" : "border-line hover:border-thread/50"}`}>
+              <span className="font-medium">{r.name}</span>
+              {r.secret && <span className="ml-2 text-[12px] text-muted">GM only</span>}
+              {r.check && <span className="block text-[12px] text-muted">{r.check}</span>}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {rule && (
+        <>
+          {rule.rule && <p className="story text-[14px] text-foreground/80">{rule.rule}</p>}
+          <div className="flex flex-wrap gap-1.5">
+            {pcs.map((p) => (
+              <button key={p.name} type="button" aria-pressed={who.includes(p.name)} onClick={() => toggle(p.name)} className={`rounded-full px-2.5 py-0.5 text-[13px] ${who.includes(p.name) ? "bg-foreground text-background" : "border border-line text-foreground/80 hover:border-thread/60"}`}>
+                {p.name}
+              </button>
+            ))}
+            <label className="ml-auto flex items-center gap-1.5 text-muted">
+              DC
+              <input value={dc} inputMode="numeric" onChange={(e) => setDc(e.target.value.replace(/\D/g, "").slice(0, 2))} className="w-8 border-b border-line bg-transparent text-center text-foreground outline-none focus:border-thread/60" />
+            </label>
+          </div>
+          <button type="button" disabled={!pcs.length} onClick={() => setRolls((who.length ? who : pcs.map((p) => p.name)).map((name) => ({ name, die: roll(20) })))} className="btn-primary text-sm">
+            {who.length ? `Roll for ${who.length === 1 ? who[0] : `${who.length} of them`}` : "Roll for everyone"}
+          </button>
+          {!!rolls.length && (
+            <ul className="space-y-1">
+              {rolls.map((r) => (
+                <li key={r.name} className="flex items-baseline justify-between gap-3">
+                  <span>{r.name}</span>
+                  <span className="tabular-nums">
+                    <span className="font-medium">{r.die}</span>
+                    <span className="text-muted"> on the die</span>
+                    {target != null && <span className={r.die >= target ? "ml-2 text-thread" : "ml-2 text-danger"}>{r.die >= target ? "resists" : "fails"}</span>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {rule.onFail && <p className="text-[13px] text-muted"><span className="text-foreground/80">On a failure:</span> {rule.onFail}</p>}
+          {rule.onSuccess && <p className="text-[13px] text-muted"><span className="text-foreground/80">On a success:</span> {rule.onSuccess}</p>}
+        </>
+      )}
     </div>
   );
 }
